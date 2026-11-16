@@ -3,12 +3,15 @@
 #   - Blargg's cpu_instrs, dmg_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
 #   - dmg-acid2 by Matt Currie (MIT), plus its reference screenshot
 #   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG references
+#   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance and emulator-only (MBC) tests
 set -euo pipefail
 
 DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
 BLARGG="https://raw.githubusercontent.com/retrio/gb-test-roms/c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15"
 ACID2="https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
 ACID2_REF="https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
+MTS="mts-20240926-1737-443f6e1"
+MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS/$MTS.tar.xz"
 MEALYBUG="https://raw.githubusercontent.com/mattcurrie/mealybug-tearoom-tests/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4"
 
 mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound" "$DEST/mem_timing" "$DEST/mem_timing-2"
@@ -58,5 +61,14 @@ for rom in "$DEST"/mealybug/*.gb; do
   curl -fsS --retry 3 -o "$ref" "$MEALYBUG/expected/DMG-blob/$name.png" 2>/dev/null \
     && echo "fetch $ref" || echo "no DMG reference for $name"
 done
+
+# Mooneye: prebuilt release tarball; keep the acceptance and emulator-only ROMs.
+if [[ ! -d "$DEST/mooneye/acceptance" ]]; then
+  fetch "$MTS_URL" "$DEST/mooneye.tar.xz"
+  mkdir -p "$DEST/mooneye"
+  tar -xJf "$DEST/mooneye.tar.xz" -C "$DEST/mooneye" --strip-components=1 \
+    "$MTS/acceptance" "$MTS/emulator-only" "$MTS/LICENSE"
+  rm "$DEST/mooneye.tar.xz"
+fi
 
 echo "Test ROMs are in $DEST"

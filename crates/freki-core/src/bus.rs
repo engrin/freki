@@ -56,6 +56,18 @@ pub struct Bus {
     io: [u8; 0x80],
     pub interrupt_enable: u8,
     pub interrupt_flag: u8,
+    dma: Dma,
+}
+
+/// OAM DMA state. A write to $FF46 starts a transfer after one M-cycle of setup; it then
+/// copies one byte per M-cycle for 160 M-cycles. While it runs, the CPU cannot use OAM
+/// or the bus the DMA reads from.
+#[derive(Serialize, Deserialize, Default, Clone, Copy)]
+struct Dma {
+    /// A requested transfer: (source page, T-cycles until it starts).
+    pending: Option<(u8, u8)>,
+    /// The running transfer: (source address of the next byte, T-cycles into its M-cycle).
+    active: Option<(u16, u8)>,
 }
 
 impl Bus {
@@ -74,6 +86,7 @@ impl Bus {
             io: [0; 0x80],
             interrupt_enable: 0,
             interrupt_flag: 0x01,
+            dma: Dma::default(),
         }
     }
 
@@ -131,14 +144,65 @@ impl Bus {
         }
     }
 
-    /// OAM DMA: copies 160 bytes from `page`×$100 into OAM. Done instantly; on hardware it
-    /// takes 160 M-cycles during which the CPU can only access HRAM.
+    /// Starts an OAM DMA from `page`×$100 (see [`Dma`]). A transfer already running keeps
+    /// going during the new one's setup cycle.
     fn oam_dma(&mut self, page: u8) {
         self.io[0x46] = page;
-        let src = (page as u16) << 8;
-        for i in 0..0xA0 {
-            let byte = self.read(src + i);
-            self.ppu.write_oam(0xFE00 + i, byte);
+        self.dma.pending = Some((page, 8));
+    }
+
+    /// What OAM DMA reads at `addr`. On the DMG, sources from $E000 up read work RAM.
+    fn dma_source(&self, addr: u16) -> u8 {
+        match addr {
+            0xE000..=0xFFFF => self.wram[(addr - 0xE000) as usize & 0x1FFF],
+            _ => self.read(addr),
+        }
+    }
+
+    /// Advances OAM DMA by one T-cycle.
+    fn tick_dma(&mut self) {
+        if let Some((page, delay)) = self.dma.pending {
+            if delay > 1 {
+                self.dma.pending = Some((page, delay - 1));
+            } else {
+                self.dma.pending = None;
+                self.dma.active = Some(((page as u16) << 8, 0));
+                return;
+            }
+        }
+        if let Some((src, t)) = self.dma.active {
+            if t < 3 {
+                self.dma.active = Some((src, t + 1));
+                return;
+            }
+            let byte = self.dma_source(src);
+            self.ppu.write_oam(0xFE00 | (src & 0xFF), byte);
+            self.dma.active = ((src & 0xFF) < 0x9F).then_some((src + 1, 0));
+        }
+    }
+
+    /// If OAM DMA blocks the CPU from `addr`: `Some(value)` the CPU sees instead.
+    fn dma_conflict(&self, addr: u16) -> Option<u8> {
+        let (src, _) = self.dma.active?;
+        let on_vram_bus = |a: u16| (0x8000..0xA000).contains(&a);
+        match addr {
+            0xFE00..=0xFEFF => Some(0xFF),
+            0xFF00..=0xFFFF => None,
+            // Same bus as the DMA source: the CPU sees the byte being transferred.
+            _ if on_vram_bus(addr) == on_vram_bus(src) => Some(self.dma_source(src)),
+            _ => None,
+        }
+    }
+
+    /// A read by the CPU (subject to OAM DMA bus conflicts).
+    pub fn cpu_read(&self, addr: u16) -> u8 {
+        self.dma_conflict(addr).unwrap_or_else(|| self.read(addr))
+    }
+
+    /// A write by the CPU (dropped when OAM DMA blocks the address).
+    pub fn cpu_write(&mut self, addr: u16, value: u8) {
+        if self.dma_conflict(addr).is_none() {
+            self.write(addr, value);
         }
     }
 
@@ -159,6 +223,11 @@ impl Bus {
     /// Advances all non-CPU hardware by `cycles` T-cycles and collects interrupts.
     pub fn tick(&mut self, cycles: u32) {
         self.cart.tick(cycles);
+        if self.dma.pending.is_some() || self.dma.active.is_some() {
+            for _ in 0..cycles {
+                self.tick_dma();
+            }
+        }
         self.apu.tick(cycles);
         self.interrupt_flag |= self.timer.tick(cycles);
         self.interrupt_flag |= self.ppu.tick(cycles);

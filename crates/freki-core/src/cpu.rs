@@ -183,7 +183,7 @@ impl Cpu {
     /// (executing code is what PC breakpoints are for).
     fn fetch_read(&mut self, bus: &mut Bus, addr: u16) -> u8 {
         self.flush(bus);
-        let value = bus.read(addr);
+        let value = bus.cpu_read(addr);
         self.pending = 4;
         value
     }
@@ -251,7 +251,7 @@ impl Cpu {
             }
             _ => {
                 self.advance(bus, pending);
-                bus.write(addr, value);
+                bus.cpu_write(addr, value);
                 self.pending = 4;
             }
         }
