@@ -20,7 +20,7 @@ pub mod timer;
 
 pub use boot::{BootRom, BootRomError};
 pub use cartridge::{Cartridge, CartridgeError};
-pub use cheats::{CheatError, Cheats, Code, Filter, MemorySearch};
+pub use cheats::{CheatError, Cheats, Code, Filter, Location, MemorySearch};
 pub use cpu::{CpuError, Registers};
 pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};
 pub use disasm::{Instruction, disassemble};
@@ -173,9 +173,9 @@ impl GameBoy {
     }
 
     fn apply_frame_cheats(&mut self) {
-        let writes: Vec<(u16, u8)> = self.bus.cheats.frame_writes().collect();
-        for (address, value) in writes {
-            self.bus.write(address, value);
+        let writes: Vec<(Location, u8)> = self.bus.cheats.frame_writes().collect();
+        for (location, value) in writes {
+            self.write_location(location, value);
         }
     }
 
@@ -306,14 +306,47 @@ impl GameBoy {
 
     /// Starts a memory search over the RAM this cartridge actually has (work RAM, high RAM
     /// and, if present, cartridge RAM).
+    /// Starts a memory search over cartridge RAM (if any), work RAM and high RAM. On the
+    /// Game Boy Color it covers all seven work RAM banks at $D000–$DFFF.
     pub fn start_memory_search(&self) -> MemorySearch {
         let has_cart_ram = !self.bus.cart.ram().is_empty();
-        let ranges: Vec<_> = cheats::SEARCH_RANGES
-            .iter()
-            .filter(|r| has_cart_ram || *r.start() != 0xA000)
-            .cloned()
-            .collect();
-        MemorySearch::start_in(&ranges, |a| self.peek(a))
+        let mut locations: Vec<Location> = Vec::new();
+        for range in cheats::SEARCH_RANGES {
+            match *range.start() {
+                0xA000 if !has_cart_ram => {}
+                0xC000 if self.bus.cgb => {
+                    locations.extend((0xC000..=0xCFFF).map(Location::new));
+                    for bank in 1..=7 {
+                        locations.extend((0xD000..=0xDFFF).map(|address| Location {
+                            address,
+                            wram_bank: Some(bank),
+                        }));
+                    }
+                }
+                _ => locations.extend(range.map(Location::new)),
+            }
+        }
+        MemorySearch::start_at(locations, |l| self.peek_location(l))
+    }
+
+    /// Reads `location` without side effects (a banked one from its work RAM bank).
+    pub fn peek_location(&self, location: Location) -> u8 {
+        match location.wram_bank {
+            Some(bank) if self.bus.cgb && (0xD000..=0xDFFF).contains(&location.address) => {
+                self.bus.wram_in_bank(bank, location.address)
+            }
+            _ => self.peek(location.address),
+        }
+    }
+
+    /// Writes `location` (a banked one into its work RAM bank, on the GBC).
+    pub fn write_location(&mut self, location: Location, value: u8) {
+        match location.wram_bank {
+            Some(bank) if self.bus.cgb && (0xD000..=0xDFFF).contains(&location.address) => {
+                self.bus.write_wram_in_bank(bank, location.address, value);
+            }
+            _ => self.bus.write(location.address, value),
+        }
     }
 
     /// The active cheat codes.
@@ -585,5 +618,28 @@ mod tests {
             pixels[0], 0x7FFF,
             "shade 0 through the grey default palette"
         );
+    }
+
+    #[test]
+    fn cgb_memory_search_finds_values_in_other_wram_banks() {
+        let mut rom = test_rom();
+        rom[0x143] = 0x80;
+        let mut gb = GameBoy::new(rom).unwrap();
+        gb.poke(0xFF70, 3);
+        gb.poke(0xD100, 42); // e.g. money, kept in bank 3
+        gb.poke(0xFF70, 1); // the game has bank 1 selected
+        let mut search = gb.start_memory_search();
+        search.filter(Filter::Equal(42), |l| gb.peek_location(l));
+        let banked = Location {
+            address: 0xD100,
+            wram_bank: Some(3),
+        };
+        assert_eq!(search.candidates(), &[(banked, 42)]);
+        let code = Code::gameshark(banked, 99);
+        assert_eq!(code, "936300D1");
+        gb.cheats_mut().add(&code, "money").unwrap();
+        gb.run_frame().unwrap();
+        assert_eq!(gb.peek_location(banked), 99, "written to bank 3");
+        assert_eq!(gb.peek(0xD100), 0, "bank 1 untouched");
     }
 }

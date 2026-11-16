@@ -95,7 +95,8 @@ Status messages appear in the window title.
 Cheats → Cheat manager… lists, adds, toggles and removes codes; Cheats → Memory search…
 finds the address of a value and turns it into a cheat. F9 turns all cheats on/off.
 
-GameShark (`01VVLLHH`) and Game Genie (`ABC-DEF` or `ABC-DEF-GHI`) codes are read from
+GameShark (`01VVLLHH`; on the Game Boy Color also `9xVVLLHH` for work RAM bank `x`) and
+Game Genie (`ABC-DEF` or `ABC-DEF-GHI`) codes are read from
 `<rom>.cht` next to the ROM, one per line with an optional name (`#` starts a comment,
 `!` adds a code switched off):
 
@@ -118,11 +119,16 @@ search add 0 9 Lives  # candidate 0 becomes GameShark code 0109xxxx
 cheat save            # writes <rom>.cht
 ```
 
+On the Game Boy Color the search covers all work RAM banks; results in banks 1–7 show as
+`3:$D123` and become `93…` codes, which write to that bank whichever one the game has
+selected.
+
 Battery-backed games are saved next to the ROM as `<rom>.sav` (about once a second
 while the game writes to it, and on exit).
 
-Emulation speed follows the sound card's clock, so audio stays in sync. Without an audio
-device freki still runs, paced at ~60 fps.
+The game runs at the Game Boy's own frame rate (~59.73 fps) in real time; sound stays in
+sync through tiny (inaudible) adjustments of its sample rate. Without an audio device
+freki still runs.
 
 On Linux you need the X11/Wayland, ALSA and udev development headers
 (`libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev` on Debian/Ubuntu).

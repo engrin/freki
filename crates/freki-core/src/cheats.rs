@@ -1,17 +1,46 @@
 //! Cheat codes and a memory search for finding new ones.
 //!
 //! - **GameShark** codes (`01VVLLHH`) write value `VV` to address `HHLL` once per frame.
+//!   On the Game Boy Color, `9xVVLLHH` writes to work RAM bank `x` at $D000–$DFFF, whichever
+//!   bank the game has selected.
 //! - **Game Genie** codes (`ABC-DEF` or `ABC-DEF-GHI`) patch what the CPU reads from ROM.
 //!   The 9-digit form only applies when the original byte equals the compare value, which
 //!   keeps a patch from hitting other ROM banks mapped at the same address.
 
 use std::fmt;
 
+/// A RAM location: an address, plus the work RAM bank for $D000–$DFFF on the Game Boy
+/// Color (`None`: whichever bank is selected, or not banked).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Location {
+    pub address: u16,
+    pub wram_bank: Option<u8>,
+}
+
+impl Location {
+    pub fn new(address: u16) -> Self {
+        Self {
+            address,
+            wram_bank: None,
+        }
+    }
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `pad` honours width and alignment, e.g. `{location:>7}`.
+        f.pad(&match self.wram_bank {
+            Some(bank) => format!("{bank}:${:04X}", self.address),
+            None => format!("${:04X}", self.address),
+        })
+    }
+}
+
 /// A parsed cheat code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Code {
     GameShark {
-        address: u16,
+        location: Location,
         value: u8,
     },
     GameGenie {
@@ -25,7 +54,7 @@ pub enum Code {
 pub enum CheatError {
     /// Not 8 hex digits (GameShark) or 6/9 hex digits (Game Genie).
     Format(String),
-    /// GameShark code type other than `01`.
+    /// GameShark code type other than `01` and `90`–`97`.
     UnsupportedType(u8),
     /// Game Genie address outside ROM ($0000–$7FFF).
     NotRomAddress(u16),
@@ -59,12 +88,18 @@ impl Code {
         match digits.len() {
             8 => {
                 let kind = byte(0);
-                if kind != 0x01 {
-                    return Err(CheatError::UnsupportedType(kind));
-                }
+                let wram_bank = match kind {
+                    0x01 => None,
+                    // Bank 0 cannot be mapped at $D000: selecting it gives bank 1.
+                    0x90..=0x97 => Some((kind & 7).max(1)),
+                    _ => return Err(CheatError::UnsupportedType(kind)),
+                };
                 Ok(Self::GameShark {
                     value: byte(2),
-                    address: u16::from_le_bytes([byte(4), byte(6)]),
+                    location: Location {
+                        address: u16::from_le_bytes([byte(4), byte(6)]),
+                        wram_bank,
+                    },
                 })
             }
             6 | 9 => {
@@ -88,10 +123,11 @@ impl Code {
         }
     }
 
-    /// The GameShark code that writes `value` to `address`.
-    pub fn gameshark(address: u16, value: u8) -> String {
-        let [lo, hi] = address.to_le_bytes();
-        format!("01{value:02X}{lo:02X}{hi:02X}")
+    /// The GameShark code that writes `value` to `location`.
+    pub fn gameshark(location: Location, value: u8) -> String {
+        let [lo, hi] = location.address.to_le_bytes();
+        let kind = location.wram_bank.map_or(0x01, |bank| 0x90 | bank);
+        format!("{kind:02X}{value:02X}{lo:02X}{hi:02X}")
     }
 }
 
@@ -169,9 +205,9 @@ impl Cheats {
     }
 
     /// GameShark writes to apply this frame.
-    pub fn frame_writes(&self) -> impl Iterator<Item = (u16, u8)> + '_ {
+    pub fn frame_writes(&self) -> impl Iterator<Item = (Location, u8)> + '_ {
         self.active().filter_map(|c| match *c {
-            Code::GameShark { address, value } => Some((address, value)),
+            Code::GameShark { location, value } => Some((location, value)),
             Code::GameGenie { .. } => None,
         })
     }
@@ -251,8 +287,8 @@ pub enum Filter {
 /// repeat until few candidates remain, then turn one into a GameShark code.
 #[derive(Debug, Clone, Default)]
 pub struct MemorySearch {
-    /// Candidate addresses with the value seen at the last filter.
-    candidates: Vec<(u16, u8)>,
+    /// Candidate locations with the value seen at the last filter.
+    candidates: Vec<(Location, u8)>,
 }
 
 /// RAM a search covers: cartridge RAM, work RAM and high RAM.
@@ -260,25 +296,35 @@ pub const SEARCH_RANGES: [std::ops::RangeInclusive<u16>; 3] =
     [0xA000..=0xBFFF, 0xC000..=0xDFFF, 0xFF80..=0xFFFE];
 
 impl MemorySearch {
-    /// Starts a search over all searchable RAM, using `read` to get current values.
-    pub fn start(read: impl Fn(u16) -> u8) -> Self {
+    /// Starts a search over all searchable RAM (unbanked), using `read` for current values.
+    pub fn start(read: impl Fn(Location) -> u8) -> Self {
         Self::start_in(&SEARCH_RANGES, read)
     }
 
-    /// Starts a search over the given address ranges.
-    pub fn start_in(ranges: &[std::ops::RangeInclusive<u16>], read: impl Fn(u16) -> u8) -> Self {
-        let candidates = ranges
-            .iter()
-            .flat_map(|r| r.clone())
-            .map(|a| (a, read(a)))
-            .collect();
+    /// Starts a search over the given address ranges (unbanked).
+    pub fn start_in(
+        ranges: &[std::ops::RangeInclusive<u16>],
+        read: impl Fn(Location) -> u8,
+    ) -> Self {
+        Self::start_at(
+            ranges.iter().flat_map(|r| r.clone()).map(Location::new),
+            read,
+        )
+    }
+
+    /// Starts a search over the given locations.
+    pub fn start_at(
+        locations: impl IntoIterator<Item = Location>,
+        read: impl Fn(Location) -> u8,
+    ) -> Self {
+        let candidates = locations.into_iter().map(|l| (l, read(l))).collect();
         Self { candidates }
     }
 
     /// Keeps the candidates whose current value passes `filter`. Returns how many remain.
-    pub fn filter(&mut self, filter: Filter, read: impl Fn(u16) -> u8) -> usize {
-        self.candidates.retain_mut(|(addr, last)| {
-            let now = read(*addr);
+    pub fn filter(&mut self, filter: Filter, read: impl Fn(Location) -> u8) -> usize {
+        self.candidates.retain_mut(|(location, last)| {
+            let now = read(*location);
             let keep = match filter {
                 Filter::Equal(v) => now == v,
                 Filter::NotEqual(v) => now != v,
@@ -293,7 +339,7 @@ impl MemorySearch {
         self.candidates.len()
     }
 
-    pub fn candidates(&self) -> &[(u16, u8)] {
+    pub fn candidates(&self) -> &[(Location, u8)] {
         &self.candidates
     }
 
@@ -315,14 +361,28 @@ mod tests {
         assert_eq!(
             Code::parse("010A10C1"),
             Ok(Code::GameShark {
-                address: 0xC110,
+                location: Location::new(0xC110),
                 value: 0x0A
             })
         );
-        assert_eq!(Code::gameshark(0xC110, 0x0A), "010A10C1");
+        assert_eq!(Code::gameshark(Location::new(0xC110), 0x0A), "010A10C1");
+        // 9x: work RAM bank x (GBC), as in 934204D2 = $42 to $D204 in bank 3.
+        let banked = Location {
+            address: 0xD204,
+            wram_bank: Some(3),
+        };
         assert_eq!(
-            Code::parse("910A10C1"),
-            Err(CheatError::UnsupportedType(0x91))
+            Code::parse("934204D2"),
+            Ok(Code::GameShark {
+                location: banked,
+                value: 0x42
+            })
+        );
+        assert_eq!(Code::gameshark(banked, 0x42), "934204D2");
+        assert_eq!(banked.to_string(), "3:$D204");
+        assert_eq!(
+            Code::parse("820A10C1"),
+            Err(CheatError::UnsupportedType(0x82))
         );
     }
 
@@ -450,10 +510,10 @@ mod tests {
         let mut ram = [0u8; 0x10000];
         ram[0xC123] = 3; // lives
         ram[0xC200] = 3; // something else that stays 3
-        let mut s = MemorySearch::start(|a| ram[a as usize]);
-        assert_eq!(s.filter(Filter::Equal(3), |a| ram[a as usize]), 2);
+        let mut s = MemorySearch::start(|l| ram[l.address as usize]);
+        assert_eq!(s.filter(Filter::Equal(3), |l| ram[l.address as usize]), 2);
         ram[0xC123] = 2;
-        assert_eq!(s.filter(Filter::Decreased, |a| ram[a as usize]), 1);
-        assert_eq!(s.candidates(), &[(0xC123, 2)]);
+        assert_eq!(s.filter(Filter::Decreased, |l| ram[l.address as usize]), 1);
+        assert_eq!(s.candidates(), &[(Location::new(0xC123), 2)]);
     }
 }

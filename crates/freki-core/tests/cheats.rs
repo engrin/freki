@@ -1,6 +1,6 @@
 //! Cheats applied to a running machine.
 
-use freki_core::{Filter, GameBoy, MemorySearch};
+use freki_core::{Filter, GameBoy, Location, MemorySearch};
 
 /// ROM-only cartridge: $0150: INC A; LD ($C000),A; JR -6 (counts in $C000).
 fn counting_rom() -> Vec<u8> {
@@ -69,11 +69,16 @@ fn cheats_survive_loading_a_state() {
 fn memory_search_finds_the_counter() {
     let mut gb = GameBoy::new(counting_rom()).unwrap();
     gb.run_frame().unwrap();
-    let mut search = MemorySearch::start(|a| gb.peek(a));
+    let mut search = MemorySearch::start(|l| gb.peek_location(l));
     for _ in 0..4 {
         gb.run_frame().unwrap();
-        search.filter(Filter::Changed, |a| gb.peek(a));
+        search.filter(Filter::Changed, |l| gb.peek_location(l));
     }
-    assert!(search.candidates().iter().any(|&(a, _)| a == 0xC000));
+    assert!(
+        search
+            .candidates()
+            .iter()
+            .any(|&(l, _)| l == Location::new(0xC000))
+    );
     assert!(search.len() < 8, "{} candidates left", search.len());
 }

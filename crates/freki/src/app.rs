@@ -930,7 +930,7 @@ impl FrekiApp {
                     ui.label("Code");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_code)
-                            .hint_text("01VVLLHH or ABC-DEF-GHI")
+                            .hint_text("01VVLLHH, 9xVVLLHH or ABC-DEF-GHI")
                             .desired_width(130.0),
                     );
                     ui.label("Name");
@@ -995,7 +995,7 @@ impl FrekiApp {
                     ui.add(egui::TextEdit::singleline(&mut ui_state.value).desired_width(50.0));
                     let value = parse_byte(&ui_state.value);
                     let mut apply = |filter| {
-                        search.filter(filter, |a| gb.peek(a));
+                        search.filter(filter, |l| gb.peek_location(l));
                     };
                     if ui.add_enabled(value.is_some(), egui::Button::new("=")).clicked() {
                         apply(Filter::Equal(value.unwrap_or(0)));
@@ -1019,9 +1019,9 @@ impl FrekiApp {
                 });
                 ui.separator();
                 egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                    for (i, &(addr, _)) in search.candidates().iter().take(200).enumerate() {
-                        let v = gb.peek(addr);
-                        let text = format!("${addr:04X} = {v:>3} (${v:02X})");
+                    for (i, &(location, _)) in search.candidates().iter().take(200).enumerate() {
+                        let v = gb.peek_location(location);
+                        let text = format!("{location:>7} = {v:>3} (${v:02X})");
                         if ui.selectable_label(ui_state.selected == Some(i), egui::RichText::new(text).monospace()).clicked() {
                             ui_state.selected = Some(i);
                             ui_state.cheat_value = v.to_string();
@@ -1031,19 +1031,19 @@ impl FrekiApp {
                         ui.label(format!("… {} more", search.len() - 200));
                     }
                 });
-                if let Some(&(addr, _)) = ui_state.selected.and_then(|i| search.candidates().get(i)) {
+                if let Some(&(location, _)) = ui_state.selected.and_then(|i| search.candidates().get(i)) {
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(format!("${addr:04X}: hold at"));
+                        ui.label(format!("{location}: hold at"));
                         ui.add(egui::TextEdit::singleline(&mut ui_state.cheat_value).desired_width(40.0));
                         ui.label("name");
                         ui.add(egui::TextEdit::singleline(&mut ui_state.cheat_name).desired_width(120.0));
                         let value = parse_byte(&ui_state.cheat_value);
                         if ui.add_enabled(value.is_some(), egui::Button::new("Add cheat")).clicked() {
                             let value = value.unwrap_or(0);
-                            let code = Code::gameshark(addr, value);
+                            let code = Code::gameshark(location, value);
                             let name = if ui_state.cheat_name.is_empty() {
-                                format!("${addr:04X} = {value}")
+                                format!("{location} = {value}")
                             } else {
                                 ui_state.cheat_name.clone()
                             };

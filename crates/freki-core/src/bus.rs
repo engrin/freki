@@ -198,6 +198,15 @@ impl Bus {
         }
     }
 
+    /// Work RAM byte at `addr` ($D000–$DFFF) in `bank` (1–7), whatever SVBK selects.
+    pub fn wram_in_bank(&self, bank: u8, addr: u16) -> u8 {
+        self.wram[(bank as usize & 7).max(1) * 0x1000 + (addr as usize & 0x0FFF)]
+    }
+
+    pub fn write_wram_in_bank(&mut self, bank: u8, addr: u16, value: u8) {
+        self.wram[(bank as usize & 7).max(1) * 0x1000 + (addr as usize & 0x0FFF)] = value;
+    }
+
     /// STOP: performs an armed CGB speed switch. Returns whether it switched.
     pub fn stop(&mut self) -> bool {
         if !(self.cgb && self.speed_switch_armed) {

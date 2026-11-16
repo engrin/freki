@@ -14,7 +14,7 @@ use freki_core::{Code, Filter, GameBoy, MemorySearch};
 const HELP: &str = "\
 cheats:
   cheat list                   show cheats (also: cheats)
-  cheat add CODE [name]        add a GameShark (01VVLLHH) or Game Genie (ABC-DEF[-GHI]) code
+  cheat add CODE [name]        add a GameShark (01VVLLHH, GBC: 9xVVLLHH) or Game Genie (ABC-DEF[-GHI]) code
   cheat on|off|rm N            enable, disable or remove cheat N
   cheat all on|off             master switch (also F9 in the window)
   cheat save | reload          write / re-read the .cht file next to the ROM
@@ -215,7 +215,7 @@ impl Console {
             _ => None,
         };
         if let Some(filter) = filter {
-            let n = search.filter(filter, |a| gb.peek(a));
+            let n = search.filter(filter, |l| gb.peek_location(l));
             let mut out = format!("{n} candidate(s)");
             if (1..=10).contains(&n) {
                 out.push('\n');
@@ -228,17 +228,17 @@ impl Console {
             ["list", n] => Ok(list_candidates(search, gb, index(n)?)),
             ["add", i, rest @ ..] => {
                 let i = index(i)?;
-                let &(addr, _) = search
+                let &(location, _) = search
                     .candidates()
                     .get(i)
                     .ok_or(format!("no candidate {i}"))?;
                 let (value, name) = match rest {
                     [v, name @ ..] if byte(v).is_ok() => (byte(v)?, name.join(" ")),
-                    name => (gb.peek(addr), name.join(" ")),
+                    name => (gb.peek_location(location), name.join(" ")),
                 };
-                let code = Code::gameshark(addr, value);
+                let code = Code::gameshark(location, value);
                 let name = if name.is_empty() {
-                    format!("${addr:04X} = {value}")
+                    format!("{location} = {value}")
                 } else {
                     name
                 };
@@ -435,9 +435,9 @@ fn list_cheats(gb: &GameBoy) -> String {
 
 fn list_candidates(search: &MemorySearch, gb: &GameBoy, max: usize) -> String {
     let mut out = String::new();
-    for (i, &(addr, _)) in search.candidates().iter().take(max).enumerate() {
-        let v = gb.peek(addr);
-        out.push_str(&format!("  {i:>2}  ${addr:04X} = {v:>3} (${v:02X})\n"));
+    for (i, &(location, _)) in search.candidates().iter().take(max).enumerate() {
+        let v = gb.peek_location(location);
+        out.push_str(&format!("  {i:>2}  {location:>7} = {v:>3} (${v:02X})\n"));
     }
     if search.len() > max {
         out.push_str(&format!("  … {} more\n", search.len() - max));
