@@ -8,8 +8,8 @@ use eframe::egui::{
     TextureOptions, pos2, vec2,
 };
 use freki_core::{
-    BootRom, Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, Model, SCREEN_HEIGHT,
-    SCREEN_WIDTH, Screen,
+    Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
+    Screen,
 };
 
 use crate::audio::Audio;
@@ -17,8 +17,9 @@ use crate::console::{self, Console};
 use crate::cpu_view::{self, CpuView};
 use crate::debug::DebugViews;
 use crate::gamepad::Gamepads;
+use crate::session::Start;
 use crate::session::{Session, file_name};
-use crate::settings::{self, FAST_FORWARD_SPEEDS, Palette, Settings};
+use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, Palette, Settings};
 use crate::states::SLOTS;
 
 const KEYMAP: [(Key, Button); 8] = [
@@ -202,56 +203,59 @@ impl FrekiApp {
         self.status = Some((message, Instant::now()));
     }
 
-    /// The boot ROM to start games with, if enabled and usable (problems are reported).
-    fn boot_rom(&mut self) -> Option<BootRom> {
-        match self.settings.boot_rom() {
-            Ok(boot) => boot,
-            Err(e) => {
-                self.set_status(format!("boot ROM not used: {e}"));
-                None
-            }
+    /// How games start (console, boot ROMs); problems with boot ROM files are reported.
+    fn start(&mut self) -> Start {
+        let (start, problems) = self.settings.start();
+        for problem in problems {
+            self.set_status(problem);
         }
+        start
     }
 
+    /// Lets the user pick a boot ROM; its size tells whether it is the GB or GBC one.
     fn pick_boot_rom(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose DMG boot ROM")
-            .add_filter("Boot ROM", &["bin", "gb", "rom"])
+            .set_title("Choose Game Boy or Game Boy Color boot ROM")
+            .add_filter("Boot ROM", &["bin", "gb", "gbc", "rom"])
             .pick_file()
         else {
             return;
         };
         match settings::read_boot_rom(&path) {
-            Ok(_) => {
-                self.settings.boot_rom_path = Some(path);
+            Ok(boot) => {
+                let name = file_name(&path);
+                if boot.is_cgb() {
+                    self.settings.cgb_boot_rom_path = Some(path);
+                } else {
+                    self.settings.boot_rom_path = Some(path);
+                }
                 self.settings.use_boot_rom = true;
-                self.boot_rom_changed();
+                let kind = if boot.is_cgb() {
+                    "Game Boy Color"
+                } else {
+                    "Game Boy"
+                };
+                self.start_changed(&format!("{kind} boot ROM: {name}"));
             }
             Err(e) => self.set_status(e),
         }
     }
 
-    /// Applies the boot ROM setting to the running game from its next reset.
-    fn boot_rom_changed(&mut self) {
-        let boot = self.boot_rom();
-        let on = boot.is_some();
+    /// Applies the console and boot ROM settings to the running game from its next reset.
+    fn start_changed(&mut self, what: &str) {
+        let start = self.start();
         if let Some(session) = &mut self.session {
-            session.set_boot_rom(boot);
-            let when = "from the next reset (Ctrl+R) or ROM load";
-            self.set_status(if on {
-                format!("boot ROM on {when}")
-            } else {
-                format!("boot ROM off {when}")
-            });
+            session.set_start(start);
+            self.set_status(format!("{what} (from the next reset, Ctrl+R, or ROM load)"));
         } else {
-            self.set_status(if on { "boot ROM on" } else { "boot ROM off" });
+            self.set_status(what);
         }
     }
 
     fn open_rom(&mut self, ctx: &egui::Context, path: &Path) {
         self.close_rom();
-        let boot = self.boot_rom();
-        match Session::open(path, boot) {
+        let start = self.start();
+        match Session::open(path, start) {
             Ok((mut session, message)) => {
                 if let Some(audio) = &self.audio {
                     session.gb.set_audio_sample_rate(audio.sample_rate());
@@ -660,6 +664,7 @@ impl FrekiApp {
                     self.with_session(|s| s.reset().map(|()| "reset".to_string()));
                 }
                 ui.separator();
+                ui.menu_button("Console", |ui| self.console_menu(ui));
                 ui.menu_button("Boot ROM", |ui| self.boot_rom_menu(ui));
             });
 
@@ -773,8 +778,20 @@ impl FrekiApp {
         });
     }
 
+    fn console_menu(&mut self, ui: &mut egui::Ui) {
+        for console in ConsoleModel::ALL {
+            if ui
+                .radio_value(&mut self.settings.console, console, console.name())
+                .clicked()
+            {
+                self.start_changed(&format!("console: {}", console.name()));
+            }
+        }
+    }
+
     fn boot_rom_menu(&mut self, ui: &mut egui::Ui) {
-        let chosen = self.settings.boot_rom_path.is_some();
+        let chosen =
+            self.settings.boot_rom_path.is_some() || self.settings.cgb_boot_rom_path.is_some();
         if ui
             .add_enabled(
                 chosen,
@@ -782,18 +799,25 @@ impl FrekiApp {
             )
             .changed()
         {
-            self.boot_rom_changed();
+            let state = if self.settings.use_boot_rom {
+                "on"
+            } else {
+                "off"
+            };
+            self.start_changed(&format!("boot ROM {state}"));
         }
         if ui.button("Choose file…").clicked() {
             ui.close();
             self.pick_boot_rom();
         }
-        let file = match &self.settings.boot_rom_path {
-            Some(path) => file_name(path),
-            None => "no file chosen".into(),
-        };
-        ui.weak(file);
-        ui.weak("A 256-byte DMG boot ROM dump (not included).");
+        for (console, path) in [
+            ("Game Boy", &self.settings.boot_rom_path),
+            ("Game Boy Color", &self.settings.cgb_boot_rom_path),
+        ] {
+            let file = path.as_deref().map_or("no file chosen".into(), file_name);
+            ui.weak(format!("{console}: {file}"));
+        }
+        ui.weak("Dumps of the consoles' boot ROMs (not included).");
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {

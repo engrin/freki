@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use freki_core::BootRom;
+use freki_core::{BootRom, Model};
+
+use crate::session::Start;
 use serde::{Deserialize, Serialize};
 
 const KEY: &str = "freki-settings";
@@ -15,9 +17,13 @@ pub const FAST_FORWARD_SPEEDS: [u32; 4] = [2, 3, 4, 8];
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Which console games run on.
+    pub console: ConsoleModel,
     /// DMG boot ROM file chosen by the user.
     pub boot_rom_path: Option<PathBuf>,
-    /// Whether games start with the boot ROM.
+    /// Game Boy Color boot ROM file chosen by the user.
+    pub cgb_boot_rom_path: Option<PathBuf>,
+    /// Whether games start with the boot ROM (of the console they run on).
     pub use_boot_rom: bool,
     pub palette: Palette,
     /// Window scale (the window size itself is restored by eframe).
@@ -33,7 +39,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            console: ConsoleModel::Auto,
             boot_rom_path: None,
+            cgb_boot_rom_path: None,
             use_boot_rom: false,
             palette: Palette::default(),
             scale: 4,
@@ -67,12 +75,57 @@ impl Settings {
         eframe::set_value(storage, KEY, self);
     }
 
-    /// The boot ROM to start games with, if enabled. Errors describe why the chosen file
-    /// cannot be used.
-    pub fn boot_rom(&self) -> Result<Option<BootRom>, String> {
-        match (&self.boot_rom_path, self.use_boot_rom) {
-            (Some(path), true) => read_boot_rom(path).map(Some),
-            _ => Ok(None),
+    /// How games start: console and boot ROMs (if enabled). Problems with the chosen
+    /// boot ROM files are returned as messages; those boot ROMs are then left out.
+    pub fn start(&self) -> (Start, Vec<String>) {
+        let mut problems = Vec::new();
+        let mut load = |path: &Option<PathBuf>| {
+            let path = path.as_ref().filter(|_| self.use_boot_rom)?;
+            read_boot_rom(path)
+                .map_err(|e| problems.push(format!("boot ROM not used: {e}")))
+                .ok()
+        };
+        let start = Start {
+            model: self.console.model(),
+            dmg_boot_rom: load(&self.boot_rom_path),
+            cgb_boot_rom: load(&self.cgb_boot_rom_path),
+        };
+        (start, problems)
+    }
+}
+
+/// Which console games run on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ConsoleModel {
+    /// Game Boy Color for colour games, Game Boy for the rest.
+    #[default]
+    Auto,
+    GameBoy,
+    /// Also original Game Boy games, coloured like a real GBC does.
+    GameBoyColor,
+}
+
+impl ConsoleModel {
+    pub const ALL: [ConsoleModel; 3] = [
+        ConsoleModel::Auto,
+        ConsoleModel::GameBoy,
+        ConsoleModel::GameBoyColor,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ConsoleModel::Auto => "Auto (GBC for colour games)",
+            ConsoleModel::GameBoy => "Game Boy",
+            ConsoleModel::GameBoyColor => "Game Boy Color",
+        }
+    }
+
+    /// The model to use, or `None` to choose per game.
+    fn model(self) -> Option<Model> {
+        match self {
+            ConsoleModel::Auto => None,
+            ConsoleModel::GameBoy => Some(Model::Dmg),
+            ConsoleModel::GameBoyColor => Some(Model::Cgb),
         }
     }
 }

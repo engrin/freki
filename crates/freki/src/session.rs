@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use freki_core::{BootRom, CartridgeError, FRAMES_PER_SECOND, GameBoy, Rewind, Stop};
+use freki_core::{BootRom, CartridgeError, FRAMES_PER_SECOND, GameBoy, Model, Rewind, Stop};
 
 use crate::states::{StateSlots, write_atomic};
 
@@ -16,19 +16,36 @@ pub const REWIND_INTERVAL: u32 = 2;
 /// …and this much history is kept (each snapshot is ~40 KB).
 const REWIND_SECONDS: f64 = 20.0;
 
-/// A machine with `rom` inserted: started by the boot ROM if there is one, otherwise in
-/// the state the boot ROM leaves behind.
-fn power_on(rom: Vec<u8>, boot_rom: Option<BootRom>) -> Result<GameBoy, CartridgeError> {
+/// How games start: on which console, and with which boot ROMs.
+#[derive(Debug, Clone, Default)]
+pub struct Start {
+    /// `None`: a Game Boy Color for colour games, a Game Boy for the rest.
+    pub model: Option<Model>,
+    pub dmg_boot_rom: Option<BootRom>,
+    pub cgb_boot_rom: Option<BootRom>,
+}
+
+/// A machine with `rom` inserted: started by the console's boot ROM if there is one,
+/// otherwise in the state the boot ROM leaves behind.
+fn power_on(rom: Vec<u8>, start: &Start) -> Result<GameBoy, CartridgeError> {
+    let colour_game = rom.get(0x143).is_some_and(|flag| flag & 0x80 != 0);
+    let model = start
+        .model
+        .unwrap_or(if colour_game { Model::Cgb } else { Model::Dmg });
+    let boot_rom = match model {
+        Model::Dmg => &start.dmg_boot_rom,
+        Model::Cgb => &start.cgb_boot_rom,
+    };
     match boot_rom {
-        Some(boot) => GameBoy::with_boot_rom(rom, boot),
-        None => GameBoy::new(rom),
+        Some(boot) => GameBoy::with_boot_rom(rom, boot.clone()),
+        None => GameBoy::with_model(rom, model),
     }
 }
 
 pub struct Session {
     pub gb: GameBoy,
-    /// Runs before the game on every (re)start, if set.
-    boot_rom: Option<BootRom>,
+    /// Console and boot ROMs used on every (re)start.
+    start: Start,
     pub rom_path: PathBuf,
     pub title: String,
     save_path: PathBuf,
@@ -39,15 +56,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// Loads a ROM and its battery save, if any; with `boot_rom`, the game starts from
-    /// power-on with the boot ROM. Returns the session and a status message.
-    pub fn open(
-        rom_path: &Path,
-        boot_rom: Option<BootRom>,
-    ) -> Result<(Self, String), Box<dyn Error>> {
+    /// Loads a ROM and its battery save, if any, starting it as `start` says. Returns the
+    /// session and a status message.
+    pub fn open(rom_path: &Path, start: Start) -> Result<(Self, String), Box<dyn Error>> {
         let rom =
             fs::read(rom_path).map_err(|e| format!("cannot read {}: {e}", rom_path.display()))?;
-        let mut gb = power_on(rom, boot_rom.clone())?;
+        let mut gb = power_on(rom, &start)?;
         let save_path = rom_path.with_extension("sav");
         let mut message = format!("loaded {}", file_name(rom_path));
         if gb.save_data().is_some()
@@ -61,7 +75,7 @@ impl Session {
         Ok((
             Self {
                 gb,
-                boot_rom,
+                start,
                 rom_path: rom_path.to_path_buf(),
                 title,
                 save_path,
@@ -74,9 +88,9 @@ impl Session {
         ))
     }
 
-    /// Uses `boot_rom` (or none) from the next reset on.
-    pub fn set_boot_rom(&mut self, boot_rom: Option<BootRom>) {
-        self.boot_rom = boot_rom;
+    /// Starts the game as `start` says from the next reset on.
+    pub fn set_start(&mut self, start: Start) {
+        self.start = start;
     }
 
     pub fn cheat_file(&self) -> PathBuf {
@@ -113,7 +127,7 @@ impl Session {
     pub fn reset(&mut self) -> Result<(), Box<dyn Error>> {
         self.write_save()?;
         let rom = fs::read(&self.rom_path)?;
-        let mut gb = power_on(rom, self.boot_rom.clone())?;
+        let mut gb = power_on(rom, &self.start)?;
         if let Some(data) = self.gb.save_data() {
             gb.load_save_data(data);
         }

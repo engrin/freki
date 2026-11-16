@@ -14,8 +14,8 @@ Named after Freki, one of Odin's two wolves.
 > mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels),
 > and 93 of the 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,
 > interrupt, PPU mode and VRAM/OAM access timing).
-> Missing: CGB boot ROM, original Game Boy games in the CGB's colourised compatibility mode,
-> and CGB-specific timing and sound differences.
+> Original Game Boy games can also run colourised on the GBC (with its boot ROM).
+> Missing: CGB-specific timing and sound differences.
 
 ## Layout
 
@@ -34,7 +34,7 @@ cargo run --release -- path/to/game.gb   # or start without a ROM and use File �
 ```
 
 ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, recent
-ROMs, quit), Emulation (pause, fast-forward, reset, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
+ROMs, quit), Emulation (pause, fast-forward, reset, console, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
 search), View (scale, palette, frame timing, debug views) and Help (controls, about).
 Palettes: DMG green, greyscale, Pocket and Light (backlit). Game Boy Color games are shown
 in their own colours, by default corrected to look like the GBC's screen (View → GBC colour
@@ -61,13 +61,18 @@ same tools: `regs`, `dis`, `step`, `break`, `watch`, `breaks`.
 
 Gamepads can be plugged in while freki is running.
 
-### Boot ROM
+### Console and boot ROM
 
-By default games start in the state the boot ROM leaves behind. To see the scrolling
-Nintendo logo and hear the "ding", choose a dump of the 256-byte DMG boot ROM under
-Emulation → Boot ROM → Choose file… (it is Nintendo's code and not included). It applies
-from the next reset or ROM load, and freki remembers the choice. Game Boy Color boot ROMs
-are not supported yet.
+Emulation → Console chooses the hardware: **Auto** runs Game Boy Color games on a GBC and
+all others on a Game Boy; **Game Boy Color** also runs original Game Boy games on a GBC, in
+its compatibility mode, where they get colours like on a real GBC.
+
+By default games start in the state the boot ROM leaves behind. To see the logo animation
+and hear the sound, choose dumps of the boot ROMs under Emulation → Boot ROM → Choose file…
+(the 256-byte Game Boy and the 2304-byte Game Boy Color boot ROM; they are Nintendo's code
+and not included). The Game Boy Color boot ROM is also what picks the colours for original
+Game Boy games (the button combinations on its logo screen work too); without it they are
+shown in grey. Changes apply from the next reset or ROM load, and freki remembers them.
 
 ### Save states and rewind
 
