@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
-#   - Blargg's cpu_instrs (via retrio/gb-test-roms, pinned commit)
+#   - Blargg's cpu_instrs and dmg_sound (via retrio/gb-test-roms, pinned commit)
 #   - dmg-acid2 by Matt Currie (MIT), plus its reference screenshot
 set -euo pipefail
 
@@ -9,7 +9,7 @@ BLARGG="https://raw.githubusercontent.com/retrio/gb-test-roms/c240dd7d700e5c0b00
 ACID2="https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
 ACID2_REF="https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
 
-mkdir -p "$DEST/cpu_instrs"
+mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound"
 
 fetch() { # url dest
   if [[ -f "$2" ]]; then echo "have  $2"; return; fi
@@ -25,6 +25,15 @@ for rom in "01-special" "02-interrupts" "03-op sp,hl" "04-op r,imm" "05-op rp" "
            "07-jr,jp,call,ret,rst" "08-misc instrs" "09-op r,r" "10-bit ops" "11-op a,(hl)"; do
   url="$BLARGG/cpu_instrs/individual/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
   fetch "$url" "$DEST/cpu_instrs/$rom.gb"
+done
+
+fetch "$BLARGG/dmg_sound/dmg_sound.gb" "$DEST/dmg_sound.gb"
+for rom in "01-registers" "02-len ctr" "03-trigger" "04-sweep" "05-sweep details" \
+           "06-overflow on trigger" "07-len sweep period sync" "08-len ctr during power" \
+           "09-wave read while on" "10-wave trigger while on" "11-regs after power" \
+           "12-wave write while on"; do
+  url="$BLARGG/dmg_sound/rom_singles/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
+  fetch "$url" "$DEST/dmg_sound/$rom.gb"
 done
 
 echo "Test ROMs are in $DEST"

@@ -73,6 +73,11 @@ impl GameBoy {
         self.bus.joypad.set(button, pressed);
     }
 
+    /// Reads a byte from the memory map without side effects (for debuggers and tests).
+    pub fn peek(&self, addr: u16) -> u8 {
+        self.bus.read(addr)
+    }
+
     /// Every byte the game has sent over the serial port (test ROMs print results here).
     pub fn serial_output(&self) -> &[u8] {
         self.bus.serial.output()

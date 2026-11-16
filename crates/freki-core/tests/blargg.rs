@@ -1,4 +1,10 @@
-//! Runs Blargg's `cpu_instrs` test ROMs headless and checks their serial output.
+//! Runs Blargg's test ROMs headless and checks their results.
+//!
+//! Blargg's ROMs report in one of two ways, and both are checked:
+//! - `cpu_instrs` prints "Passed"/"Failed" over the serial port.
+//! - `dmg_sound` writes to cartridge RAM: signature $DE $B0 $61 at $A001–$A003,
+//!   status at $A000 ($80 = running, 0 = passed, otherwise the failure code) and a
+//!   zero-terminated text log at $A004.
 //!
 //! The ROMs are not in the repo. Fetch them with `scripts/fetch-test-roms.sh`;
 //! if they are missing, these tests print a note and pass.
@@ -16,6 +22,45 @@ fn rom_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+enum Outcome {
+    Passed,
+    Failed(String),
+    Running,
+}
+
+/// Result reported through cartridge RAM at $A000, if the ROM has finished.
+fn memory_result(gb: &GameBoy) -> Outcome {
+    if [gb.peek(0xA001), gb.peek(0xA002), gb.peek(0xA003)] != [0xDE, 0xB0, 0x61] {
+        return Outcome::Running;
+    }
+    match gb.peek(0xA000) {
+        0x80 => Outcome::Running,
+        0x00 => Outcome::Passed,
+        code => {
+            let text: Vec<u8> = (0xA004..0xC000u16)
+                .map(|a| gb.peek(a))
+                .take_while(|&b| b != 0)
+                .collect();
+            Outcome::Failed(format!(
+                "result code {code}\n{}",
+                String::from_utf8_lossy(&text)
+            ))
+        }
+    }
+}
+
+/// Result reported over the serial port, if the ROM has finished.
+fn serial_result(gb: &GameBoy) -> Outcome {
+    let out = String::from_utf8_lossy(gb.serial_output());
+    if out.contains("Passed") {
+        Outcome::Passed
+    } else if out.contains("Failed") {
+        Outcome::Failed(out.into_owned())
+    } else {
+        Outcome::Running
+    }
+}
+
 fn run_blargg(name: &str) {
     let path = rom_path(name);
     let Ok(rom) = std::fs::read(&path) else {
@@ -26,36 +71,37 @@ fn run_blargg(name: &str) {
 
     let budget = CLOCK_HZ as u64 * TIMEOUT_SECONDS;
     let mut cycles = 0u64;
-    let output = loop {
-        cycles += gb.step().unwrap_or_else(|e| panic!("{name}: {e}")) as u64;
-        // Checking every ~1/60 s is plenty; the output only grows a few bytes at a time.
-        if cycles % 70_224 < 24 || cycles >= budget {
-            let out = String::from_utf8_lossy(gb.serial_output()).into_owned();
-            if out.contains("Passed") || out.contains("Failed") || cycles >= budget {
-                break out;
+    while cycles < budget {
+        // Results only change a few times per second; check once per frame.
+        gb.run_frame().unwrap_or_else(|e| panic!("{name}: {e}"));
+        cycles += freki_core::CYCLES_PER_FRAME as u64;
+        for outcome in [serial_result(&gb), memory_result(&gb)] {
+            match outcome {
+                Outcome::Passed => return,
+                Outcome::Failed(log) => panic!("{name} failed:\n{log}"),
+                Outcome::Running => {}
             }
         }
-    };
-
-    assert!(
-        output.contains("Passed"),
-        "{name} did not pass after {:.1} emulated s. Serial output:\n{output}",
-        cycles as f64 / CLOCK_HZ as f64
+    }
+    panic!(
+        "{name} did not finish within {TIMEOUT_SECONDS} emulated s. Serial output:\n{}",
+        String::from_utf8_lossy(gb.serial_output())
     );
 }
 
 macro_rules! blargg {
-    ($($test:ident => $file:literal,)*) => {
+    ($dir:literal: $($(#[$attr:meta])* $test:ident => $file:literal,)*) => {
         $(
             #[test]
+            $(#[$attr])*
             fn $test() {
-                run_blargg(concat!("cpu_instrs/", $file));
+                run_blargg(concat!($dir, "/", $file));
             }
         )*
     };
 }
 
-blargg! {
+blargg! { "cpu_instrs":
     cpu_instrs_01_special => "01-special.gb",
     cpu_instrs_02_interrupts => "02-interrupts.gb",
     cpu_instrs_03_op_sp_hl => "03-op sp,hl.gb",
@@ -67,6 +113,24 @@ blargg! {
     cpu_instrs_09_op_r_r => "09-op r,r.gb",
     cpu_instrs_10_bit_ops => "10-bit ops.gb",
     cpu_instrs_11_op_a_hl => "11-op a,(hl).gb",
+}
+
+blargg! { "dmg_sound":
+    dmg_sound_01_registers => "01-registers.gb",
+    dmg_sound_02_len_ctr => "02-len ctr.gb",
+    dmg_sound_03_trigger => "03-trigger.gb",
+    dmg_sound_04_sweep => "04-sweep.gb",
+    dmg_sound_05_sweep_details => "05-sweep details.gb",
+    dmg_sound_06_overflow_on_trigger => "06-overflow on trigger.gb",
+    dmg_sound_07_len_sweep_period_sync => "07-len sweep period sync.gb",
+    dmg_sound_08_len_ctr_during_power => "08-len ctr during power.gb",
+    #[ignore = "needs M-cycle-accurate memory timing (wave RAM access while playing)"]
+    dmg_sound_09_wave_read_while_on => "09-wave read while on.gb",
+    #[ignore = "needs M-cycle-accurate memory timing (wave RAM access while playing)"]
+    dmg_sound_10_wave_trigger_while_on => "10-wave trigger while on.gb",
+    dmg_sound_11_regs_after_power => "11-regs after power.gb",
+    #[ignore = "needs M-cycle-accurate memory timing (wave RAM access while playing)"]
+    dmg_sound_12_wave_write_while_on => "12-wave write while on.gb",
 }
 
 /// The combined ROM runs all 11 tests in a row (takes ~1 emulated minute).

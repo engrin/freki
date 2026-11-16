@@ -44,10 +44,26 @@ impl Length {
         true
     }
 
-    fn trigger(&mut self, max: u16) {
-        if self.counter == 0 {
-            self.counter = max;
+    /// Handles a write to the length-enable and trigger bits of NRx4.
+    ///
+    /// `first_half` is true when the next frame-sequencer step does not clock length.
+    /// In that case enabling length (or triggering with it enabled) clocks it once extra.
+    /// Returns `false` if the extra clock expired the counter and the channel must stop.
+    fn write_control(&mut self, enable: bool, trigger: bool, max: u16, first_half: bool) -> bool {
+        let was_enabled = self.enabled;
+        self.enabled = enable;
+        let mut keep = true;
+        if !was_enabled && enable && first_half && self.counter > 0 {
+            self.counter -= 1;
+            keep = self.counter > 0 || trigger;
         }
+        if trigger && self.counter == 0 {
+            self.counter = max;
+            if enable && first_half {
+                self.counter -= 1;
+            }
+        }
+        keep
     }
 }
 
@@ -112,6 +128,8 @@ struct Square {
     sweep_timer: u8,
     sweep_enabled: bool,
     shadow_period: u16,
+    /// A sweep calculation in decrease mode happened since the last trigger.
+    sweep_negated: bool,
 }
 
 impl Square {
@@ -135,11 +153,11 @@ impl Square {
 
     fn trigger(&mut self) {
         self.on = self.envelope.dac_on();
-        self.length.trigger(64);
         self.timer = (2048 - self.period as u32) * 4;
         self.envelope.trigger();
 
         self.shadow_period = self.period;
+        self.sweep_negated = false;
         self.sweep_timer = if self.sweep_pace == 0 {
             8
         } else {
@@ -155,6 +173,7 @@ impl Square {
     fn sweep_calculate(&mut self) -> u16 {
         let delta = self.shadow_period >> self.sweep_step;
         let next = if self.sweep_decrease {
+            self.sweep_negated = true;
             self.shadow_period.wrapping_sub(delta)
         } else {
             self.shadow_period + delta
@@ -227,7 +246,6 @@ impl Wave {
 
     fn trigger(&mut self) {
         self.on = self.dac_on;
-        self.length.trigger(256);
         self.timer = (2048 - self.period as u32) * 2;
         self.position = 0;
     }
@@ -280,7 +298,6 @@ impl Noise {
 
     fn trigger(&mut self) {
         self.on = self.envelope.dac_on();
-        self.length.trigger(64);
         self.timer = self.timer_period();
         self.envelope.trigger();
         self.lfsr = 0x7FFF;
@@ -394,8 +411,15 @@ impl Apu {
         if addr == 0xFF26 {
             let power = value & 0x80 != 0;
             if self.powered && !power {
-                // Powering off clears every register (wave RAM survives).
+                // Powering off clears every register. Wave RAM and, on the DMG, the
+                // length counters survive.
                 let ram = self.ch3.ram;
+                let lengths = [
+                    self.ch1.length.counter,
+                    self.ch2.length.counter,
+                    self.ch3.length.counter,
+                    self.ch4.length.counter,
+                ];
                 *self = Self {
                     sample_rate: self.sample_rate,
                     sample_clock: self.sample_clock,
@@ -405,6 +429,10 @@ impl Apu {
                     ..Self::powered_off()
                 };
                 self.ch3.ram = ram;
+                self.ch1.length.counter = lengths[0];
+                self.ch2.length.counter = lengths[1];
+                self.ch3.length.counter = lengths[2];
+                self.ch4.length.counter = lengths[3];
             } else if !self.powered && power {
                 self.frame_step = 0;
                 self.frame_timer = FRAME_SEQUENCER_PERIOD;
@@ -412,9 +440,24 @@ impl Apu {
             self.powered = power;
             return;
         }
-        if !self.powered || !(0xFF10..=0xFF25).contains(&addr) {
+        if !(0xFF10..=0xFF25).contains(&addr) {
             return;
         }
+        if !self.powered {
+            // On the DMG, length counters can still be loaded while the APU is off.
+            match addr {
+                0xFF11 => self.ch1.length.counter = 64 - (value & 0x3F) as u16,
+                0xFF16 => self.ch2.length.counter = 64 - (value & 0x3F) as u16,
+                0xFF1B => self.ch3.length.counter = 256 - value as u16,
+                0xFF20 => self.ch4.length.counter = 64 - (value & 0x3F) as u16,
+                _ => {}
+            }
+            return;
+        }
+        // Next frame-sequencer step doesn't clock length (see `Length::write_control`).
+        let first_half = self.frame_step % 2 == 1;
+        let enable = value & 0x40 != 0;
+        let trigger = value & 0x80 != 0;
         self.regs[(addr - 0xFF10) as usize] = value;
 
         match addr {
@@ -423,6 +466,9 @@ impl Apu {
                 self.ch1.sweep_pace = (value >> 4) & 0x07;
                 self.ch1.sweep_decrease = value & 0x08 != 0;
                 self.ch1.sweep_step = value & 0x07;
+                if self.ch1.sweep_negated && !self.ch1.sweep_decrease {
+                    self.ch1.on = false;
+                }
             }
             0xFF11 => {
                 self.ch1.duty = value >> 6;
@@ -435,10 +481,14 @@ impl Apu {
             0xFF13 => self.ch1.period = (self.ch1.period & 0x700) | value as u16,
             0xFF14 => {
                 self.ch1.period = (self.ch1.period & 0xFF) | ((value as u16 & 0x07) << 8);
-                self.ch1.length.enabled = value & 0x40 != 0;
-                if value & 0x80 != 0 {
+                let keep = self
+                    .ch1
+                    .length
+                    .write_control(enable, trigger, 64, first_half);
+                if trigger {
                     self.ch1.trigger();
                 }
+                self.ch1.on &= keep;
             }
             // Channel 2
             0xFF16 => {
@@ -452,10 +502,14 @@ impl Apu {
             0xFF18 => self.ch2.period = (self.ch2.period & 0x700) | value as u16,
             0xFF19 => {
                 self.ch2.period = (self.ch2.period & 0xFF) | ((value as u16 & 0x07) << 8);
-                self.ch2.length.enabled = value & 0x40 != 0;
-                if value & 0x80 != 0 {
+                let keep = self
+                    .ch2
+                    .length
+                    .write_control(enable, trigger, 64, first_half);
+                if trigger {
                     self.ch2.trigger();
                 }
+                self.ch2.on &= keep;
             }
             // Channel 3
             0xFF1A => {
@@ -467,10 +521,14 @@ impl Apu {
             0xFF1D => self.ch3.period = (self.ch3.period & 0x700) | value as u16,
             0xFF1E => {
                 self.ch3.period = (self.ch3.period & 0xFF) | ((value as u16 & 0x07) << 8);
-                self.ch3.length.enabled = value & 0x40 != 0;
-                if value & 0x80 != 0 {
+                let keep = self
+                    .ch3
+                    .length
+                    .write_control(enable, trigger, 256, first_half);
+                if trigger {
                     self.ch3.trigger();
                 }
+                self.ch3.on &= keep;
             }
             // Channel 4
             0xFF20 => self.ch4.length.counter = 64 - (value & 0x3F) as u16,
@@ -484,10 +542,14 @@ impl Apu {
                 self.ch4.divisor_code = value & 0x07;
             }
             0xFF23 => {
-                self.ch4.length.enabled = value & 0x40 != 0;
-                if value & 0x80 != 0 {
+                let keep = self
+                    .ch4
+                    .length
+                    .write_control(enable, trigger, 64, first_half);
+                if trigger {
                     self.ch4.trigger();
                 }
+                self.ch4.on &= keep;
             }
             _ => {} // NR50, NR51: read back from `regs` when mixing
         }
