@@ -52,52 +52,46 @@ macro_rules! mealybug {
 }
 
 mealybug! {
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m2_win_en_toggle,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_bgp_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_bgp_change_sprites,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_bg_en_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_bg_map_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_en_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_en_change_variant,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_size_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_size_change_scx,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_tile_sel_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_tile_sel_win_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
     m3_lcdc_win_en_change_multiple,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_win_en_change_multiple_wx,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_lcdc_win_map_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_obp0_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
     m3_scx_high_5_bits,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_scx_low_3_bits,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_scy_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_window_timing,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
+    #[ignore = "not yet pixel-exact"]
     m3_window_timing_wx_0,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
     m3_wx_4_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
     m3_wx_4_change_sprites,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
     m3_wx_5_change,
-    #[ignore = "PPU timing not yet calibrated to the dot (pixels land ~3-8 dots off)"]
     m3_wx_6_change,
 }

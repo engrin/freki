@@ -10,9 +10,13 @@
 //! See <https://gbdev.io/gb-opcodes/optables/> and
 //! <https://archive.gbdev.io/salvage/decoding_gbz80_opcodes/Decoding%20Gamboy%20Z80%20Opcodes.html>.
 //!
-//! Timing is per M-cycle: every memory access and every internal delay advances the rest
-//! of the hardware by 4 T-cycles at the moment it happens, so timers, the PPU and the APU
-//! see each access at the right point within an instruction.
+//! Timing is per M-cycle, with "pending cycles" bookkeeping: before each memory access the
+//! rest of the hardware is caught up on the preceding M-cycles, then the access happens, and
+//! the instruction's last M-cycle is caught up when it finishes. An instruction's k-th access
+//! therefore lands k × 4 T-cycles after it starts.
+//!
+//! Writes to some DMG I/O registers land a T-cycle or two off that grid, or briefly show an
+//! intermediate value; see [`Cpu::mem_write`].
 
 use std::fmt;
 
@@ -111,6 +115,8 @@ pub struct Cpu {
     halt_bug: bool,
     /// T-cycles spent so far in the current `step`.
     cycles: u32,
+    /// T-cycles of the current instruction not yet run on the rest of the hardware.
+    pending: u32,
 }
 
 impl Cpu {
@@ -130,27 +136,113 @@ impl Cpu {
             halted: false,
             halt_bug: false,
             cycles: 0,
+            pending: 0,
         }
     }
 
     // ---- bus timing -------------------------------------------------------------------
 
-    /// One M-cycle without a memory access: advances the hardware by 4 T-cycles.
-    fn idle(&mut self, bus: &mut Bus) {
-        bus.tick(4);
-        self.cycles += 4;
+    /// Runs the rest of the hardware for `cycles` T-cycles.
+    fn advance(&mut self, bus: &mut Bus, cycles: u32) {
+        if cycles > 0 {
+            bus.tick(cycles);
+            self.cycles += cycles;
+        }
     }
 
-    /// Memory read taking one M-cycle; the access happens at the end of the cycle.
+    /// Catches the hardware up on everything still pending.
+    fn flush(&mut self, bus: &mut Bus) {
+        let pending = std::mem::take(&mut self.pending);
+        self.advance(bus, pending);
+    }
+
+    /// One M-cycle without a memory access.
+    fn idle(&mut self, _bus: &mut Bus) {
+        self.pending += 4;
+    }
+
+    /// One M-cycle in which the CPU drives the bus without a data access.
+    fn bus_cycle(&mut self, bus: &mut Bus) {
+        self.flush(bus);
+        self.pending = 4;
+    }
+
+    /// Memory read taking one M-cycle.
     fn mem_read(&mut self, bus: &mut Bus, addr: u16) -> u8 {
-        self.idle(bus);
-        bus.read(addr)
+        self.flush(bus);
+        let value = bus.read(addr);
+        self.pending = 4;
+        value
     }
 
-    /// Memory write taking one M-cycle; the access happens at the end of the cycle.
+    /// Memory write taking one M-cycle.
+    ///
+    /// On the DMG some I/O registers are latched slightly off the M-cycle grid or show an
+    /// intermediate value for one T-cycle (timings from SameBoy's hardware research):
+    /// - IF: written 1 T-cycle late.
+    /// - SCY: written 1 T-cycle early; SCX: 2 T-cycles early.
+    /// - BGP/OBP0/OBP1: 2 T-cycles early, holding `old | new` for the first T-cycle.
+    /// - LCDC: 2 T-cycles early, with an intermediate value for one T-cycle.
+    /// - STAT: reads as $FF (all interrupt sources enabled) for one T-cycle — the DMG
+    ///   STAT write bug.
+    /// - WX: marks the value as just changed for one T-cycle (window start quirk).
     fn mem_write(&mut self, bus: &mut Bus, addr: u16, value: u8) {
-        self.idle(bus);
-        bus.write(addr, value);
+        let pending = std::mem::take(&mut self.pending);
+        match addr {
+            0xFF0F => {
+                self.advance(bus, pending + 1);
+                bus.write(addr, value);
+                self.pending = 3;
+            }
+            0xFF40 => {
+                let old = bus.read(addr);
+                self.advance(bus, pending.saturating_sub(2));
+                let intermediate = bus.ppu.dmg_lcdc_write_conflict(old, value);
+                bus.write(addr, intermediate);
+                self.advance(bus, 1);
+                bus.write(addr, value);
+                bus.ppu.lcdc_written(old, value);
+                self.pending = 5;
+            }
+            0xFF41 => {
+                self.advance(bus, pending);
+                bus.write(addr, 0xFF);
+                self.advance(bus, 1);
+                bus.write(addr, value);
+                self.pending = 3;
+            }
+            0xFF42 => {
+                self.advance(bus, pending.saturating_sub(1));
+                bus.write(addr, value);
+                self.pending = 5;
+            }
+            0xFF43 => {
+                self.advance(bus, pending.saturating_sub(2));
+                bus.write(addr, value);
+                self.pending = 6;
+            }
+            0xFF47..=0xFF49 => {
+                self.advance(bus, pending.saturating_sub(2));
+                let old = bus.read(addr);
+                bus.write(addr, old | value);
+                self.advance(bus, 1);
+                bus.write(addr, value);
+                self.pending = 5;
+            }
+            0xFF4B => {
+                self.advance(bus, pending);
+                bus.write(addr, value);
+                bus.ppu.set_wx_just_changed(true);
+                self.advance(bus, 1);
+                bus.ppu.set_wx_just_changed(false);
+                self.pending = 3;
+            }
+            _ => {
+                self.advance(bus, pending);
+                bus.write(addr, value);
+                self.pending = 4;
+            }
+        }
     }
 
     // ---- fetch and stack helpers -------------------------------------------------------
@@ -362,36 +454,56 @@ impl Cpu {
 
     // ---- execution ---------------------------------------------------------------------
 
-    /// Dispatches a pending interrupt, if any. Returns the T-cycles spent.
-    fn handle_interrupts(&mut self, bus: &mut Bus) -> u32 {
-        let pending = bus.interrupt_enable & bus.interrupt_flag & 0x1F;
-        if pending == 0 {
-            return 0;
+    /// Dispatches a pending interrupt, if any. Returns `true` if one was dispatched.
+    ///
+    /// Dispatch takes 5 M-cycles: a discarded opcode read, an internal cycle, an idle cycle,
+    /// then PC is pushed. Which interrupt wins is decided only after the high byte of PC is
+    /// pushed, so a push that overwrites IE ($FFFF) can cancel it (PC then becomes $0000).
+    fn handle_interrupts(&mut self, bus: &mut Bus) -> bool {
+        let requested = bus.interrupt_enable & bus.interrupt_flag & 0x1F;
+        if requested == 0 {
+            return false;
         }
         self.halted = false;
         if !self.ime {
-            return 0;
+            return false;
         }
-        let bit = pending.trailing_zeros() as u16;
-        bus.interrupt_flag &= !(1 << bit);
         self.ime = false;
+        self.mem_read(bus, self.regs.pc);
+        self.bus_cycle(bus);
         self.idle(bus);
-        self.push(bus, self.regs.pc);
-        self.idle(bus);
+        let [hi, lo] = self.regs.pc.to_be_bytes();
+        self.regs.sp = self.regs.sp.wrapping_sub(1);
+        self.mem_write(bus, self.regs.sp, hi);
+        let enabled = bus.interrupt_enable;
+        self.regs.sp = self.regs.sp.wrapping_sub(1);
+        self.mem_write(bus, self.regs.sp, lo);
+        let queue = enabled & bus.interrupt_flag & 0x1F;
+        if queue == 0 {
+            self.regs.pc = 0x0000;
+            return true;
+        }
+        let bit = queue.trailing_zeros() as u16;
+        let pending = std::mem::take(&mut self.pending);
+        self.advance(bus, pending - 2);
+        self.pending = 2;
+        bus.interrupt_flag &= !(1 << bit);
         self.regs.pc = 0x0040 + bit * 8;
-        20
+        true
     }
 
     /// Executes one instruction (or services an interrupt) and returns T-cycles taken.
     pub fn step(&mut self, bus: &mut Bus) -> Result<u32, CpuError> {
         self.cycles = 0;
-        let irq_cycles = self.handle_interrupts(bus);
-        if irq_cycles > 0 {
-            debug_assert_eq!(self.cycles, irq_cycles);
-            return Ok(irq_cycles);
+        debug_assert_eq!(self.pending, 0);
+        if self.handle_interrupts(bus) {
+            self.flush(bus);
+            debug_assert_eq!(self.cycles, 20, "interrupt dispatch timing");
+            return Ok(self.cycles);
         }
         if self.halted {
             self.idle(bus);
+            self.flush(bus);
             return Ok(self.cycles);
         }
         if self.ime_pending {
@@ -401,8 +513,11 @@ impl Cpu {
 
         let pc = self.regs.pc;
         let op = self.fetch(bus);
-        self.execute(bus, op)
-            .ok_or(CpuError::IllegalOpcode { opcode: op, pc })
+        let expected = self.execute(bus, op);
+        self.flush(bus);
+        let expected = expected.ok_or(CpuError::IllegalOpcode { opcode: op, pc })?;
+        debug_assert_eq!(self.cycles, expected, "timing of opcode ${op:02X}");
+        Ok(self.cycles)
     }
 
     /// Executes `op`. Returns T-cycles, or `None` for an illegal opcode.
@@ -738,7 +853,6 @@ impl Cpu {
             }
             _ => unreachable!("x and z are 2- and 3-bit fields"),
         };
-        debug_assert_eq!(self.cycles, cycles, "timing of opcode ${op:02X}");
         Some(cycles)
     }
 
