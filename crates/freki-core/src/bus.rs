@@ -14,6 +14,7 @@
 //! | FFFF        | Interrupt enable (IE)             |
 
 use crate::apu::Apu;
+use crate::boot::BootRom;
 use crate::cartridge::Cartridge;
 use crate::cheats::Cheats;
 use crate::debugger::Breakpoints;
@@ -51,6 +52,11 @@ pub struct Bus {
     wram: [u8; 0x2000],
     #[serde(with = "BigArray")]
     hram: [u8; 0x7F],
+    /// Not part of save states: kept across loads.
+    #[serde(skip)]
+    boot_rom: Option<BootRom>,
+    /// Whether the boot ROM is mapped over $0000–$00FF (until $FF50 is written).
+    boot_rom_mapped: bool,
     /// Last value written to DMA ($FF46).
     dma_page: u8,
     pub interrupt_enable: u8,
@@ -82,6 +88,8 @@ impl Bus {
             breaks: Breakpoints::default(),
             wram: [0; 0x2000],
             hram: [0; 0x7F],
+            boot_rom: None,
+            boot_rom_mapped: false,
             dma_page: 0xFF,
             interrupt_enable: 0,
             interrupt_flag: 0x01,
@@ -89,10 +97,30 @@ impl Bus {
         }
     }
 
+    /// A bus at power-on, with `boot` mapped over the start of the cartridge ROM.
+    pub fn power_on(cart: Cartridge, boot: BootRom) -> Self {
+        Self {
+            ppu: Ppu::power_on(),
+            timer: Timer::power_on(),
+            apu: Apu::power_on(),
+            interrupt_flag: 0,
+            boot_rom: Some(boot),
+            boot_rom_mapped: true,
+            ..Self::new(cart)
+        }
+    }
+
+    pub fn boot_rom_mapped(&self) -> bool {
+        self.boot_rom_mapped
+    }
+
     // Specific I/O registers are matched before the generic $FF00–$FF7F fallback.
     #[allow(clippy::match_overlapping_arm)]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
+            0x0000..=0x00FF if self.boot_rom_mapped && self.boot_rom.is_some() => {
+                self.boot_rom.as_ref().map_or(0xFF, |boot| boot.read(addr))
+            }
             0x0000..=0x7FFF => {
                 let byte = self.cart.read_rom(addr);
                 if self.cheats.has_rom_patches() {
@@ -142,6 +170,7 @@ impl Bus {
             0xFF0F => self.interrupt_flag = value & 0x1F,
             0xFF10..=0xFF3F => self.apu.write(addr, value),
             0xFF46 => self.oam_dma(value),
+            0xFF50 => self.boot_rom_mapped &= value & 1 == 0,
             0xFF40..=0xFF4B => self.ppu.write_reg(addr, value),
             0xFF00..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
@@ -234,6 +263,7 @@ impl Bus {
     /// breakpoints).
     pub(crate) fn adopt_runtime_from(&mut self, old: &mut Bus) {
         self.cart.adopt_rom_from(&mut old.cart);
+        self.boot_rom = old.boot_rom.take();
         self.apu.adopt_output_from(&old.apu);
         self.cheats = std::mem::take(&mut old.cheats);
         self.breaks = std::mem::take(&mut old.breaks);

@@ -5,15 +5,33 @@
 //!
 //! Only tests that apply to a DMG (rev. A–C) are listed. The ROMs are not in the repo;
 //! fetch them with `scripts/fetch-test-roms.sh`. If they are missing, the tests pass.
+//!
+//! The boot tests also run through a real DMG boot ROM if one is at `bios/gb_bios.bin`
+//! (not included; Nintendo's copyright), checking that freki's emulation of the boot
+//! sequence hands over to the game in the same state as the built-in post-boot state.
 
 use std::path::PathBuf;
 
-use freki_core::{CLOCK_HZ, GameBoy};
+use freki_core::{BootRom, CLOCK_HZ, GameBoy};
 
 /// Emulated seconds a ROM may run before it counts as hung.
 const TIMEOUT_SECONDS: u64 = 20;
 
 fn run(path: &str) {
+    run_with(path, None);
+}
+
+/// Runs a test after the real DMG boot ROM, if it is present.
+fn run_after_boot_rom(path: &str) {
+    let boot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bios/gb_bios.bin");
+    let Ok(bytes) = std::fs::read(&boot) else {
+        eprintln!("skipping: no boot ROM at {}", boot.display());
+        return;
+    };
+    run_with(path, Some(BootRom::new(&bytes).expect("DMG boot ROM")));
+}
+
+fn run_with(path: &str, boot: Option<BootRom>) {
     let full = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../roms/test/mooneye")
         .join(path);
@@ -24,10 +42,14 @@ fn run(path: &str) {
         );
         return;
     };
-    let mut gb = GameBoy::new(rom).expect("load ROM");
+    let mut gb = match boot {
+        Some(boot) => GameBoy::with_boot_rom(rom, boot),
+        None => GameBoy::new(rom),
+    }
+    .expect("load ROM");
     let mut cycles = 0u64;
     while cycles < TIMEOUT_SECONDS * CLOCK_HZ as u64 {
-        if gb.peek(gb.pc()) == 0x40 {
+        if !gb.in_boot_rom() && gb.peek(gb.pc()) == 0x40 {
             let r = gb.registers();
             let regs = [r.b, r.c, r.d, r.e, r.h, r.l];
             assert_eq!(
@@ -150,4 +172,22 @@ mooneye! {
     mbc5_rom_512kb: "emulator-only/mbc5/rom_512kb.gb",
     mbc5_rom_64mb: "emulator-only/mbc5/rom_64Mb.gb",
     mbc5_rom_8mb: "emulator-only/mbc5/rom_8Mb.gb",
+}
+
+macro_rules! after_boot_rom {
+    ($($name:ident: $path:literal,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                run_after_boot_rom($path);
+            }
+        )*
+    };
+}
+
+after_boot_rom! {
+    boot_rom_then_boot_div: "acceptance/boot_div-dmgABCmgb.gb",
+    boot_rom_then_boot_hwio: "acceptance/boot_hwio-dmgABCmgb.gb",
+    boot_rom_then_boot_regs: "acceptance/boot_regs-dmgABC.gb",
+    boot_rom_then_sclk_align: "acceptance/serial/boot_sclk_align-dmgABCmgb.gb",
 }

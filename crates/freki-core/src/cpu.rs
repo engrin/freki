@@ -124,6 +124,14 @@ pub struct Cpu {
 
 impl Cpu {
     /// Register state of a DMG right after the boot ROM hands over to the cartridge.
+    /// Power-on state: all registers zero, executing from $0000 (the boot ROM).
+    pub fn new_power_on() -> Self {
+        Self {
+            regs: Registers::default(),
+            ..Self::new_post_boot()
+        }
+    }
+
     pub fn new_post_boot() -> Self {
         let mut regs = Registers::default();
         regs.set_af(0x01B0);

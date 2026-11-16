@@ -3,6 +3,8 @@
 use crate::bus::interrupt;
 use serde::{Deserialize, Serialize};
 
+const POWER_ON_COUNTER: u16 = 8;
+
 /// The timer is driven by a 16-bit counter (DIV is its upper byte). TIMA increments on
 /// each falling edge of `TAC enable AND counter bit`; because that signal is checked
 /// whenever it can change, writing DIV or TAC can also increment TIMA (a DMG quirk).
@@ -27,6 +29,15 @@ impl Timer {
     pub fn new() -> Self {
         Self {
             counter: 0xABCC,
+            ..Default::default()
+        }
+    }
+
+    /// Power-on state. The start value is chosen so the DMG boot ROM hands over to the
+    /// game with the counter where [`Timer::new`] (the post-boot state) has it.
+    pub fn power_on() -> Self {
+        Self {
+            counter: POWER_ON_COUNTER,
             ..Default::default()
         }
     }

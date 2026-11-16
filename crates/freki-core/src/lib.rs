@@ -5,6 +5,7 @@
 //! and draws [`GameBoy::framebuffer`].
 
 pub mod apu;
+pub mod boot;
 pub mod bus;
 pub mod cartridge;
 pub mod cheats;
@@ -17,6 +18,7 @@ pub mod serial;
 pub mod state;
 pub mod timer;
 
+pub use boot::{BootRom, BootRomError};
 pub use cartridge::{Cartridge, CartridgeError};
 pub use cheats::{CheatError, Cheats, Code, Filter, MemorySearch};
 pub use cpu::{CpuError, Registers};
@@ -51,11 +53,28 @@ impl GameBoy {
         let logo: [u8; 48] = std::array::from_fn(|i| cart.read_rom(0x104 + i as u16));
         let mut bus = Bus::new(cart);
         bus.ppu.load_boot_logo(&logo);
+        bus.ppu.skip_to_post_boot();
         Ok(Self {
             cpu: Cpu::new_post_boot(),
             bus,
             resume_at: None,
         })
+    }
+
+    /// Creates a Game Boy with `rom` inserted, at power-on: `boot` runs first (logo and
+    /// sound), then hands over to the game.
+    pub fn with_boot_rom(rom: Vec<u8>, boot: BootRom) -> Result<Self, CartridgeError> {
+        let cart = Cartridge::from_rom(rom)?;
+        Ok(Self {
+            cpu: Cpu::new_power_on(),
+            bus: Bus::power_on(cart, boot),
+            resume_at: None,
+        })
+    }
+
+    /// Whether the boot ROM is still mapped (it has not handed over to the game yet).
+    pub fn in_boot_rom(&self) -> bool {
+        self.bus.boot_rom_mapped()
     }
 
     /// Executes one CPU instruction. The rest of the hardware is advanced during the
@@ -293,5 +312,31 @@ mod tests {
         let mut gb = GameBoy::new(test_rom()).unwrap();
         gb.run_frame().unwrap();
         assert_eq!(gb.cartridge().title(), "FREKI");
+    }
+
+    #[test]
+    fn boot_rom_runs_first_and_unmaps_itself() {
+        // A stand-in boot ROM: NOPs, then `LD A,1; LDH ($50),A` at $FC, ending at $0100.
+        let mut image = [0u8; 0x100];
+        image[0xFC..].copy_from_slice(&[0x3E, 0x01, 0xE0, 0x50]);
+        let boot = BootRom::new(&image).unwrap();
+        let mut gb = GameBoy::with_boot_rom(test_rom(), boot).unwrap();
+        assert_eq!((gb.pc(), gb.in_boot_rom()), (0x0000, true));
+        assert_eq!(gb.peek(0xFD), 0x01, "boot ROM mapped over $0000-$00FF");
+        while gb.pc() != 0x100 {
+            gb.step().unwrap();
+        }
+        assert!(!gb.in_boot_rom());
+        assert_eq!(
+            gb.peek(0xFD),
+            0x00,
+            "cartridge visible after $FF50 was written"
+        );
+        assert_eq!(gb.peek(0x101), 0xC3);
+    }
+
+    #[test]
+    fn boot_rom_must_be_256_bytes() {
+        assert_eq!(BootRom::new(&[0; 2304]), Err(BootRomError::WrongSize(2304)));
     }
 }

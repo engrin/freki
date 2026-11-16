@@ -421,6 +421,13 @@ impl Apu {
         apu
     }
 
+    /// Power-on state: everything off and zero (the boot ROM switches sound on).
+    pub fn power_on() -> Self {
+        let mut apu = Self::new();
+        apu.write(0xFF26, 0x00);
+        apu
+    }
+
     /// Starts producing interleaved stereo samples at `rate` Hz.
     pub fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = Some(rate);

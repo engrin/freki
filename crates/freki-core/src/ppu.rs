@@ -244,6 +244,30 @@ impl Ppu {
     /// Recreates the VRAM contents the DMG boot ROM leaves behind: the cartridge header's
     /// logo (`$0104–$0133`) decompressed into tiles 1–24, the ® symbol in tile 25, and
     /// their tile map entries. Some games and tests rely on these tiles being there.
+    /// Moves the PPU to where the DMG boot ROM leaves it when it hands over to the game.
+    /// Running the real boot ROM in freki ends at line 153, dot 397; dot 396 is used
+    /// because Mooneye's hblank_ly_scx_timing needs lines aligned with M-cycles. (So after
+    /// a real boot ROM the PPU runs one dot ahead of hardware; the cause is not found yet.)
+    pub fn skip_to_post_boot(&mut self) {
+        self.ly = LINES_PER_FRAME - 1;
+        self.dot = 396;
+        self.mode = Mode::VBlank;
+        self.irq_mode = Mode::VBlank;
+    }
+
+    /// Power-on state: LCD off, palettes and VRAM cleared.
+    pub fn power_on() -> Self {
+        Self {
+            lcdc: 0,
+            bgp: 0,
+            obp0: 0,
+            obp1: 0,
+            mode: Mode::HBlank,
+            irq_mode: Mode::HBlank,
+            ..Self::new()
+        }
+    }
+
     pub fn load_boot_logo(&mut self, logo: &[u8; 48]) {
         /// Doubles each bit of a nibble horizontally: 0b1011 -> 0b11001111.
         fn widen(nibble: u8) -> u8 {
