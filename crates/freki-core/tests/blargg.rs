@@ -146,3 +146,19 @@ fn cpu_instrs_all() {
 fn dmg_sound_all() {
     run_blargg("dmg_sound.gb");
 }
+
+blargg! { ".":
+    instr_timing => "instr_timing.gb",
+}
+
+blargg! { "mem_timing":
+    mem_timing_01_read => "01-read_timing.gb",
+    mem_timing_02_write => "02-write_timing.gb",
+    mem_timing_03_modify => "03-modify_timing.gb",
+}
+
+blargg! { "mem_timing-2":
+    mem_timing2_01_read => "01-read_timing.gb",
+    mem_timing2_02_write => "02-write_timing.gb",
+    mem_timing2_03_modify => "03-modify_timing.gb",
+}

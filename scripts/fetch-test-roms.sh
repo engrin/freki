@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
-#   - Blargg's cpu_instrs and dmg_sound (via retrio/gb-test-roms, pinned commit)
+#   - Blargg's cpu_instrs, dmg_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
 #   - dmg-acid2 by Matt Currie (MIT), plus its reference screenshot
 set -euo pipefail
 
@@ -9,7 +9,7 @@ BLARGG="https://raw.githubusercontent.com/retrio/gb-test-roms/c240dd7d700e5c0b00
 ACID2="https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
 ACID2_REF="https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
 
-mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound"
+mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound" "$DEST/mem_timing" "$DEST/mem_timing-2"
 
 fetch() { # url dest
   if [[ -f "$2" ]]; then echo "have  $2"; return; fi
@@ -34,6 +34,12 @@ for rom in "01-registers" "02-len ctr" "03-trigger" "04-sweep" "05-sweep details
            "12-wave write while on"; do
   url="$BLARGG/dmg_sound/rom_singles/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
   fetch "$url" "$DEST/dmg_sound/$rom.gb"
+done
+
+fetch "$BLARGG/instr_timing/instr_timing.gb" "$DEST/instr_timing.gb"
+for rom in "01-read_timing" "02-write_timing" "03-modify_timing"; do
+  fetch "$BLARGG/mem_timing/individual/$rom.gb" "$DEST/mem_timing/$rom.gb"
+  fetch "$BLARGG/mem_timing-2/rom_singles/$rom.gb" "$DEST/mem_timing-2/$rom.gb"
 done
 
 echo "Test ROMs are in $DEST"
