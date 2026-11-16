@@ -78,7 +78,6 @@ mealybug! {
     m3_obp0_change,
     m3_scx_high_5_bits,
     m3_scx_low_3_bits,
-    #[ignore = "not yet pixel-exact"]
     m3_scy_change,
     m3_window_timing,
     m3_window_timing_wx_0,

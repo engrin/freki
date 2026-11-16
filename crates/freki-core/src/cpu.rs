@@ -180,7 +180,8 @@ impl Cpu {
     /// On the DMG some I/O registers are latched slightly off the M-cycle grid or show an
     /// intermediate value for one T-cycle (timings from SameBoy's hardware research):
     /// - IF: written 1 T-cycle late.
-    /// - SCY: written 1 T-cycle early; SCX: 2 T-cycles early.
+    /// - SCY and SCX: written 2 T-cycles early. (SameBoy uses 1 for SCY; 2 matches the DMG
+    ///   reference screenshots of mealybug-tearoom's `m3_scy_change` in this PPU model.)
     /// - BGP/OBP0/OBP1: 2 T-cycles early, holding `old | new` for the first T-cycle.
     /// - LCDC: 2 T-cycles early, with an intermediate value for one T-cycle.
     /// - STAT: reads as $FF (all interrupt sources enabled) for one T-cycle — the DMG
@@ -211,12 +212,7 @@ impl Cpu {
                 bus.write(addr, value);
                 self.pending = 3;
             }
-            0xFF42 => {
-                self.advance(bus, pending.saturating_sub(1));
-                bus.write(addr, value);
-                self.pending = 5;
-            }
-            0xFF43 => {
+            0xFF42 | 0xFF43 => {
                 self.advance(bus, pending.saturating_sub(2));
                 bus.write(addr, value);
                 self.pending = 6;
