@@ -8,7 +8,8 @@ use eframe::egui::{
     TextureOptions, pos2, vec2,
 };
 use freki_core::{
-    BootRom, Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, SCREEN_HEIGHT, SCREEN_WIDTH,
+    BootRom, Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, Model, SCREEN_HEIGHT,
+    SCREEN_WIDTH, Screen,
 };
 
 use crate::audio::Audio;
@@ -257,10 +258,14 @@ impl FrekiApp {
                 }
                 let cheats = console::load_cheat_file(&session.cheat_file(), &mut session.gb);
                 self.console.set_cheat_file(session.cheat_file());
+                let model = match session.gb.model() {
+                    Model::Cgb => " (Game Boy Color)",
+                    Model::Dmg => "",
+                };
                 let title = if session.title.is_empty() {
-                    "freki".to_string()
+                    format!("freki{model}")
                 } else {
-                    format!("freki — {}", session.title)
+                    format!("freki — {}{model}", session.title)
                 };
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
                 self.session = Some(session);
@@ -541,11 +546,18 @@ impl FrekiApp {
 
     fn update_texture(&mut self, ctx: &egui::Context) {
         let colors = self.settings.palette.colors();
+        let correct = self.settings.color_correction;
         let mut rgba = Vec::with_capacity(SCREEN_WIDTH * SCREEN_HEIGHT * 4);
-        match &self.session {
-            Some(session) => {
-                for &shade in session.gb.framebuffer() {
+        match self.session.as_ref().map(|s| s.gb.screen()) {
+            Some(Screen::Shades(shades)) => {
+                for &shade in shades {
                     let [r, g, b] = colors[(shade & 3) as usize];
+                    rgba.extend([r, g, b, 0xFF]);
+                }
+            }
+            Some(Screen::Rgb555(pixels)) => {
+                for &color in pixels {
+                    let [r, g, b] = settings::cgb_color(color, correct);
                     rgba.extend([r, g, b, 0xFF]);
                 }
             }
@@ -739,10 +751,13 @@ impl FrekiApp {
                     egui::Checkbox::new(&mut self.debug.show_sprites, "Sprites"),
                 );
                 ui.separator();
-                ui.label("Palette");
+                ui.label("Palette (Game Boy)");
                 for palette in Palette::ALL {
                     ui.radio_value(&mut self.settings.palette, palette, palette.name());
                 }
+                ui.separator();
+                ui.checkbox(&mut self.settings.color_correction, "GBC colour correction")
+                    .on_hover_text("Colours as on the Game Boy Color's screen (less saturated)");
             });
 
             ui.menu_button("Help", |ui| {

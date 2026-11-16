@@ -26,6 +26,8 @@ pub struct Settings {
     pub recent: Vec<PathBuf>,
     /// Emulation speed multiplier while fast-forwarding.
     pub fast_forward_speed: u32,
+    /// Make Game Boy Color colours look like on its LCD (less saturated).
+    pub color_correction: bool,
 }
 
 impl Default for Settings {
@@ -37,6 +39,7 @@ impl Default for Settings {
             scale: 4,
             recent: Vec::new(),
             fast_forward_speed: 4,
+            color_correction: true,
         }
     }
 }
@@ -137,9 +140,36 @@ impl Palette {
     }
 }
 
+/// Converts a Game Boy Color RGB555 colour to 8-bit RGB. With `correct`, approximates the
+/// colours of the GBC's LCD, which mixes channels and is less saturated than a modern
+/// screen (the formula used by Gambatte and higan); otherwise scales each channel.
+pub fn cgb_color(color: u16, correct: bool) -> [u8; 3] {
+    if !correct {
+        return freki_core::rgb555_to_rgb888(color);
+    }
+    let r = (color & 0x1F) as u32;
+    let g = ((color >> 5) & 0x1F) as u32;
+    let b = ((color >> 10) & 0x1F) as u32;
+    let mix = |v: u32| (v.min(960) >> 2) as u8;
+    [
+        mix(r * 26 + g * 4 + b * 2),
+        mix(g * 24 + b * 8),
+        mix(r * 6 + g * 4 + b * 22),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_correction_keeps_black_and_white() {
+        assert_eq!(cgb_color(0, true), [0, 0, 0]);
+        assert_eq!(cgb_color(0x7FFF, true), [240, 240, 240]);
+        assert_eq!(cgb_color(0x7FFF, false), [255, 255, 255]);
+        let [r, g, b] = cgb_color(0x001F, true); // pure red is muted
+        assert!(r > g && r > b && g < 64);
+    }
 
     #[test]
     fn recent_roms_are_deduplicated_and_capped() {

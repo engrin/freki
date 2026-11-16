@@ -1,10 +1,12 @@
 # freki
 
-A Game Boy (DMG) emulator written in Rust, for Windows, Linux and macOS.
+A Game Boy and Game Boy Color emulator written in Rust, for Windows, Linux and macOS.
 
 Named after Freki, one of Odin's two wolves.
 
-> **Status:** most original Game Boy games should run, with sound.
+> **Status:** most original Game Boy games should run, with sound. Game Boy Color games
+> run in colour (banked memory, palettes, tile attributes, double speed, VRAM DMA), and
+> `cgb-acid2` renders pixel-perfect.
 > freki passes all of Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
 > MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves, save states, rewind and cheats.
@@ -12,7 +14,8 @@ Named after Freki, one of Odin's two wolves.
 > mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels),
 > and 93 of the 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,
 > interrupt, PPU mode and VRAM/OAM access timing).
-> Missing: Game Boy Color.
+> Missing: CGB boot ROM, original Game Boy games in the CGB's colourised compatibility mode,
+> and CGB-specific timing and sound differences.
 
 ## Layout
 
@@ -33,7 +36,9 @@ cargo run --release -- path/to/game.gb   # or start without a ROM and use File �
 ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, recent
 ROMs, quit), Emulation (pause, fast-forward, reset, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
 search), View (scale, palette, frame timing, debug views) and Help (controls, about).
-Palettes: DMG green, greyscale, Pocket and Light (backlit). The palette, scale, recent ROMs,
+Palettes: DMG green, greyscale, Pocket and Light (backlit). Game Boy Color games are shown
+in their own colours, by default corrected to look like the GBC's screen (View → GBC colour
+correction). The palette, scale, recent ROMs,
 fast-forward speed and boot ROM choice are remembered between runs.
 
 View → Tiles, Tile map and Sprites show video memory live: all 384 tiles, either tile map
@@ -118,13 +123,14 @@ On Linux you need the X11/Wayland, ALSA and udev development headers
 ## Testing
 
 ```sh
-./scripts/fetch-test-roms.sh                        # Blargg, dmg-acid2, mealybug-tearoom, Mooneye
+./scripts/fetch-test-roms.sh                        # Blargg, dmg/cgb-acid2, mealybug-tearoom, Mooneye
 cargo test --workspace                              # unit tests and all test ROMs (headless)
 ```
 
 These run without a window: the Blargg tests read results from the serial port or
-cartridge RAM, the Mooneye tests check the registers the ROM sets when it finishes, and the dmg-acid2 test compares the screen with the reference image (on a
-mismatch, freki's screen is saved to `target/dmg-acid2-actual.png`). If the ROMs have not
+cartridge RAM, the Mooneye tests check the registers the ROM sets when it finishes, and the dmg-acid2 and cgb-acid2 tests compare the screen with the reference image (on a
+mismatch, freki's screen is saved to `target/<test>-actual.png`). The CPU and timing tests
+also run in CGB mode. If the ROMs have not
 been fetched, those tests are skipped.
 
 ROM files are never committed; see `.gitignore`.
@@ -133,7 +139,7 @@ ROM files are never committed; see `.gitignore`.
 
 - [Pan Docs](https://gbdev.io/pandocs/): the hardware reference
 - [Opcode table](https://gbdev.io/gb-opcodes/optables/)
-- [Blargg's test ROMs](https://github.com/retrio/gb-test-roms), [dmg-acid2](https://github.com/mattcurrie/dmg-acid2), [Mooneye test suite](https://github.com/Gekkio/mooneye-test-suite)
+- [Blargg's test ROMs](https://github.com/retrio/gb-test-roms), [dmg-acid2](https://github.com/mattcurrie/dmg-acid2), [cgb-acid2](https://github.com/mattcurrie/cgb-acid2), [Mooneye test suite](https://github.com/Gekkio/mooneye-test-suite)
 
 ## License
 
