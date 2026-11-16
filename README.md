@@ -71,8 +71,8 @@ By default games start in the state the boot ROM leaves behind. To see the logo 
 and hear the sound, choose dumps of the boot ROMs under Emulation → Boot ROM → Choose file…
 (the 256-byte Game Boy and the 2304-byte Game Boy Color boot ROM; they are Nintendo's code
 and not included). The Game Boy Color boot ROM is also what picks the colours for original
-Game Boy games (the button combinations on its logo screen work too); without it they are
-shown in grey. Changes apply from the next reset or ROM load, and freki remembers them.
+Game Boy games; without it they are shown
+in grey. Changes apply from the next reset or ROM load, and freki remembers them.
 
 ### Save states and rewind
 
