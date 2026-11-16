@@ -16,6 +16,7 @@
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::cheats::Cheats;
+use crate::debugger::Breakpoints;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
@@ -43,6 +44,9 @@ pub struct Bus {
     /// Not part of save states: kept across loads.
     #[serde(skip)]
     pub cheats: Cheats,
+    /// Not part of save states: kept across loads.
+    #[serde(skip)]
+    pub breaks: Breakpoints,
     #[serde(with = "BigArray")]
     wram: [u8; 0x2000],
     #[serde(with = "BigArray")]
@@ -64,6 +68,7 @@ impl Bus {
             serial: Serial::new(),
             apu: Apu::new(),
             cheats: Cheats::new(),
+            breaks: Breakpoints::default(),
             wram: [0; 0x2000],
             hram: [0; 0x7F],
             io: [0; 0x80],
@@ -138,11 +143,13 @@ impl Bus {
     }
 
     /// After loading a save state into `self`: takes over what states do not contain
-    /// from the bus being replaced (the ROM, audio output configuration and cheats).
+    /// from the bus being replaced (the ROM, audio output configuration, cheats and
+    /// breakpoints).
     pub(crate) fn adopt_runtime_from(&mut self, old: &mut Bus) {
         self.cart.adopt_rom_from(&mut old.cart);
         self.apu.adopt_output_from(&old.apu);
         self.cheats = std::mem::take(&mut old.cheats);
+        self.breaks = std::mem::take(&mut old.breaks);
     }
 
     pub fn read_u16(&self, addr: u16) -> u16 {

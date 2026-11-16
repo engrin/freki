@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::bus::Bus;
+use crate::debugger::Access;
 
 pub mod flag {
     pub const Z: u8 = 1 << 7;
@@ -169,8 +170,18 @@ impl Cpu {
         self.pending = 4;
     }
 
-    /// Memory read taking one M-cycle.
+    /// Memory read taking one M-cycle; reported to read watchpoints.
     fn mem_read(&mut self, bus: &mut Bus, addr: u16) -> u8 {
+        let value = self.fetch_read(bus, addr);
+        if !bus.breaks.watches.is_empty() {
+            bus.breaks.access(addr, value, Access::Read);
+        }
+        value
+    }
+
+    /// Instruction fetch taking one M-cycle; not reported to read watchpoints
+    /// (executing code is what PC breakpoints are for).
+    fn fetch_read(&mut self, bus: &mut Bus, addr: u16) -> u8 {
         self.flush(bus);
         let value = bus.read(addr);
         self.pending = 4;
@@ -190,6 +201,9 @@ impl Cpu {
     ///   STAT write bug.
     /// - WX: marks the value as just changed for one T-cycle (window start quirk).
     fn mem_write(&mut self, bus: &mut Bus, addr: u16, value: u8) {
+        if !bus.breaks.watches.is_empty() {
+            bus.breaks.access(addr, value, Access::Write);
+        }
         let pending = std::mem::take(&mut self.pending);
         match addr {
             0xFF0F => {
@@ -246,7 +260,7 @@ impl Cpu {
     // ---- fetch and stack helpers -------------------------------------------------------
 
     fn fetch(&mut self, bus: &mut Bus) -> u8 {
-        let byte = self.mem_read(bus, self.regs.pc);
+        let byte = self.fetch_read(bus, self.regs.pc);
         if self.halt_bug {
             self.halt_bug = false;
         } else {
@@ -467,7 +481,7 @@ impl Cpu {
             return false;
         }
         self.ime = false;
-        self.mem_read(bus, self.regs.pc);
+        self.fetch_read(bus, self.regs.pc);
         self.bus_cycle(bus);
         self.idle(bus);
         let [hi, lo] = self.regs.pc.to_be_bytes();

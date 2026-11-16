@@ -9,6 +9,7 @@ pub mod bus;
 pub mod cartridge;
 pub mod cheats;
 pub mod cpu;
+pub mod debugger;
 pub mod disasm;
 pub mod joypad;
 pub mod ppu;
@@ -19,6 +20,7 @@ pub mod timer;
 pub use cartridge::{Cartridge, CartridgeError};
 pub use cheats::{CheatError, Cheats, Code, Filter, MemorySearch};
 pub use cpu::{CpuError, Registers};
+pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};
 pub use disasm::{Instruction, disassemble};
 pub use joypad::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -38,6 +40,8 @@ pub const FRAMES_PER_SECOND: f64 = CLOCK_HZ as f64 / CYCLES_PER_FRAME as f64;
 pub struct GameBoy {
     cpu: Cpu,
     bus: Bus,
+    /// Set after stopping at a breakpoint, so resuming executes that instruction.
+    resume_at: Option<u16>,
 }
 
 impl GameBoy {
@@ -50,6 +54,7 @@ impl GameBoy {
         Ok(Self {
             cpu: Cpu::new_post_boot(),
             bus,
+            resume_at: None,
         })
     }
 
@@ -60,6 +65,7 @@ impl GameBoy {
     }
 
     /// Runs until the PPU has produced a complete frame, then applies GameShark cheats.
+    /// Ignores breakpoints; see [`GameBoy::run_frame_checked`].
     pub fn run_frame(&mut self) -> Result<(), CpuError> {
         let mut elapsed = 0;
         while elapsed < CYCLES_PER_FRAME {
@@ -68,11 +74,60 @@ impl GameBoy {
                 break;
             }
         }
+        self.apply_frame_cheats();
+        Ok(())
+    }
+
+    fn apply_frame_cheats(&mut self) {
         let writes: Vec<(u16, u8)> = self.bus.cheats.frame_writes().collect();
         for (address, value) in writes {
             self.bus.write(address, value);
         }
-        Ok(())
+    }
+
+    /// Executes one instruction, honouring breakpoints and watchpoints.
+    ///
+    /// Returns `Some(stop)` when a breakpoint is reached (the instruction has *not* run;
+    /// the next call runs it) or a watchpoint was hit (the instruction has run).
+    pub fn step_checked(&mut self) -> Result<Option<Stop>, CpuError> {
+        let pc = self.cpu.regs.pc;
+        let resume = self.resume_at.take() == Some(pc);
+        if !resume && !self.cpu.halted && self.bus.breaks.pc.contains(&pc) {
+            self.resume_at = Some(pc);
+            return Ok(Some(Stop::Breakpoint { pc }));
+        }
+        self.step()?;
+        Ok(self
+            .bus
+            .breaks
+            .take_hit()
+            .map(|hit| Stop::Watch { pc, hit }))
+    }
+
+    /// Like [`GameBoy::run_frame`], but stops early at breakpoints and watchpoints.
+    /// After a stop, calling it again continues the same frame.
+    pub fn run_frame_checked(&mut self) -> Result<Option<Stop>, CpuError> {
+        if self.bus.breaks.is_empty() && self.resume_at.is_none() {
+            return self.run_frame().map(|()| None);
+        }
+        loop {
+            if let Some(stop) = self.step_checked()? {
+                return Ok(Some(stop));
+            }
+            if self.bus.ppu.take_frame_ready() {
+                self.apply_frame_cheats();
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Breakpoints and watchpoints (not part of save states).
+    pub fn breakpoints(&self) -> &Breakpoints {
+        &self.bus.breaks
+    }
+
+    pub fn breakpoints_mut(&mut self) -> &mut Breakpoints {
+        &mut self.bus.breaks
     }
 
     /// The current screen as 160×144 shade indices (0 = lightest, 3 = darkest).
