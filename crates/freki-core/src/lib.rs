@@ -9,6 +9,7 @@ pub mod bus;
 pub mod cartridge;
 pub mod cheats;
 pub mod cpu;
+pub mod disasm;
 pub mod joypad;
 pub mod ppu;
 pub mod serial;
@@ -17,7 +18,8 @@ pub mod timer;
 
 pub use cartridge::{Cartridge, CartridgeError};
 pub use cheats::{CheatError, Cheats, Code, Filter, MemorySearch};
-pub use cpu::CpuError;
+pub use cpu::{CpuError, Registers};
+pub use disasm::{Instruction, disassemble};
 pub use joypad::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use state::{Rewind, StateError};
@@ -85,6 +87,26 @@ impl GameBoy {
     /// Address of the next instruction to execute.
     pub fn pc(&self) -> u16 {
         self.cpu.regs.pc
+    }
+
+    /// CPU registers.
+    pub fn registers(&self) -> &Registers {
+        &self.cpu.regs
+    }
+
+    /// Interrupt master enable.
+    pub fn ime(&self) -> bool {
+        self.cpu.ime
+    }
+
+    /// Whether the CPU is halted, waiting for an interrupt.
+    pub fn halted(&self) -> bool {
+        self.cpu.halted
+    }
+
+    /// Disassembles the instruction at `addr` (reads without side effects).
+    pub fn disassemble(&self, addr: u16) -> Instruction {
+        disassemble(addr, |a| self.peek(a))
     }
 
     /// Reads a byte from the memory map without side effects (for debuggers and tests).
