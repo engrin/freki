@@ -71,6 +71,11 @@ impl GameBoy {
         self.bus.joypad.set(button, pressed);
     }
 
+    /// Address of the next instruction to execute.
+    pub fn pc(&self) -> u16 {
+        self.cpu.regs.pc
+    }
+
     /// Reads a byte from the memory map without side effects (for debuggers and tests).
     pub fn peek(&self, addr: u16) -> u8 {
         self.bus.read(addr)
