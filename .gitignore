@@ -8,3 +8,4 @@
 *.gbc
 *.sav
 /roms/
+*.ss[0-9]
