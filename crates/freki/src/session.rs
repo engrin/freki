@@ -93,6 +93,27 @@ impl Session {
         self.start = start;
     }
 
+    /// Writes `rgba` (the 160×144 screen) as `<rom>-NNN.png` next to the ROM, using the
+    /// first free number. Returns the path.
+    pub fn save_screenshot(&self, rgba: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+        let stem = self.rom_path.with_extension("");
+        let stem = stem.to_string_lossy();
+        let path = (1..10_000)
+            .map(|n| PathBuf::from(format!("{stem}-{n:03}.png")))
+            .find(|p| !p.exists())
+            .ok_or("too many screenshots")?;
+        let file = fs::File::create(&path)?;
+        let mut encoder = png::Encoder::new(
+            std::io::BufWriter::new(file),
+            freki_core::SCREEN_WIDTH as u32,
+            freki_core::SCREEN_HEIGHT as u32,
+        );
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(rgba)?;
+        Ok(path)
+    }
+
     pub fn cheat_file(&self) -> PathBuf {
         self.rom_path.with_extension("cht")
     }
@@ -174,4 +195,30 @@ pub fn file_name(path: &Path) -> String {
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screenshots_are_numbered_pngs_next_to_the_rom() {
+        let dir = std::env::temp_dir().join(format!("freki-shots-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let rom_path = dir.join("game.gb");
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]);
+        rom[0x150..0x152].copy_from_slice(&[0x18, 0xFE]);
+        fs::write(&rom_path, rom).unwrap();
+        let (session, _) = Session::open(&rom_path, Start::default()).unwrap();
+        let rgba = vec![0x80; freki_core::SCREEN_WIDTH * freki_core::SCREEN_HEIGHT * 4];
+        let first = session.save_screenshot(&rgba).unwrap();
+        let second = session.save_screenshot(&rgba).unwrap();
+        assert_eq!(first, dir.join("game-001.png"));
+        assert_eq!(second, dir.join("game-002.png"));
+        let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(&first).unwrap()));
+        let info = decoder.read_info().unwrap();
+        assert_eq!((info.info().width, info.info().height), (160, 144));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

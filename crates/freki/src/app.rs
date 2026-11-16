@@ -371,6 +371,9 @@ impl FrekiApp {
         if pressed(Key::F9) {
             self.toggle_cheats();
         }
+        if pressed(Key::F12) {
+            self.screenshot();
+        }
         if pressed(Key::P) {
             self.set_paused(!self.paused);
         }
@@ -551,6 +554,16 @@ impl FrekiApp {
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
+        let rgba = self.screen_rgba();
+        let image = ColorImage::from_rgba_unmultiplied([SCREEN_WIDTH, SCREEN_HEIGHT], &rgba);
+        match &mut self.texture {
+            Some(texture) => texture.set(image, TextureOptions::NEAREST),
+            None => self.texture = Some(ctx.load_texture("screen", image, TextureOptions::NEAREST)),
+        }
+    }
+
+    /// The screen as shown (palette or colour correction applied), as RGBA.
+    fn screen_rgba(&self) -> Vec<u8> {
         let colors = self.settings.palette.colors();
         let correct = self.settings.color_correction;
         let mut rgba = Vec::with_capacity(SCREEN_WIDTH * SCREEN_HEIGHT * 4);
@@ -569,11 +582,16 @@ impl FrekiApp {
             }
             None => rgba.resize(SCREEN_WIDTH * SCREEN_HEIGHT * 4, 0x20),
         }
-        let image = ColorImage::from_rgba_unmultiplied([SCREEN_WIDTH, SCREEN_HEIGHT], &rgba);
-        match &mut self.texture {
-            Some(texture) => texture.set(image, TextureOptions::NEAREST),
-            None => self.texture = Some(ctx.load_texture("screen", image, TextureOptions::NEAREST)),
-        }
+        rgba
+    }
+
+    /// Saves the screen as shown to a PNG next to the ROM.
+    fn screenshot(&mut self) {
+        let rgba = self.screen_rgba();
+        self.with_session(|s| {
+            let path = s.save_screenshot(&rgba)?;
+            Ok(format!("saved {}", file_name(&path)))
+        });
     }
 
     // ---- UI ----------------------------------------------------------------------------
@@ -620,6 +638,16 @@ impl FrekiApp {
                     ui.close();
                     self.close_rom();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title("freki".into()));
+                }
+                if ui
+                    .add_enabled(
+                        loaded,
+                        egui::Button::new("Save screenshot").shortcut_text("F12"),
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                    self.screenshot();
                 }
                 ui.separator();
                 if ui
@@ -1149,6 +1177,7 @@ impl FrekiApp {
                         ("Fast-forward", "hold Tab"),
                         ("Pause", "P"),
                         ("Cheats on/off", "F9"),
+                        ("Screenshot", "F12"),
                         ("Open ROM / reset / quit", "Ctrl+O / Ctrl+R / Ctrl+Q"),
                     ] {
                         ui.label(what);

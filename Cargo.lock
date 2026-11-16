@@ -1294,6 +1294,7 @@ dependencies = [
  "eframe",
  "freki-core",
  "gilrs",
+ "png",
  "rfd",
  "ron",
  "serde",

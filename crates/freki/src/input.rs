@@ -21,7 +21,7 @@ pub const BUTTONS: [Button; 8] = [
 ];
 
 /// Keys freki uses itself, which cannot be bound to a Game Boy button.
-pub const RESERVED_KEYS: [(Key, &str); 10] = [
+pub const RESERVED_KEYS: [(Key, &str); 11] = [
     (Key::P, "Pause"),
     (Key::R, "Rewind"),
     (Key::Tab, "Fast-forward"),
@@ -32,6 +32,7 @@ pub const RESERVED_KEYS: [(Key, &str); 10] = [
     (Key::F9, "Cheats on/off"),
     (Key::F10, "Debugger: continue"),
     (Key::F11, "Debugger: step"),
+    (Key::F12, "Screenshot"),
 ];
 
 /// Gamepad buttons that can be bound, with the names used in the settings.
