@@ -44,7 +44,8 @@ pub const FRAMES_PER_SECOND: f64 = CLOCK_HZ as f64 / CYCLES_PER_FRAME as f64;
 pub enum Model {
     /// Original Game Boy.
     Dmg,
-    /// Game Boy Color running a CGB game in colour mode.
+    /// Game Boy Color: CGB games in colour mode, original Game Boy games in its DMG
+    /// compatibility mode.
     Cgb,
 }
 
@@ -83,17 +84,21 @@ impl GameBoy {
     }
 
     /// Creates a Game Boy of the given model with `rom` inserted, in the post-boot state.
-    /// [`Model::Cgb`] needs a CGB game (DMG games in the CGB's compatibility mode are not
-    /// emulated yet): for other games the DMG is used.
+    /// On a [`Model::Cgb`], original Game Boy games run in DMG compatibility mode, in
+    /// shades of grey (the CGB boot ROM, see [`GameBoy::with_boot_rom`], picks colours).
     pub fn with_model(rom: Vec<u8>, model: Model) -> Result<Self, CartridgeError> {
         let cart = Cartridge::from_rom(rom)?;
-        let cgb = model == Model::Cgb && cart.supports_cgb();
+        let cgb_game = cart.supports_cgb();
         let logo: [u8; 48] = std::array::from_fn(|i| cart.read_rom(0x104 + i as u16));
         let mut bus = Bus::new(cart);
         bus.ppu.load_boot_logo(&logo);
         bus.ppu.skip_to_post_boot();
-        let cpu = if cgb {
+        let cpu = if model == Model::Cgb {
             bus.set_cgb();
+            if !cgb_game {
+                bus.enter_dmg_compat();
+                bus.ppu.set_grey_compat_palettes();
+            }
             Cpu::new_post_boot_cgb()
         } else {
             Cpu::new_post_boot()
@@ -107,18 +112,33 @@ impl GameBoy {
 
     /// The emulated hardware.
     pub fn model(&self) -> Model {
-        if self.bus.cgb { Model::Cgb } else { Model::Dmg }
+        if self.bus.cgb_hardware {
+            Model::Cgb
+        } else {
+            Model::Dmg
+        }
     }
 
     /// Creates a Game Boy with `rom` inserted, at power-on: `boot` runs first (logo and
-    /// sound), then hands over to the game.
+    /// sound), then hands over to the game. The boot ROM decides the model: with the CGB
+    /// boot ROM, original Game Boy games get colours it picks for them.
     pub fn with_boot_rom(rom: Vec<u8>, boot: BootRom) -> Result<Self, CartridgeError> {
         let cart = Cartridge::from_rom(rom)?;
+        let cgb = boot.is_cgb();
+        let mut bus = Bus::power_on(cart, boot);
+        if cgb {
+            bus.set_cgb();
+        }
         Ok(Self {
             cpu: Cpu::new_power_on(),
-            bus: Bus::power_on(cart, boot),
+            bus,
             resume_at: None,
         })
+    }
+
+    /// Whether a Game Boy Color runs an original Game Boy game (DMG compatibility mode).
+    pub fn dmg_compat(&self) -> bool {
+        self.bus.cgb_hardware && !self.bus.cgb && !self.bus.boot_rom_mapped()
     }
 
     /// Whether the boot ROM is still mapped (it has not handed over to the game yet).
@@ -218,7 +238,7 @@ impl GameBoy {
     /// The current screen as 160×144 shade indices (0 = lightest, 3 = darkest).
     /// The current picture: shades on a DMG, colours on a CGB.
     pub fn screen(&self) -> Screen<'_> {
-        if self.bus.cgb {
+        if self.bus.ppu.outputs_rgb() {
             Screen::Rgb555(self.bus.ppu.rgb_framebuffer())
         } else {
             Screen::Shades(self.bus.ppu.framebuffer())
@@ -411,8 +431,9 @@ mod tests {
     }
 
     #[test]
-    fn boot_rom_must_be_256_bytes() {
-        assert_eq!(BootRom::new(&[0; 2304]), Err(BootRomError::WrongSize(2304)));
+    fn boot_rom_must_be_256_or_2304_bytes() {
+        assert_eq!(BootRom::new(&[0; 300]), Err(BootRomError::WrongSize(300)));
+        assert!(BootRom::new(&[0; 2304]).unwrap().is_cgb());
     }
 
     #[test]
@@ -530,5 +551,23 @@ mod tests {
         assert_eq!(gb.peek(0xFF55), 0x01);
         gb.poke(0xFF55, 0x00); // stop
         assert_eq!(gb.peek(0xFF55), 0x81, "stopped, 2 blocks were left");
+    }
+
+    #[test]
+    fn dmg_games_on_a_cgb_run_in_compatibility_mode() {
+        let mut gb = GameBoy::with_model(test_rom(), Model::Cgb).unwrap();
+        assert_eq!(gb.model(), Model::Cgb);
+        assert!(gb.dmg_compat());
+        assert_eq!(gb.registers().a, 0x11);
+        gb.poke(0xFF70, 3); // CGB registers are locked in compatibility mode
+        assert_eq!(gb.peek(0xFF70), 0xFF);
+        gb.run_frame().unwrap();
+        let Screen::Rgb555(pixels) = gb.screen() else {
+            panic!("compatibility mode shows colours");
+        };
+        assert_eq!(
+            pixels[0], 0x7FFF,
+            "shade 0 through the grey default palette"
+        );
     }
 }

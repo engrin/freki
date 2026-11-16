@@ -140,6 +140,10 @@ mod attr {
 pub struct Ppu {
     /// Game Boy Color mode (colour palettes, VRAM bank 1, tile attributes).
     cgb: bool,
+    /// CGB hardware in DMG compatibility mode: DMG rendering, coloured through palette RAM.
+    dmg_compat: bool,
+    /// OPRI ($FF6C) bit 0: sprites overlap by X like on the DMG instead of by OAM index.
+    opri_by_x: bool,
     /// VRAM: bank 0 at 0–$1FFF, bank 1 (CGB) at $2000–$3FFF.
     #[serde(with = "BigArray")]
     vram: [u8; 0x4000],
@@ -239,6 +243,8 @@ impl Ppu {
     pub fn new() -> Self {
         Self {
             cgb: false,
+            dmg_compat: false,
+            opri_by_x: true,
             vram: [0; 0x4000],
             vbk: 0,
             bg_palettes: [0xFF; 64],
@@ -382,6 +388,39 @@ impl Ppu {
     /// Switches to Game Boy Color mode.
     pub fn set_cgb(&mut self) {
         self.cgb = true;
+        self.opri_by_x = false;
+    }
+
+    /// Switches CGB hardware to DMG compatibility mode (see `Bus::enter_dmg_compat`).
+    pub fn enter_dmg_compat(&mut self) {
+        self.cgb = false;
+        self.dmg_compat = true;
+        self.opri_by_x = true;
+        self.vbk = 0;
+    }
+
+    /// Fills the palettes DMG compatibility mode uses with greys, as a neutral choice when
+    /// no CGB boot ROM picks colours.
+    pub fn set_grey_compat_palettes(&mut self) {
+        let greys: [u16; 4] = [0x7FFF, 0x56B5, 0x294A, 0x0000];
+        for (ram, palettes) in [(&mut self.bg_palettes, 1), (&mut self.obj_palettes, 2)] {
+            for palette in 0..palettes {
+                for (i, grey) in greys.iter().enumerate() {
+                    let at = palette * 8 + i * 2;
+                    ram[at..at + 2].copy_from_slice(&grey.to_le_bytes());
+                }
+            }
+        }
+    }
+
+    /// Whether this is DMG hardware (some PPU quirks are DMG-only).
+    fn dmg_hardware(&self) -> bool {
+        !self.cgb && !self.dmg_compat
+    }
+
+    /// Whether the PPU outputs colours (CGB hardware) rather than DMG shades.
+    pub fn outputs_rgb(&self) -> bool {
+        self.cgb || self.dmg_compat
     }
 
     fn vram_index(&self, addr: u16) -> usize {
@@ -532,6 +571,7 @@ impl Ppu {
             0xFF69 => self.read_palette(false),
             0xFF6A => 0x40 | self.ocps,
             0xFF6B => self.read_palette(true),
+            0xFF6C => 0xFE | u8::from(self.opri_by_x),
             _ => 0xFF,
         }
     }
@@ -581,6 +621,7 @@ impl Ppu {
             0xFF69 => self.write_palette(false, value),
             0xFF6A => self.ocps = value & 0xBF,
             0xFF6B => self.write_palette(true, value),
+            0xFF6C => self.opri_by_x = value & 1 != 0,
             _ => {}
         }
     }
@@ -773,7 +814,7 @@ impl Ppu {
         }
 
         // DMG quirk: a pixel is inserted when WX matches again after the window started.
-        if !self.cgb
+        if self.dmg_hardware()
             && self.wx == self.position.wrapping_add(7)
             && self.wx_triggered
             && !self.window_being_fetched
@@ -954,7 +995,7 @@ impl Ppu {
         if !self.bg_fifo.is_empty() {
             return;
         }
-        if !self.cgb
+        if self.dmg_hardware()
             && self.wy_triggered
             && self.lcdc & lcdc::WINDOW_ENABLE == 0
             && !self.disable_insertion_glitch
@@ -1046,7 +1087,7 @@ impl Ppu {
             let color = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
             let target = &mut self.obj_fifo[i as usize];
             // DMG: sprites fetched first (lower X) win. CGB: the lower OAM entry wins.
-            let wins = target.color == 0 || (self.cgb && index < target.index);
+            let wins = target.color == 0 || (!self.opri_by_x && index < target.index);
             if color != 0 && wins {
                 *target = ObjPixel {
                     color,
@@ -1103,6 +1144,8 @@ impl Ppu {
             let i = self.ly as usize * SCREEN_WIDTH + self.lcd_x as usize;
             if self.cgb {
                 self.rgb_framebuffer[i] = self.cgb_pixel(bg, obj);
+            } else if self.dmg_compat {
+                self.rgb_framebuffer[i] = self.compat_pixel(bg & bg_pixel::COLOR, obj);
             } else {
                 self.framebuffer[i] = self.dmg_pixel(bg & bg_pixel::COLOR, obj);
             }
@@ -1126,6 +1169,30 @@ impl Ppu {
         } else {
             (self.bgp >> (bg * 2)) & 3
         }
+    }
+
+    /// DMG compatibility mode: DMG mixing and palettes, then the resulting shade picks a
+    /// colour from CGB palette RAM (BG palette 0, OBJ palette 0 or 1).
+    fn compat_pixel(&self, bg: u8, obj: ObjPixel) -> u16 {
+        let bg = if self.lcdc & lcdc::BG_WINDOW_ENABLE != 0 {
+            bg
+        } else {
+            0
+        };
+        let draw_obj =
+            obj.color != 0 && self.lcdc & lcdc::OBJ_ENABLE != 0 && !(obj.behind_bg && bg != 0);
+        let (ram, palette, shade) = if draw_obj {
+            let obp = if obj.palette1 { self.obp1 } else { self.obp0 };
+            (
+                &self.obj_palettes,
+                obj.palette1 as usize,
+                (obp >> (obj.color * 2)) & 3,
+            )
+        } else {
+            (&self.bg_palettes, 0, (self.bgp >> (bg * 2)) & 3)
+        };
+        let i = palette * 8 + shade as usize * 2;
+        u16::from_le_bytes([ram[i], ram[i + 1]]) & 0x7FFF
     }
 
     /// CGB pixel mixing: the RGB555 colour of a background FIFO entry and an object pixel.

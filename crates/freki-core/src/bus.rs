@@ -48,8 +48,14 @@ pub struct Bus {
     /// Not part of save states: kept across loads.
     #[serde(skip)]
     pub breaks: Breakpoints,
-    /// Game Boy Color mode: a CGB game running on CGB hardware.
+    /// Game Boy Color hardware (in CGB mode or DMG compatibility mode).
+    pub cgb_hardware: bool,
+    /// CGB mode: the CGB registers (banks, palettes, speed, VRAM DMA) are available.
+    /// Off on a DMG and in the CGB's DMG compatibility mode.
     pub cgb: bool,
+    /// KEY0 ($FF4C) bit 2, written by the CGB boot ROM: switch to DMG compatibility mode
+    /// when the boot ROM is unmapped.
+    key0_dmg: bool,
     /// Work RAM: 8 banks of 4 KiB (the DMG only uses banks 0 and 1).
     wram: Vec<u8>,
     /// SVBK ($FF70): work RAM bank at $D000 (CGB).
@@ -115,7 +121,9 @@ impl Bus {
             apu: Apu::new(),
             cheats: Cheats::new(),
             breaks: Breakpoints::default(),
+            cgb_hardware: false,
             cgb: false,
+            key0_dmg: false,
             wram: vec![0; 0x8000],
             svbk: 0,
             speed_switch_armed: false,
@@ -153,10 +161,30 @@ impl Bus {
         self.boot_rom_mapped
     }
 
-    /// Switches to Game Boy Color mode.
+    /// Switches to Game Boy Color hardware in CGB mode.
     pub fn set_cgb(&mut self) {
+        self.cgb_hardware = true;
         self.cgb = true;
         self.ppu.set_cgb();
+    }
+
+    /// Switches CGB hardware to DMG compatibility mode: the game sees a DMG, but its
+    /// shades are coloured through palette RAM (BG palette 0, OBJ palettes 0 and 1).
+    pub fn enter_dmg_compat(&mut self) {
+        self.cgb = false;
+        self.ppu.enter_dmg_compat();
+    }
+
+    /// $FF50 write: unmaps the boot ROM (for good); the CGB boot ROM may have asked for
+    /// DMG compatibility mode through KEY0.
+    fn unmap_boot_rom(&mut self, value: u8) {
+        if value & 1 == 0 || !self.boot_rom_mapped {
+            return;
+        }
+        self.boot_rom_mapped = false;
+        if self.cgb_hardware && self.key0_dmg {
+            self.enter_dmg_compat();
+        }
     }
 
     /// Index into `wram` for an address in $C000–$FDFF.
@@ -185,8 +213,14 @@ impl Bus {
     #[allow(clippy::match_overlapping_arm)]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0x0000..=0x00FF if self.boot_rom_mapped && self.boot_rom.is_some() => {
-                self.boot_rom.as_ref().map_or(0xFF, |boot| boot.read(addr))
+            0x0000..=0x08FF
+                if let Some(byte) = self
+                    .boot_rom
+                    .as_ref()
+                    .filter(|_| self.boot_rom_mapped)
+                    .and_then(|boot| boot.read(addr)) =>
+            {
+                byte
             }
             0x0000..=0x7FFF => {
                 let byte = self.cart.read_rom(addr);
@@ -211,7 +245,7 @@ impl Bus {
             0xFF4D if self.cgb => {
                 0x7E | u8::from(self.double_speed) << 7 | u8::from(self.speed_switch_armed)
             }
-            0xFF4F | 0xFF68..=0xFF6B if self.cgb => self.ppu.read_reg(addr),
+            0xFF4F | 0xFF68..=0xFF6C if self.cgb => self.ppu.read_reg(addr),
             0xFF55 if self.cgb => u8::from(!self.hdma.active) << 7 | self.hdma.remaining,
             0xFF70 if self.cgb => 0xF8 | self.svbk,
             0xFF00..=0xFF7F => 0xFF, // unmapped on the DMG
@@ -244,10 +278,11 @@ impl Bus {
             0xFF0F => self.interrupt_flag = value & 0x1F,
             0xFF10..=0xFF3F => self.apu.write(addr, value),
             0xFF46 => self.oam_dma(value),
-            0xFF50 => self.boot_rom_mapped &= value & 1 == 0,
+            0xFF50 => self.unmap_boot_rom(value),
+            0xFF4C if self.cgb && self.boot_rom_mapped => self.key0_dmg = value & 0x04 != 0,
             0xFF40..=0xFF4B => self.ppu.write_reg(addr, value),
             0xFF4D if self.cgb => self.speed_switch_armed = value & 1 != 0,
-            0xFF4F | 0xFF68..=0xFF6B if self.cgb => self.ppu.write_reg(addr, value),
+            0xFF4F | 0xFF68..=0xFF6C if self.cgb => self.ppu.write_reg(addr, value),
             0xFF51 if self.cgb => {
                 self.hdma.source = (self.hdma.source & 0xFF) | (value as u16) << 8
             }

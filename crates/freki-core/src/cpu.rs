@@ -228,7 +228,7 @@ impl Cpu {
         let pending = std::mem::take(&mut self.pending);
         match addr {
             // The write timing quirks below are measured on the DMG.
-            _ if bus.cgb => {
+            _ if bus.cgb_hardware => {
                 self.advance(bus, pending);
                 bus.cpu_write(addr, value);
                 self.pending = 4;
