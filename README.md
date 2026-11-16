@@ -4,17 +4,17 @@ A Game Boy (DMG) emulator written in Rust, for Windows, Linux and macOS.
 
 Named after Freki, one of Odin's two wolves.
 
-> **Status:** most original Game Boy games should run, without sound.
+> **Status:** most original Game Boy games should run, with sound.
 > The CPU passes all of Blargg's `cpu_instrs` tests and the PPU renders `dmg-acid2`
 > pixel-perfect. Cartridges with no MBC, MBC1, MBC2, MBC3 (with clock) and MBC5 work,
-> with battery saves. Missing: sound, Game Boy Color, cycle-accurate timing.
+> with battery saves. Missing: Game Boy Color, cycle-accurate timing.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
-| `crates/freki` | Desktop frontend: window, input and frame pacing ([minifb](https://crates.io/crates/minifb)) |
+| `crates/freki` | Desktop frontend: window and input ([minifb](https://crates.io/crates/minifb)), sound ([cpal](https://crates.io/crates/cpal)), save files |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ## Build and run
@@ -35,8 +35,11 @@ cargo run --release -- path/to/game.gb
 Battery-backed games are saved next to the ROM as `<rom>.sav` (about once a second
 while the game writes to it, and on exit).
 
-On Linux you need the X11/Wayland development headers
-(`libxkbcommon-dev libwayland-dev` on Debian/Ubuntu).
+Emulation speed follows the sound card's clock, so audio stays in sync. Without an audio
+device freki still runs, paced at ~60 fps.
+
+On Linux you need the X11/Wayland and ALSA development headers
+(`libxkbcommon-dev libwayland-dev libasound2-dev` on Debian/Ubuntu).
 
 ## Testing
 

@@ -8,5 +8,6 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+cpal = "0.18.2"
 freki-core = { version = "0.1.0", path = "../freki-core" }
 minifb = "0.29.0"

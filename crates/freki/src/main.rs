@@ -1,16 +1,21 @@
-//! freki desktop frontend: window, keyboard input, frame pacing and save files.
+//! freki desktop frontend: window, keyboard input, sound, frame pacing and save files.
 //!
 //! Usage: `freki <rom.gb>`
 //!
 //! Battery-backed games are saved next to the ROM as `<rom>.sav`.
 
+mod audio;
+
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
 use freki_core::{Button, FRAMES_PER_SECOND, GameBoy, SCREEN_HEIGHT, SCREEN_WIDTH};
 use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
+
+use audio::Audio;
 
 /// Classic DMG green palette as 0RGB, indexed by shade (0 = lightest).
 const PALETTE: [u32; 4] = [0x00E0_F8D0, 0x0088_C070, 0x0034_6856, 0x0008_1820];
@@ -28,6 +33,12 @@ const KEYMAP: [(Key, Button); 8] = [
 
 /// How often to write the save file while the game keeps changing it.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Audio queued ahead of playback. Emulation waits while more than this is buffered,
+/// which paces the game by the sound card's clock. Higher = fewer crackles, more lag.
+const AUDIO_LATENCY: Duration = Duration::from_millis(60);
+/// Longest a single frame waits for the audio queue to drain.
+const MAX_AUDIO_WAIT: Duration = Duration::from_millis(100);
 
 fn main() {
     if let Err(err) = run() {
@@ -71,7 +82,23 @@ fn run_window(gb: &mut GameBoy, save_path: &Path) -> Result<(), Box<dyn Error>> 
             ..WindowOptions::default()
         },
     )?;
-    window.set_target_fps(FRAMES_PER_SECOND.round() as usize);
+    let audio = match Audio::open() {
+        Ok(audio) => {
+            gb.set_audio_sample_rate(audio.sample_rate());
+            // The audio queue paces emulation; don't let the window throttle as well.
+            window.set_target_fps(0);
+            Some(audio)
+        }
+        Err(err) => {
+            eprintln!("freki: no sound ({err})");
+            window.set_target_fps(FRAMES_PER_SECOND.round() as usize);
+            None
+        }
+    };
+    let max_queued = audio.as_ref().map_or(0, |a| {
+        (a.sample_rate() as f64 * AUDIO_LATENCY.as_secs_f64()) as usize
+    });
+    let mut samples = Vec::new();
 
     let mut pixels = vec![0u32; SCREEN_WIDTH * SCREEN_HEIGHT];
     let mut last_save = Instant::now();
@@ -81,6 +108,17 @@ fn run_window(gb: &mut GameBoy, save_path: &Path) -> Result<(), Box<dyn Error>> 
         }
 
         gb.run_frame()?;
+
+        if let Some(audio) = &audio {
+            gb.drain_audio(&mut samples);
+            audio.push(&samples);
+            samples.clear();
+            // Wait for playback to catch up, but never hang if the device stops pulling.
+            let waited = Instant::now();
+            while audio.queued_frames() > max_queued && waited.elapsed() < MAX_AUDIO_WAIT {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
 
         for (dst, &shade) in pixels.iter_mut().zip(gb.framebuffer()) {
             *dst = PALETTE[(shade & 3) as usize];
