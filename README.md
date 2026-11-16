@@ -9,7 +9,9 @@ Named after Freki, one of Odin's two wolves.
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
 > MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves, save states, rewind and cheats.
 > The PPU draws pixel by pixel with DMG-accurate timing: 22 of the 24 mealybug-tearoom
-> mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels).
+> mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels),
+> and 93 of the 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,
+> interrupt, PPU mode and VRAM/OAM access timing).
 > Missing: Game Boy Color.
 
 ## Layout
@@ -105,12 +107,12 @@ On Linux you need the X11/Wayland, ALSA and udev development headers
 ## Testing
 
 ```sh
-./scripts/fetch-test-roms.sh                        # Blargg, dmg-acid2, mealybug-tearoom
-cargo test --workspace                              # unit tests, Blargg, dmg-acid2 (headless)
+./scripts/fetch-test-roms.sh                        # Blargg, dmg-acid2, mealybug-tearoom, Mooneye
+cargo test --workspace                              # unit tests and all test ROMs (headless)
 ```
 
 These run without a window: the Blargg tests read results from the serial port or
-cartridge RAM, and the dmg-acid2 test compares the screen with the reference image (on a
+cartridge RAM, the Mooneye tests check the registers the ROM sets when it finishes, and the dmg-acid2 test compares the screen with the reference image (on a
 mismatch, freki's screen is saved to `target/dmg-acid2-actual.png`). If the ROMs have not
 been fetched, those tests are skipped.
 
