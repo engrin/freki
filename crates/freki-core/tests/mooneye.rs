@@ -89,7 +89,6 @@ mooneye! {
     oam_dma_timing: "acceptance/oam_dma_timing.gb",
     pop_timing: "acceptance/pop_timing.gb",
     ppu_hblank_ly_scx_timing_gs: "acceptance/ppu/hblank_ly_scx_timing-GS.gb",
-    #[ignore = "not passing yet"]
     ppu_intr_1_2_timing_gs: "acceptance/ppu/intr_1_2_timing-GS.gb",
     ppu_intr_2_0_timing: "acceptance/ppu/intr_2_0_timing.gb",
     ppu_intr_2_mode0_timing: "acceptance/ppu/intr_2_mode0_timing.gb",
@@ -100,7 +99,6 @@ mooneye! {
     ppu_lcdon_timing_gs: "acceptance/ppu/lcdon_timing-GS.gb",
     ppu_lcdon_write_timing_gs: "acceptance/ppu/lcdon_write_timing-GS.gb",
     ppu_stat_irq_blocking: "acceptance/ppu/stat_irq_blocking.gb",
-    #[ignore = "not passing yet"]
     ppu_stat_lyc_onoff: "acceptance/ppu/stat_lyc_onoff.gb",
     ppu_vblank_stat_intr_gs: "acceptance/ppu/vblank_stat_intr-GS.gb",
     push_timing: "acceptance/push_timing.gb",

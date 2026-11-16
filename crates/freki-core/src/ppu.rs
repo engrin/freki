@@ -127,6 +127,9 @@ pub struct Ppu {
     irq_mode: Mode,
     /// Previous level of the combined STAT interrupt line (interrupts fire on rising edges).
     stat_line: bool,
+    /// STAT's coincidence flag as it was when the LCD was switched off (it is frozen
+    /// while the LCD is off).
+    lyc_flag_off: bool,
     /// The first line after the LCD is switched on: it has no mode 2 (STAT goes from mode 0
     /// straight to mode 3 and OAM stays accessible).
     first_line: bool,
@@ -197,6 +200,7 @@ impl Ppu {
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
             stat_line: false,
+            lyc_flag_off: false,
             first_line: false,
             pipeline_active: false,
             bg_fifo: VecDeque::with_capacity(16),
@@ -351,6 +355,15 @@ impl Ppu {
         self.dot >= DOTS_PER_LINE - 4 && self.ly != LINES_PER_FRAME - 1
     }
 
+    /// STAT's LY = LYC coincidence flag (bit 2).
+    fn lyc_flag(&self) -> bool {
+        if self.lcd_on() {
+            !self.ly_changing() && self.ly_for_lyc() == self.lyc
+        } else {
+            self.lyc_flag_off
+        }
+    }
+
     /// LY as read by the CPU.
     fn ly_register(&self) -> u8 {
         if self.ly_changing() {
@@ -364,8 +377,7 @@ impl Ppu {
         match addr {
             0xFF40 => self.lcdc,
             0xFF41 => {
-                let coincidence =
-                    u8::from(!self.ly_changing() && self.ly_for_lyc() == self.lyc) << 2;
+                let coincidence = u8::from(self.lyc_flag()) << 2;
                 let mode = if self.lcd_on() { self.mode as u8 } else { 0 };
                 0x80 | self.stat | coincidence | mode
             }
@@ -395,8 +407,10 @@ impl Ppu {
                     self.obj_fetch = ObjFetch::Idle;
                     self.during_object_fetch = false;
                 }
+                let lyc_flag = self.lyc_flag();
                 self.lcdc = value;
                 if was_on && !self.lcd_on() {
+                    self.lyc_flag_off = lyc_flag;
                     // LCD off: LY resets and the PPU idles until it is switched back on.
                     self.ly = 0;
                     self.dot = 0;
@@ -525,7 +539,6 @@ impl Ppu {
             self.ly += 1;
             if self.ly as usize == SCREEN_HEIGHT {
                 self.mode = Mode::VBlank;
-                self.irq_mode = Mode::VBlank;
                 self.frame_ready = true;
                 irq |= interrupt::VBLANK;
                 // DMG quirk: entering VBlank also triggers the OAM (mode 2) STAT interrupt.
@@ -544,6 +557,11 @@ impl Ppu {
             }
         }
 
+        // The mode 1 STAT interrupt source rises after the VBlank interrupt. Mooneye's
+        // intr_1_2_timing bounds the delay to 1–4 dots; one M-cycle is used.
+        if self.ly as usize == SCREEN_HEIGHT && self.dot == 4 {
+            self.irq_mode = Mode::VBlank;
+        }
         // STAT interrupt fires on a rising edge of the OR of all enabled sources.
         let line = (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
             || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
