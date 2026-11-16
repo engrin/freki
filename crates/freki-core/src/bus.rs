@@ -15,6 +15,7 @@
 
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
+use crate::cheats::Cheats;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
@@ -39,6 +40,9 @@ pub struct Bus {
     pub joypad: Joypad,
     pub serial: Serial,
     pub apu: Apu,
+    /// Not part of save states: kept across loads.
+    #[serde(skip)]
+    pub cheats: Cheats,
     #[serde(with = "BigArray")]
     wram: [u8; 0x2000],
     #[serde(with = "BigArray")]
@@ -59,6 +63,7 @@ impl Bus {
             joypad: Joypad::new(),
             serial: Serial::new(),
             apu: Apu::new(),
+            cheats: Cheats::new(),
             wram: [0; 0x2000],
             hram: [0; 0x7F],
             io: [0; 0x80],
@@ -71,7 +76,14 @@ impl Bus {
     #[allow(clippy::match_overlapping_arm)]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0x0000..=0x7FFF => self.cart.read_rom(addr),
+            0x0000..=0x7FFF => {
+                let byte = self.cart.read_rom(addr);
+                if self.cheats.has_rom_patches() {
+                    self.cheats.patch_rom_read(addr, byte)
+                } else {
+                    byte
+                }
+            }
             0x8000..=0x9FFF => self.ppu.read_vram(addr),
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
@@ -126,10 +138,11 @@ impl Bus {
     }
 
     /// After loading a save state into `self`: takes over what states do not contain
-    /// from the bus being replaced (the ROM and the audio output configuration).
+    /// from the bus being replaced (the ROM, audio output configuration and cheats).
     pub(crate) fn adopt_runtime_from(&mut self, old: &mut Bus) {
         self.cart.adopt_rom_from(&mut old.cart);
         self.apu.adopt_output_from(&old.apu);
+        self.cheats = std::mem::take(&mut old.cheats);
     }
 
     pub fn read_u16(&self, addr: u16) -> u16 {

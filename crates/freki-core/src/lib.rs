@@ -7,6 +7,7 @@
 pub mod apu;
 pub mod bus;
 pub mod cartridge;
+pub mod cheats;
 pub mod cpu;
 pub mod joypad;
 pub mod ppu;
@@ -15,6 +16,7 @@ pub mod state;
 pub mod timer;
 
 pub use cartridge::{Cartridge, CartridgeError};
+pub use cheats::{CheatError, Cheats, Code, Filter, MemorySearch};
 pub use cpu::CpuError;
 pub use joypad::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -55,7 +57,7 @@ impl GameBoy {
         self.cpu.step(&mut self.bus)
     }
 
-    /// Runs until the PPU has produced a complete frame.
+    /// Runs until the PPU has produced a complete frame, then applies GameShark cheats.
     pub fn run_frame(&mut self) -> Result<(), CpuError> {
         let mut elapsed = 0;
         while elapsed < CYCLES_PER_FRAME {
@@ -63,6 +65,10 @@ impl GameBoy {
             if self.bus.ppu.take_frame_ready() {
                 break;
             }
+        }
+        let writes: Vec<(u16, u8)> = self.bus.cheats.frame_writes().collect();
+        for (address, value) in writes {
+            self.bus.write(address, value);
         }
         Ok(())
     }
@@ -84,6 +90,20 @@ impl GameBoy {
     /// Reads a byte from the memory map without side effects (for debuggers and tests).
     pub fn peek(&self, addr: u16) -> u8 {
         self.bus.read(addr)
+    }
+
+    /// Writes a byte to the memory map, as the CPU would (for debuggers and cheats).
+    pub fn poke(&mut self, addr: u16, value: u8) {
+        self.bus.write(addr, value);
+    }
+
+    /// The active cheat codes.
+    pub fn cheats(&self) -> &Cheats {
+        &self.bus.cheats
+    }
+
+    pub fn cheats_mut(&mut self) -> &mut Cheats {
+        &mut self.bus.cheats
     }
 
     /// Every byte the game has sent over the serial port (test ROMs print results here).
