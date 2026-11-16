@@ -484,4 +484,51 @@ mod tests {
         }
         assert!((2 * CYCLES_PER_FRAME - 16..=2 * CYCLES_PER_FRAME + 16).contains(&cycles));
     }
+
+    fn cgb_with_source_data() -> GameBoy {
+        let mut rom = test_rom();
+        rom[0x143] = 0x80;
+        let mut gb = GameBoy::new(rom).unwrap();
+        for i in 0..0x40u16 {
+            gb.poke(0xC100 + i, i as u8 + 1);
+        }
+        gb.poke(0xFF51, 0xC1); // source $C100
+        gb.poke(0xFF52, 0x00);
+        gb.poke(0xFF53, 0x08); // destination $8800
+        gb.poke(0xFF54, 0x00);
+        gb
+    }
+
+    #[test]
+    fn general_purpose_hdma_copies_everything_and_pauses_the_cpu() {
+        let mut gb = cgb_with_source_data();
+        gb.poke(0xFF55, 0x01); // 2 blocks, general purpose
+        assert_eq!(gb.peek(0x8800), 1);
+        assert_eq!(gb.peek(0x881F), 0x20);
+        assert_eq!(gb.peek(0x8820), 0, "only 2 blocks");
+        assert_eq!(gb.peek(0xFF55), 0xFF, "finished");
+        assert_eq!(gb.step().unwrap(), 64, "CPU paused 32 T-cycles per block");
+    }
+
+    #[test]
+    fn hblank_hdma_copies_one_block_per_line() {
+        let mut gb = cgb_with_source_data();
+        // Start right after an HBlank began, so the next block comes on the next line.
+        while gb.peek(0xFF41) & 3 != 0 {
+            gb.step().unwrap();
+        }
+        gb.poke(0xFF55, 0x82); // 3 blocks, HBlank
+        assert_eq!(gb.peek(0xFF55), 0x02, "active, 3 blocks left");
+        // Next line: through mode 3 into its HBlank.
+        for mode in [3, 0] {
+            while gb.peek(0xFF41) & 3 != mode {
+                gb.step().unwrap();
+            }
+        }
+        assert_eq!(gb.peek(0x8800), 1);
+        assert_eq!(gb.peek(0x8810), 0, "one block per HBlank");
+        assert_eq!(gb.peek(0xFF55), 0x01);
+        gb.poke(0xFF55, 0x00); // stop
+        assert_eq!(gb.peek(0xFF55), 0x81, "stopped, 2 blocks were left");
+    }
 }

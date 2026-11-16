@@ -72,7 +72,26 @@ pub struct Bus {
     pub interrupt_enable: u8,
     pub interrupt_flag: u8,
     dma: Dma,
+    hdma: Hdma,
+    /// T-cycles the CPU must pause for a VRAM DMA (taken by the CPU before its next step).
+    dma_stall: u32,
 }
+
+/// CGB VRAM DMA ($FF51–$FF55): copies 16-byte blocks into VRAM, either all at once
+/// (general purpose) or one block at the start of each HBlank.
+#[derive(Serialize, Deserialize, Default, Clone, Copy)]
+struct Hdma {
+    source: u16,
+    /// Offset into VRAM ($0000–$1FF0).
+    dest: u16,
+    /// Blocks left in an HBlank transfer, minus one (bits 0–6 of HDMA5).
+    remaining: u8,
+    /// An HBlank transfer is in progress.
+    active: bool,
+}
+
+/// T-cycles (at normal speed) the CPU is paused per 16-byte VRAM DMA block.
+const HDMA_BLOCK_CYCLES: u32 = 32;
 
 /// OAM DMA state. A write to $FF46 starts a transfer after one M-cycle of setup; it then
 /// copies one byte per M-cycle for 160 M-cycles. While it runs, the CPU cannot use OAM
@@ -109,6 +128,11 @@ impl Bus {
             interrupt_enable: 0,
             interrupt_flag: 0x01,
             dma: Dma::default(),
+            hdma: Hdma {
+                remaining: 0x7F,
+                ..Hdma::default()
+            },
+            dma_stall: 0,
         }
     }
 
@@ -188,6 +212,7 @@ impl Bus {
                 0x7E | u8::from(self.double_speed) << 7 | u8::from(self.speed_switch_armed)
             }
             0xFF4F | 0xFF68..=0xFF6B if self.cgb => self.ppu.read_reg(addr),
+            0xFF55 if self.cgb => u8::from(!self.hdma.active) << 7 | self.hdma.remaining,
             0xFF70 if self.cgb => 0xF8 | self.svbk,
             0xFF00..=0xFF7F => 0xFF, // unmapped on the DMG
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -223,11 +248,78 @@ impl Bus {
             0xFF40..=0xFF4B => self.ppu.write_reg(addr, value),
             0xFF4D if self.cgb => self.speed_switch_armed = value & 1 != 0,
             0xFF4F | 0xFF68..=0xFF6B if self.cgb => self.ppu.write_reg(addr, value),
+            0xFF51 if self.cgb => {
+                self.hdma.source = (self.hdma.source & 0xFF) | (value as u16) << 8
+            }
+            0xFF52 if self.cgb => {
+                self.hdma.source = (self.hdma.source & 0xFF00) | (value & 0xF0) as u16
+            }
+            0xFF53 if self.cgb => {
+                self.hdma.dest = (self.hdma.dest & 0xFF) | ((value & 0x1F) as u16) << 8;
+            }
+            0xFF54 if self.cgb => {
+                self.hdma.dest = (self.hdma.dest & 0x1F00) | (value & 0xF0) as u16
+            }
+            0xFF55 if self.cgb => self.start_hdma(value),
             0xFF70 if self.cgb => self.svbk = value & 7,
             0xFF00..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupt_enable = value,
         }
+    }
+
+    /// HDMA5 write: starts a general-purpose or HBlank VRAM DMA, or stops an HBlank one.
+    fn start_hdma(&mut self, value: u8) {
+        let blocks = value & 0x7F;
+        if self.hdma.active && value & 0x80 == 0 {
+            self.hdma.active = false;
+            return;
+        }
+        self.hdma.remaining = blocks;
+        if value & 0x80 == 0 {
+            // General purpose: everything now.
+            for _ in 0..=blocks {
+                self.hdma_block();
+            }
+            self.hdma.remaining = 0x7F;
+        } else {
+            self.hdma.active = true;
+            // With the LCD off (or already in HBlank) no HBlank start will come soon;
+            // hardware copies the first block straight away in that case.
+            if !self.ppu.lcd_enabled() {
+                self.hdma_hblank_block();
+            }
+        }
+    }
+
+    /// Copies one 16-byte block and charges the CPU for it.
+    fn hdma_block(&mut self) {
+        for _ in 0..16 {
+            let byte = match self.hdma.source {
+                0x8000..=0x9FFF => 0xFF, // VRAM as source is not supported by hardware
+                src => self.read(src),
+            };
+            self.ppu.write_vram(0x8000 | self.hdma.dest, byte);
+            self.hdma.source = self.hdma.source.wrapping_add(1);
+            self.hdma.dest = (self.hdma.dest + 1) & 0x1FFF;
+        }
+        self.dma_stall += HDMA_BLOCK_CYCLES << u32::from(self.double_speed);
+    }
+
+    /// One block of an HBlank transfer.
+    fn hdma_hblank_block(&mut self) {
+        self.hdma_block();
+        if self.hdma.remaining == 0 {
+            self.hdma.active = false;
+            self.hdma.remaining = 0x7F;
+        } else {
+            self.hdma.remaining -= 1;
+        }
+    }
+
+    /// T-cycles the CPU has to pause for VRAM DMA (resets the count).
+    pub fn take_dma_stall(&mut self) -> u32 {
+        std::mem::take(&mut self.dma_stall)
     }
 
     /// Starts an OAM DMA from `page`×$100 (see [`Dma`]). A transfer already running keeps
@@ -348,6 +440,9 @@ impl Bus {
         self.serial
             .clock(((counter + cycles) >> 9) - (counter >> 9));
         self.interrupt_flag |= self.ppu.tick(video_cycles);
+        if self.ppu.take_hblank_started() && self.hdma.active {
+            self.hdma_hblank_block();
+        }
         self.interrupt_flag |= self.joypad.take_interrupt();
         self.interrupt_flag |= self.serial.take_interrupt();
     }

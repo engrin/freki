@@ -171,6 +171,9 @@ pub struct Ppu {
     /// STAT's coincidence flag as it was when the LCD was switched off (it is frozen
     /// while the LCD is off).
     lyc_flag_off: bool,
+    /// Set when mode 3 of a visible line ends (starts HBlank DMA on the CGB).
+    #[serde(skip)]
+    hblank_started: bool,
     /// The first line after the LCD is switched on: it has no mode 2 (STAT goes from mode 0
     /// straight to mode 3 and OAM stays accessible).
     first_line: bool,
@@ -251,6 +254,7 @@ impl Ppu {
             irq_mode: Mode::OamScan,
             stat_line: false,
             lyc_flag_off: false,
+            hblank_started: false,
             first_line: false,
             pipeline_active: false,
             bg_fifo: VecDeque::with_capacity(16),
@@ -358,6 +362,11 @@ impl Ppu {
         &self.rgb_framebuffer
     }
 
+    /// Whether an HBlank began since the last call.
+    pub fn take_hblank_started(&mut self) -> bool {
+        std::mem::take(&mut self.hblank_started)
+    }
+
     pub fn is_cgb(&self) -> bool {
         self.cgb
     }
@@ -457,6 +466,10 @@ impl Ppu {
     /// Whether the CPU can write VRAM (not while drawing).
     pub fn cpu_vram_writable(&self) -> bool {
         !self.lcd_on() || self.mode != Mode::Drawing
+    }
+
+    pub fn lcd_enabled(&self) -> bool {
+        self.lcd_on()
     }
 
     fn lcd_on(&self) -> bool {
@@ -798,6 +811,7 @@ impl Ppu {
         if self.position == SCREEN_WIDTH as u8 - 2 {
             self.mode = Mode::HBlank;
             self.irq_mode = Mode::HBlank;
+            self.hblank_started = true;
         }
         if self.position == SCREEN_WIDTH as u8 {
             self.end_line();

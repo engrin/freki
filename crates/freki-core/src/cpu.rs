@@ -535,6 +535,13 @@ impl Cpu {
     pub fn step(&mut self, bus: &mut Bus) -> Result<u32, CpuError> {
         self.cycles = 0;
         debug_assert_eq!(self.pending, 0);
+        // A CGB VRAM DMA pauses the CPU while it copies.
+        let stall = bus.take_dma_stall();
+        if stall > 0 {
+            self.pending = stall;
+            self.flush(bus);
+            return Ok(self.cycles);
+        }
         if self.handle_interrupts(bus) {
             self.flush(bus);
             debug_assert_eq!(self.cycles, 20, "interrupt dispatch timing");
