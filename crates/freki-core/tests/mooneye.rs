@@ -92,15 +92,11 @@ mooneye! {
     ppu_hblank_ly_scx_timing_gs: "acceptance/ppu/hblank_ly_scx_timing-GS.gb",
     #[ignore = "not passing yet"]
     ppu_intr_1_2_timing_gs: "acceptance/ppu/intr_1_2_timing-GS.gb",
-    #[ignore = "not passing yet"]
     ppu_intr_2_0_timing: "acceptance/ppu/intr_2_0_timing.gb",
-    #[ignore = "not passing yet"]
     ppu_intr_2_mode0_timing: "acceptance/ppu/intr_2_mode0_timing.gb",
     #[ignore = "not passing yet"]
     ppu_intr_2_mode0_timing_sprites: "acceptance/ppu/intr_2_mode0_timing_sprites.gb",
-    #[ignore = "not passing yet"]
     ppu_intr_2_mode3_timing: "acceptance/ppu/intr_2_mode3_timing.gb",
-    #[ignore = "not passing yet"]
     ppu_intr_2_oam_ok_timing: "acceptance/ppu/intr_2_oam_ok_timing.gb",
     #[ignore = "not passing yet"]
     ppu_lcdon_timing_gs: "acceptance/ppu/lcdon_timing-GS.gb",

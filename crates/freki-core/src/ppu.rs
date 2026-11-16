@@ -28,8 +28,11 @@ pub const SCREEN_HEIGHT: usize = 144;
 
 const DOTS_PER_LINE: u32 = 456;
 const LINES_PER_FRAME: u8 = 154;
-/// STAT reports mode 3 from this dot (OAM scan takes 80 dots after the mode 2 interrupt).
-const MODE3_STAT_DOT: u32 = 81;
+/// STAT reports mode 3 from this dot (visible to the CPU 80 dots after the mode 2
+/// interrupt, as on hardware).
+const MODE3_STAT_DOT: u32 = 79;
+/// OAM scan has checked all 40 entries; selected sprites are sorted for mode 3.
+const SPRITE_SORT_DOT: u32 = 81;
 /// First dot of the pixel pipeline.
 const PIPELINE_START_DOT: u32 = 86;
 const MAX_SPRITES_PER_LINE: usize = 10;
@@ -288,6 +291,16 @@ impl Ppu {
         self.oam[(addr - 0xFE00) as usize] = value;
     }
 
+    /// Whether the CPU can access OAM (not during OAM scan and drawing).
+    pub fn cpu_oam_accessible(&self) -> bool {
+        !self.lcd_on() || matches!(self.mode, Mode::HBlank | Mode::VBlank)
+    }
+
+    /// Whether the CPU can access VRAM (not while drawing).
+    pub fn cpu_vram_accessible(&self) -> bool {
+        !self.lcd_on() || self.mode != Mode::Drawing
+    }
+
     fn lcd_on(&self) -> bool {
         self.lcdc & lcdc::LCD_ENABLE != 0
     }
@@ -413,10 +426,6 @@ impl Ppu {
 
     fn tick_dot(&mut self) -> u8 {
         let mut irq = 0;
-        // HBlank's interrupt fires one dot after STAT reports mode 0.
-        if self.mode == Mode::HBlank {
-            self.irq_mode = Mode::HBlank;
-        }
         if (self.ly as usize) < SCREEN_HEIGHT {
             match self.dot {
                 0 if self.ly == 0 => {
@@ -441,6 +450,8 @@ impl Ppu {
                 MODE3_STAT_DOT => {
                     self.mode = Mode::Drawing;
                     self.irq_mode = Mode::Drawing;
+                }
+                SPRITE_SORT_DOT => {
                     self.sprites.sort_by_key(|s| s.x); // stable: equal X keeps OAM order
                     self.next_sprite = 0;
                 }
@@ -577,6 +588,12 @@ impl Ppu {
 
         self.render_pixel();
         self.advance_fetcher();
+        // STAT (and its interrupt) switch to mode 0 two pixels before the last one is
+        // pushed: 252 dots into the line without stalls, as Mooneye's intr_2_* tests expect.
+        if self.position == SCREEN_WIDTH as u8 - 2 {
+            self.mode = Mode::HBlank;
+            self.irq_mode = Mode::HBlank;
+        }
         if self.position == SCREEN_WIDTH as u8 {
             self.end_line();
         }
@@ -879,6 +896,7 @@ impl Ppu {
             self.wx_triggered = false;
         }
         self.mode = Mode::HBlank;
+        self.irq_mode = Mode::HBlank;
     }
 }
 
