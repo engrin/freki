@@ -321,6 +321,15 @@ impl Ppu {
         match addr {
             0xFF40 => {
                 let was_on = self.lcd_on();
+                // DMG: disabling objects while one is being fetched aborts that fetch.
+                // (Checked on every write, including the CPU's one-dot intermediate value.)
+                if self.lcdc & lcdc::OBJ_ENABLE != 0
+                    && value & lcdc::OBJ_ENABLE == 0
+                    && self.during_object_fetch
+                {
+                    self.obj_fetch = ObjFetch::Idle;
+                    self.during_object_fetch = false;
+                }
                 self.lcdc = value;
                 if was_on && !self.lcd_on() {
                     // LCD off: LY resets and the PPU idles until it is switched back on.
@@ -369,12 +378,6 @@ impl Ppu {
     /// Notes an LCDC write: disabling the window while it is being fetched turns off the
     /// DMG's window pixel-insertion glitch for the rest of the line.
     pub fn lcdc_written(&mut self, old: u8, value: u8) {
-        // DMG: disabling objects while one is being fetched aborts that fetch.
-        if old & lcdc::OBJ_ENABLE != 0 && value & lcdc::OBJ_ENABLE == 0 && self.during_object_fetch
-        {
-            self.obj_fetch = ObjFetch::Idle;
-            self.during_object_fetch = false;
-        }
         if old & lcdc::WINDOW_ENABLE != 0
             && value & lcdc::WINDOW_ENABLE == 0
             && self.window_being_fetched

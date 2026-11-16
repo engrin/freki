@@ -59,7 +59,6 @@ mealybug! {
     m3_lcdc_bg_en_change,
     m3_lcdc_bg_map_change,
     m3_lcdc_obj_en_change,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_en_change_variant,
     m3_lcdc_obj_size_change,
     m3_lcdc_obj_size_change_scx,
