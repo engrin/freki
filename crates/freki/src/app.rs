@@ -17,21 +17,11 @@ use crate::console::{self, Console};
 use crate::cpu_view::{self, CpuView};
 use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
+use crate::input;
 use crate::session::Start;
 use crate::session::{Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, Palette, Settings};
 use crate::states::SLOTS;
-
-const KEYMAP: [(Key, Button); 8] = [
-    (Key::ArrowRight, Button::Right),
-    (Key::ArrowLeft, Button::Left),
-    (Key::ArrowUp, Button::Up),
-    (Key::ArrowDown, Button::Down),
-    (Key::X, Button::A),
-    (Key::Z, Button::B),
-    (Key::Backspace, Button::Select),
-    (Key::Enter, Button::Start),
-];
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
@@ -46,6 +36,13 @@ const MAX_RATE_ADJUST: f64 = 0.005;
 const MAX_FRAMES_PER_UPDATE: u32 = 4;
 /// How long a status message stays in the status bar.
 const STATUS_DURATION: Duration = Duration::from_secs(3);
+
+/// What the controls window is waiting for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    Key,
+    Pad,
+}
 
 /// Frame pacing statistics, shown in the status bar by View → Show frame timing.
 struct Timing {
@@ -146,6 +143,9 @@ pub struct FrekiApp {
     show_cheats: bool,
     show_search: bool,
     show_controls: bool,
+    /// The Game Boy button whose key or gamepad button is being chosen.
+    capture: Option<(Button, Capture)>,
+    controls_message: Option<String>,
     show_about: bool,
     new_code: String,
     new_name: String,
@@ -184,6 +184,8 @@ impl FrekiApp {
             show_cheats: false,
             show_search: false,
             show_controls: false,
+            capture: None,
+            controls_message: None,
             show_about: false,
             new_code: String::new(),
             new_name: String::new(),
@@ -508,12 +510,12 @@ impl FrekiApp {
         }
 
         self.gamepads.update();
+        let bindings = &self.settings.bindings;
         for _ in 0..frames {
-            for (key, button) in KEYMAP {
-                let down = !typing && ctx.input(|i| i.key_down(key));
-                session
-                    .gb
-                    .set_button(button, down || self.gamepads.is_pressed(button));
+            for button in input::BUTTONS {
+                let down = !typing && ctx.input(|i| i.key_down(bindings.key(button)));
+                let pad = self.gamepads.is_pressed(button, bindings.pad(button));
+                session.gb.set_button(button, down || pad);
             }
             match session.run_frame() {
                 Ok(None) => {}
@@ -666,6 +668,11 @@ impl FrekiApp {
                 ui.separator();
                 ui.menu_button("Console", |ui| self.console_menu(ui));
                 ui.menu_button("Boot ROM", |ui| self.boot_rom_menu(ui));
+                ui.separator();
+                if ui.button("Controls…").clicked() {
+                    ui.close();
+                    self.show_controls = true;
+                }
             });
 
             ui.menu_button("States", |ui| {
@@ -1062,19 +1069,80 @@ impl FrekiApp {
         }
     }
 
-    fn info_windows(&mut self, ctx: &egui::Context) {
+    /// While binding a gamepad button: takes the next button pressed.
+    fn capture_pad(&mut self) {
+        if let Some((button, Capture::Pad)) = self.capture {
+            self.gamepads.update();
+            if let Some(pad) = self.gamepads.take_pressed() {
+                if input::bindable_pad(pad) {
+                    self.settings.bindings.set_pad(button, pad);
+                    self.controls_message = None;
+                } else {
+                    self.controls_message = Some("that button cannot be used".into());
+                }
+                self.capture = None;
+            }
+        }
+    }
+
+    fn controls_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_controls;
         egui::Window::new("Controls")
-            .open(&mut self.show_controls)
+            .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.label(
+                    "Click a binding, then press the key or gamepad button to use (Esc cancels).",
+                );
+                egui::Grid::new("bindings").striped(true).show(ui, |ui| {
+                    ui.strong("Game Boy");
+                    ui.strong("Keyboard");
+                    ui.strong("Gamepad");
+                    ui.end_row();
+                    for button in input::BUTTONS {
+                        ui.label(input::button_name(button));
+                        for kind in [Capture::Key, Capture::Pad] {
+                            let waiting = self.capture == Some((button, kind));
+                            let text = match (waiting, kind) {
+                                (true, Capture::Key) => "press a key…".to_string(),
+                                (true, Capture::Pad) => "press a button…".to_string(),
+                                (false, Capture::Key) => {
+                                    self.settings.bindings.key(button).name().to_string()
+                                }
+                                (false, Capture::Pad) => {
+                                    input::pad_name(self.settings.bindings.pad(button)).to_string()
+                                }
+                            };
+                            if ui.add(egui::Button::new(text).selected(waiting)).clicked() {
+                                self.capture = if waiting { None } else { Some((button, kind)) };
+                                self.controls_message = None;
+                                // Forget presses made before the capture started.
+                                self.gamepads.update();
+                                self.gamepads.take_pressed();
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(message) = &self.controls_message {
+                    ui.colored_label(egui::Color32::LIGHT_RED, message);
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.settings.bindings.is_default(),
+                            egui::Button::new("Reset to defaults"),
+                        )
+                        .clicked()
+                    {
+                        self.settings.bindings = Default::default();
+                        self.capture = None;
+                    }
+                    ui.weak("The left stick also steers.");
+                });
+                ui.separator();
                 egui::Grid::new("controls").striped(true).show(ui, |ui| {
                     for (what, keys) in [
-                        ("D-pad", "Arrow keys / gamepad D-pad or left stick"),
-                        ("A / B", "X / Z / gamepad right / bottom button"),
-                        (
-                            "Start / Select",
-                            "Enter / Backspace / gamepad Start / Select",
-                        ),
                         ("Save / load state", "F5 / F8"),
                         ("Previous / next slot", "F6 / F7"),
                         ("Rewind", "hold R"),
@@ -1090,12 +1158,21 @@ impl FrekiApp {
                 });
                 ui.label("The terminal freki was started from also accepts commands (type help).");
             });
+        if !open {
+            self.capture = None;
+        }
+        self.show_controls = open;
+    }
+
+    fn info_windows(&mut self, ctx: &egui::Context) {
+        self.capture_pad();
+        self.controls_window(ctx);
         egui::Window::new("About freki")
             .open(&mut self.show_about)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(format!("freki {}", env!("CARGO_PKG_VERSION")));
-                ui.label("A Game Boy (DMG) emulator written in Rust.");
+                ui.label("A Game Boy and Game Boy Color emulator written in Rust.");
                 ui.label("Named after Freki, one of Odin's two wolves.");
                 ui.hyperlink("https://github.com/engrin/freki");
                 ui.label("MIT license");
@@ -1159,8 +1236,36 @@ impl eframe::App for FrekiApp {
     }
 
     /// Takes Tab away from egui (which would move keyboard focus through the menus on
-    /// every key repeat) and uses it as the fast-forward key, except while typing.
+    /// every key repeat) and uses it as the fast-forward key, except while typing. While a
+    /// key is being bound in the controls window, the next key press goes there.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some((button, Capture::Key)) = self.capture {
+            let pressed = raw_input.events.iter().find_map(|e| match e {
+                egui::Event::Key {
+                    key, pressed: true, ..
+                } => Some(*key),
+                _ => None,
+            });
+            if let Some(key) = pressed {
+                self.capture = None;
+                if key != Key::Escape {
+                    match input::reserved(key) {
+                        Some(what) => {
+                            self.controls_message =
+                                Some(format!("{} is used for {what}", key.name()));
+                        }
+                        None => {
+                            self.settings.bindings.set_key(button, key);
+                            self.controls_message = None;
+                        }
+                    }
+                }
+                raw_input
+                    .events
+                    .retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)));
+            }
+            return;
+        }
         if ctx.text_edit_focused() {
             return;
         }

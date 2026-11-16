@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use freki_core::{BootRom, Model};
 
+use crate::input::Bindings;
 use crate::session::Start;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,8 @@ pub struct Settings {
     pub fast_forward_speed: u32,
     /// Make Game Boy Color colours look like on its LCD (less saturated).
     pub color_correction: bool,
+    /// Keyboard and gamepad controls.
+    pub bindings: Bindings,
 }
 
 impl Default for Settings {
@@ -48,6 +51,7 @@ impl Default for Settings {
             recent: Vec::new(),
             fast_forward_speed: 4,
             color_correction: true,
+            bindings: Bindings::default(),
         }
     }
 }

@@ -39,7 +39,7 @@ search), View (scale, palette, frame timing, debug views) and Help (controls, ab
 Palettes: DMG green, greyscale, Pocket and Light (backlit). Game Boy Color games are shown
 in their own colours, by default corrected to look like the GBC's screen (View → GBC colour
 correction). The palette, scale, recent ROMs,
-fast-forward speed and boot ROM choice are remembered between runs.
+fast-forward speed, console, boot ROMs and controls are remembered between runs.
 
 View → Tiles, Tile map, Sprites and Palettes show video memory live: all 384 tiles, either
 tile map with the visible screen area outlined, the 40 sprites with position, tile and flags,
@@ -61,7 +61,9 @@ same tools: `regs`, `dis`, `step`, `break`, `watch`, `breaks`.
 | Open ROM / reset / quit | Ctrl+O / Ctrl+R / Ctrl+Q | |
 | Pause | P | |
 
-Gamepads can be plugged in while freki is running.
+Gamepads can be plugged in while freki is running. The Game Boy buttons can be bound to
+other keys and gamepad buttons under Emulation → Controls… (click a binding, then press the
+key or button); the left stick always steers too.
 
 ### Console and boot ROM
 

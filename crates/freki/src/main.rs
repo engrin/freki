@@ -15,6 +15,7 @@ mod console;
 mod cpu_view;
 mod debug;
 mod gamepad;
+mod input;
 mod session;
 mod settings;
 mod states;

@@ -1,7 +1,7 @@
 //! Gamepad input through gilrs. Controllers can be plugged in or removed at any time.
 //!
-//! Buttons are mapped by position, like on Nintendo controllers: the right face button
-//! (East) is A and the bottom one (South) is B. The D-pad and left stick both steer.
+//! Which controller button presses which Game Boy button is configurable (see `input`);
+//! the left stick always steers as well.
 
 use freki_core::Button;
 use gilrs::{Axis, Button as Pad, Gilrs};
@@ -12,6 +12,8 @@ const STICK_THRESHOLD: f32 = 0.5;
 pub struct Gamepads {
     /// `None` if the platform's gamepad backend could not be opened.
     gilrs: Option<Gilrs>,
+    /// Most recent button press, for binding buttons in the controls window.
+    last_pressed: Option<Pad>,
 }
 
 impl Gamepads {
@@ -23,7 +25,10 @@ impl Gamepads {
                 None
             }
         };
-        Self { gilrs }
+        Self {
+            gilrs,
+            last_pressed: None,
+        }
     }
 
     /// Processes pending controller events; call once per frame before reading buttons.
@@ -38,30 +43,37 @@ impl Gamepads {
                         );
                     }
                     gilrs::EventType::Disconnected => eprintln!("freki: gamepad disconnected"),
+                    gilrs::EventType::ButtonPressed(button, _) => {
+                        self.last_pressed = Some(button);
+                    }
                     _ => {}
                 }
             }
         }
     }
 
-    /// Whether `button` is held on any connected controller.
-    pub fn is_pressed(&self, button: Button) -> bool {
+    /// The button pressed since the last call, if any (call `update` first).
+    pub fn take_pressed(&mut self) -> Option<Pad> {
+        self.last_pressed.take()
+    }
+
+    /// Whether Game Boy `button`, bound to controller button `bound`, is held on any
+    /// connected controller (directions also by the left stick).
+    pub fn is_pressed(&self, button: Button, bound: Pad) -> bool {
         let Some(gilrs) = &self.gilrs else {
             return false;
         };
         gilrs.gamepads().any(|(_, pad)| {
             let stick_x = pad.value(Axis::LeftStickX);
             let stick_y = pad.value(Axis::LeftStickY); // positive is up
-            match button {
-                Button::Right => pad.is_pressed(Pad::DPadRight) || stick_x > STICK_THRESHOLD,
-                Button::Left => pad.is_pressed(Pad::DPadLeft) || stick_x < -STICK_THRESHOLD,
-                Button::Up => pad.is_pressed(Pad::DPadUp) || stick_y > STICK_THRESHOLD,
-                Button::Down => pad.is_pressed(Pad::DPadDown) || stick_y < -STICK_THRESHOLD,
-                Button::A => pad.is_pressed(Pad::East),
-                Button::B => pad.is_pressed(Pad::South),
-                Button::Select => pad.is_pressed(Pad::Select),
-                Button::Start => pad.is_pressed(Pad::Start),
-            }
+            let stick = match button {
+                Button::Right => stick_x > STICK_THRESHOLD,
+                Button::Left => stick_x < -STICK_THRESHOLD,
+                Button::Up => stick_y > STICK_THRESHOLD,
+                Button::Down => stick_y < -STICK_THRESHOLD,
+                _ => false,
+            };
+            stick || pad.is_pressed(bound)
         })
     }
 }
