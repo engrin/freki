@@ -13,6 +13,7 @@ use freki_core::{
 
 use crate::audio::Audio;
 use crate::console::{self, Console};
+use crate::debug::DebugViews;
 use crate::gamepad::Gamepads;
 use crate::session::{Session, file_name};
 use crate::states::SLOTS;
@@ -176,6 +177,7 @@ pub struct FrekiApp {
     last_tick: Instant,
     show_timing: bool,
     timing: Timing,
+    debug: DebugViews,
 
     show_cheats: bool,
     show_search: bool,
@@ -212,6 +214,7 @@ impl FrekiApp {
             last_tick: Instant::now(),
             show_timing: false,
             timing: Timing::new(),
+            debug: DebugViews::new(),
             show_cheats: false,
             show_search: false,
             show_controls: false,
@@ -576,6 +579,18 @@ impl FrekiApp {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_timing, "Show frame timing");
+                ui.add_enabled(
+                    loaded,
+                    egui::Checkbox::new(&mut self.debug.show_tiles, "Tiles"),
+                );
+                ui.add_enabled(
+                    loaded,
+                    egui::Checkbox::new(&mut self.debug.show_map, "Tile map"),
+                );
+                ui.add_enabled(
+                    loaded,
+                    egui::Checkbox::new(&mut self.debug.show_sprites, "Sprites"),
+                );
                 ui.separator();
                 ui.label("Palette");
                 for palette in Palette::ALL {
@@ -905,6 +920,9 @@ impl eframe::App for FrekiApp {
         self.cheat_window(&ctx);
         self.search_window(&ctx);
         self.info_windows(&ctx);
+        if let Some(session) = &self.session {
+            self.debug.show(&ctx, &session.gb, &self.palette.colors());
+        }
 
         ctx.request_repaint();
     }

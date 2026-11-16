@@ -30,7 +30,11 @@ cargo run --release -- path/to/game.gb   # or start without a ROM and use File â
 
 ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, quit),
 Emulation (pause, reset), States (save/load, slot), Cheats (on/off, cheat manager, memory
-search), View (scale, palette) and Help (controls, about).
+search), View (scale, palette, frame timing, debug views) and Help (controls, about).
+
+View â†’ Tiles, Tile map and Sprites show video memory live: all 384 tiles, either tile map
+with the visible screen area outlined, and the 40 sprites with position, tile and flags.
+Hover tiles and map cells for their addresses.
 
 | Game Boy | Keyboard | Gamepad |
 |---|---|---|

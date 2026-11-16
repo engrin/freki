@@ -11,6 +11,7 @@
 mod app;
 mod audio;
 mod console;
+mod debug;
 mod gamepad;
 mod session;
 mod states;
