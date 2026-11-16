@@ -7,7 +7,7 @@ Named after Freki, one of Odin's two wolves.
 > **Status:** most original Game Boy games should run, with sound.
 > freki passes all of Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
-> MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves, save states and rewind.
+> MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves, save states, rewind and cheats.
 > The PPU draws pixel by pixel with DMG-accurate timing: 22 of the 24 mealybug-tearoom
 > mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels).
 > Missing: Game Boy Color.
@@ -49,6 +49,36 @@ Gamepads can be plugged in while freki is running.
 Save states are written next to the ROM as `<rom>.ss0` … `<rom>.ss9` (about 40 KB each).
 They only load into the same game, and only in freki versions with the same state format.
 Status messages appear in the window title.
+
+### Cheats
+
+| Key | Action |
+|---|---|
+| F9 | Turn all cheats on/off |
+| P | Pause / resume |
+
+GameShark (`01VVLLHH`) and Game Genie (`ABC-DEF` or `ABC-DEF-GHI`) codes are read from
+`<rom>.cht` next to the ROM, one per line with an optional name (`#` starts a comment,
+`!` adds a code switched off):
+
+```text
+010A10C1 Infinite lives
+! 00A-17B-C49 Start with all items
+```
+
+While the game runs you can type commands into the terminal freki was started from
+(`help` lists them): add, toggle and save cheats, `peek`/`poke` memory, and search memory
+to make new cheats. For example, to find the lives counter:
+
+```text
+search start          # lives = 3
+search eq 3
+                      # lose a life in the game
+search down           # keeps addresses whose value decreased
+search list
+search add 0 9 Lives  # candidate 0 becomes GameShark code 0109xxxx
+cheat save            # writes <rom>.cht
+```
 
 Battery-backed games are saved next to the ROM as `<rom>.sav` (about once a second
 while the game writes to it, and on exit).

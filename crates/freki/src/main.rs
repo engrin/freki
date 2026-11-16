@@ -1,12 +1,14 @@
 //! freki desktop frontend: window, keyboard and gamepad input, sound, frame pacing, save
-//! files, save states and rewind.
+//! files, save states, rewind and cheats.
 //!
 //! Usage: `freki <rom.gb>`
 //!
 //! Battery-backed games are saved next to the ROM as `<rom>.sav`; save state slots as
-//! `<rom>.ss0` … `<rom>.ss9`.
+//! `<rom>.ss0` … `<rom>.ss9`; cheats are read from `<rom>.cht`. While the game runs,
+//! commands can be typed into the terminal (`help` lists them).
 
 mod audio;
+mod console;
 mod gamepad;
 mod states;
 
@@ -20,6 +22,7 @@ use freki_core::{Button, FRAMES_PER_SECOND, GameBoy, Rewind, SCREEN_HEIGHT, SCRE
 use minifb::{Key, KeyRepeat, Scale, ScaleMode, Window, WindowOptions};
 
 use audio::Audio;
+use console::Console;
 use gamepad::Gamepads;
 use states::{StateSlots, write_atomic};
 
@@ -42,6 +45,8 @@ const KEY_PREV_SLOT: Key = Key::F6;
 const KEY_NEXT_SLOT: Key = Key::F7;
 const KEY_LOAD_STATE: Key = Key::F8;
 const KEY_REWIND: Key = Key::R;
+const KEY_TOGGLE_CHEATS: Key = Key::F9;
+const KEY_PAUSE: Key = Key::P;
 
 /// How often to write the save file while the game keeps changing it.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -172,6 +177,11 @@ fn run_window(gb: &mut GameBoy, rom_path: &Path, save_path: &Path) -> Result<(),
 
     let mut gamepads = Gamepads::open();
     let mut slots = StateSlots::new(rom_path);
+    let mut console = Console::start(rom_path.with_extension("cht"));
+    if let Some(msg) = console.load_cheat_file(gb) {
+        println!("{msg}");
+    }
+    println!("freki: type `help` here for cheat and memory commands");
     let rewind_capacity = (REWIND_SECONDS * FRAMES_PER_SECOND / REWIND_INTERVAL as f64) as usize;
     let mut rewind = Rewind::new(rewind_capacity);
     let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
@@ -207,8 +217,28 @@ fn run_window(gb: &mut GameBoy, rom_path: &Path, save_path: &Path) -> Result<(),
             title.set_status(format!("slot {}", slots.slot()));
         }
 
+        if window.is_key_pressed(KEY_TOGGLE_CHEATS, KeyRepeat::No) {
+            let cheats = gb.cheats_mut();
+            cheats.enabled = !cheats.enabled;
+            let state = if cheats.enabled { "on" } else { "off" };
+            title.set_status(format!("cheats {state} ({})", cheats.list().len()));
+        }
+        let was_paused = console.paused;
+        if window.is_key_pressed(KEY_PAUSE, KeyRepeat::No) {
+            console.paused = !console.paused;
+        }
+        console.poll(gb);
+        if console.paused != was_paused {
+            title.set_status(if console.paused { "paused" } else { "resumed" });
+        }
+
         let rewinding = window.is_key_down(KEY_REWIND);
-        if rewinding {
+        if console.paused && !rewinding {
+            // Keep the window responsive without running the game.
+            gb.drain_audio(&mut samples);
+            samples.clear();
+            thread::sleep(frame_time);
+        } else if rewinding {
             // Step back one snapshot per displayed frame (2× speed); sound is muted.
             if let Some(state) = rewind.pop() {
                 gb.load_state(&state)?;
