@@ -53,7 +53,6 @@ macro_rules! mealybug {
 
 mealybug! {
     m2_win_en_toggle,
-    #[ignore = "not yet pixel-exact"]
     m3_bgp_change,
     #[ignore = "not yet pixel-exact"]
     m3_bgp_change_sprites,
@@ -85,7 +84,6 @@ mealybug! {
     m3_scx_low_3_bits,
     #[ignore = "not yet pixel-exact"]
     m3_scy_change,
-    #[ignore = "not yet pixel-exact"]
     m3_window_timing,
     #[ignore = "not yet pixel-exact"]
     m3_window_timing_wx_0,

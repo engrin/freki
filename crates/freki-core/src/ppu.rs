@@ -363,13 +363,16 @@ impl Ppu {
         }
         if (self.ly as usize) < SCREEN_HEIGHT {
             match self.dot {
-                0 => {
+                0 if self.ly == 0 => {
+                    // Line 0 is special on the DMG: STAT reads mode 0 for one dot and the
+                    // OAM interrupt fires one dot later than on other lines.
+                    self.mode = Mode::HBlank;
+                    self.window_y = 0xFF;
+                    self.wy_triggered = false;
+                }
+                0 | 1 if self.ly != 0 || self.dot == 1 => {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
-                    if self.ly == 0 {
-                        self.window_y = 0xFF;
-                        self.wy_triggered = false;
-                    }
                 }
                 MODE3_STAT_DOT => {
                     self.mode = Mode::Drawing;
