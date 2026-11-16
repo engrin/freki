@@ -4,6 +4,7 @@
 //! a ROM and button state, calls [`GameBoy::run_frame`] ~59.7 times a second,
 //! and draws [`GameBoy::framebuffer`].
 
+pub mod apu;
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
@@ -75,6 +76,17 @@ impl GameBoy {
     /// Every byte the game has sent over the serial port (test ROMs print results here).
     pub fn serial_output(&self) -> &[u8] {
         self.bus.serial.output()
+    }
+
+    /// Starts producing audio at `rate` Hz (e.g. the output device's rate). Until this is
+    /// called, no samples are generated.
+    pub fn set_audio_sample_rate(&mut self, rate: u32) {
+        self.bus.apu.set_sample_rate(rate);
+    }
+
+    /// Moves the audio produced so far into `out` as interleaved stereo `f32` samples.
+    pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
+        self.bus.apu.drain_samples(out);
     }
 
     /// Battery-backed cartridge RAM to write to a save file, or `None` if the cartridge
