@@ -10,8 +10,9 @@
 //! See <https://gbdev.io/gb-opcodes/optables/> and
 //! <https://archive.gbdev.io/salvage/decoding_gbz80_opcodes/Decoding%20Gamboy%20Z80%20Opcodes.html>.
 //!
-//! Timing is per instruction: the rest of the hardware is advanced after each
-//! instruction by its total T-cycle count.
+//! Timing is per M-cycle: every memory access and every internal delay advances the rest
+//! of the hardware by 4 T-cycles at the moment it happens, so timers, the PPU and the APU
+//! see each access at the right point within an instruction.
 
 use std::fmt;
 
@@ -108,6 +109,8 @@ pub struct Cpu {
     pub halted: bool,
     /// HALT with IME=0 and an interrupt already pending: the next opcode byte is read twice.
     halt_bug: bool,
+    /// T-cycles spent so far in the current `step`.
+    cycles: u32,
 }
 
 impl Cpu {
@@ -126,13 +129,34 @@ impl Cpu {
             ime_pending: false,
             halted: false,
             halt_bug: false,
+            cycles: 0,
         }
+    }
+
+    // ---- bus timing -------------------------------------------------------------------
+
+    /// One M-cycle without a memory access: advances the hardware by 4 T-cycles.
+    fn idle(&mut self, bus: &mut Bus) {
+        bus.tick(4);
+        self.cycles += 4;
+    }
+
+    /// Memory read taking one M-cycle; the access happens at the end of the cycle.
+    fn mem_read(&mut self, bus: &mut Bus, addr: u16) -> u8 {
+        self.idle(bus);
+        bus.read(addr)
+    }
+
+    /// Memory write taking one M-cycle; the access happens at the end of the cycle.
+    fn mem_write(&mut self, bus: &mut Bus, addr: u16, value: u8) {
+        self.idle(bus);
+        bus.write(addr, value);
     }
 
     // ---- fetch and stack helpers -------------------------------------------------------
 
-    fn fetch(&mut self, bus: &Bus) -> u8 {
-        let byte = bus.read(self.regs.pc);
+    fn fetch(&mut self, bus: &mut Bus) -> u8 {
+        let byte = self.mem_read(bus, self.regs.pc);
         if self.halt_bug {
             self.halt_bug = false;
         } else {
@@ -141,24 +165,26 @@ impl Cpu {
         byte
     }
 
-    fn fetch_u16(&mut self, bus: &Bus) -> u16 {
+    fn fetch_u16(&mut self, bus: &mut Bus) -> u16 {
         let lo = self.fetch(bus);
         let hi = self.fetch(bus);
         u16::from_le_bytes([lo, hi])
     }
 
+    /// One internal M-cycle followed by two writes, as in PUSH, CALL, RST and interrupts.
     fn push(&mut self, bus: &mut Bus, value: u16) {
+        self.idle(bus);
         let [hi, lo] = value.to_be_bytes();
         self.regs.sp = self.regs.sp.wrapping_sub(1);
-        bus.write(self.regs.sp, hi);
+        self.mem_write(bus, self.regs.sp, hi);
         self.regs.sp = self.regs.sp.wrapping_sub(1);
-        bus.write(self.regs.sp, lo);
+        self.mem_write(bus, self.regs.sp, lo);
     }
 
-    fn pop(&mut self, bus: &Bus) -> u16 {
-        let lo = bus.read(self.regs.sp);
+    fn pop(&mut self, bus: &mut Bus) -> u16 {
+        let lo = self.mem_read(bus, self.regs.sp);
         self.regs.sp = self.regs.sp.wrapping_add(1);
-        let hi = bus.read(self.regs.sp);
+        let hi = self.mem_read(bus, self.regs.sp);
         self.regs.sp = self.regs.sp.wrapping_add(1);
         u16::from_le_bytes([lo, hi])
     }
@@ -166,7 +192,7 @@ impl Cpu {
     // ---- operand decoding --------------------------------------------------------------
 
     /// 8-bit operand `r[i]`: B C D E H L (HL) A.
-    fn r8(&self, bus: &Bus, i: u8) -> u8 {
+    fn r8(&mut self, bus: &mut Bus, i: u8) -> u8 {
         let r = &self.regs;
         match i {
             0 => r.b,
@@ -175,7 +201,10 @@ impl Cpu {
             3 => r.e,
             4 => r.h,
             5 => r.l,
-            6 => bus.read(r.hl()),
+            6 => {
+                let hl = r.hl();
+                self.mem_read(bus, hl)
+            }
             _ => r.a,
         }
     }
@@ -189,7 +218,10 @@ impl Cpu {
             3 => r.e = v,
             4 => r.h = v,
             5 => r.l = v,
-            6 => bus.write(r.hl(), v),
+            6 => {
+                let hl = r.hl();
+                self.mem_write(bus, hl, v);
+            }
             _ => r.a = v,
         }
     }
@@ -294,7 +326,7 @@ impl Cpu {
     }
 
     /// SP + signed 8-bit offset, setting flags as ADD SP,e / LD HL,SP+e do.
-    fn sp_plus_e8(&mut self, bus: &Bus) -> u16 {
+    fn sp_plus_e8(&mut self, bus: &mut Bus) -> u16 {
         let e = self.fetch(bus);
         let sp = self.regs.sp;
         let h = (sp & 0xF) + (e as u16 & 0xF) > 0xF;
@@ -343,19 +375,24 @@ impl Cpu {
         let bit = pending.trailing_zeros() as u16;
         bus.interrupt_flag &= !(1 << bit);
         self.ime = false;
+        self.idle(bus);
         self.push(bus, self.regs.pc);
+        self.idle(bus);
         self.regs.pc = 0x0040 + bit * 8;
         20
     }
 
     /// Executes one instruction (or services an interrupt) and returns T-cycles taken.
     pub fn step(&mut self, bus: &mut Bus) -> Result<u32, CpuError> {
+        self.cycles = 0;
         let irq_cycles = self.handle_interrupts(bus);
         if irq_cycles > 0 {
+            debug_assert_eq!(self.cycles, irq_cycles);
             return Ok(irq_cycles);
         }
         if self.halted {
-            return Ok(4);
+            self.idle(bus);
+            return Ok(self.cycles);
         }
         if self.ime_pending {
             self.ime_pending = false;
@@ -386,8 +423,8 @@ impl Cpu {
                     // LD (a16), SP
                     let addr = self.fetch_u16(bus);
                     let [hi, lo] = self.regs.sp.to_be_bytes();
-                    bus.write(addr, lo);
-                    bus.write(addr.wrapping_add(1), hi);
+                    self.mem_write(bus, addr, lo);
+                    self.mem_write(bus, addr.wrapping_add(1), hi);
                     20
                 }
                 2 => {
@@ -399,6 +436,7 @@ impl Cpu {
                     // JR e8 / JR cc, e8
                     let e = self.fetch(bus) as i8;
                     if y == 3 || self.cond(y - 4) {
+                        self.idle(bus);
                         self.regs.pc = self.regs.pc.wrapping_add_signed(e.into());
                         12
                     } else {
@@ -414,6 +452,7 @@ impl Cpu {
                     12
                 } else {
                     // ADD HL, rp
+                    self.idle(bus);
                     let hl = self.regs.hl();
                     let v = self.rp(p);
                     let (r, c) = hl.overflowing_add(v);
@@ -437,14 +476,15 @@ impl Cpu {
                     _ => {}
                 }
                 if q == 0 {
-                    bus.write(addr, self.regs.a);
+                    self.mem_write(bus, addr, self.regs.a);
                 } else {
-                    self.regs.a = bus.read(addr);
+                    self.regs.a = self.mem_read(bus, addr);
                 }
                 8
             }
             (0, 3) => {
                 // INC rp / DEC rp
+                self.idle(bus);
                 let v = self.rp(p);
                 let r = if q == 0 {
                     v.wrapping_add(1)
@@ -529,8 +569,10 @@ impl Cpu {
             (3, 0) => match y {
                 0..=3 => {
                     // RET cc
+                    self.idle(bus);
                     if self.cond(y) {
                         self.regs.pc = self.pop(bus);
+                        self.idle(bus);
                         20
                     } else {
                         8
@@ -539,23 +581,26 @@ impl Cpu {
                 4 => {
                     // LDH (a8), A
                     let addr = 0xFF00 | self.fetch(bus) as u16;
-                    bus.write(addr, self.regs.a);
+                    self.mem_write(bus, addr, self.regs.a);
                     12
                 }
                 5 => {
                     // ADD SP, e8
                     self.regs.sp = self.sp_plus_e8(bus);
+                    self.idle(bus);
+                    self.idle(bus);
                     16
                 }
                 6 => {
                     // LDH A, (a8)
                     let addr = 0xFF00 | self.fetch(bus) as u16;
-                    self.regs.a = bus.read(addr);
+                    self.regs.a = self.mem_read(bus, addr);
                     12
                 }
                 _ => {
                     // LD HL, SP+e8
                     let v = self.sp_plus_e8(bus);
+                    self.idle(bus);
                     self.regs.set_hl(v);
                     12
                 }
@@ -571,6 +616,7 @@ impl Cpu {
                         0 | 1 => {
                             // RET / RETI
                             self.regs.pc = self.pop(bus);
+                            self.idle(bus);
                             if p == 1 {
                                 self.ime = true;
                             }
@@ -583,6 +629,7 @@ impl Cpu {
                         }
                         _ => {
                             // LD SP, HL
+                            self.idle(bus);
                             self.regs.sp = self.regs.hl();
                             8
                         }
@@ -594,6 +641,7 @@ impl Cpu {
                     // JP cc, a16
                     let addr = self.fetch_u16(bus);
                     if self.cond(y) {
+                        self.idle(bus);
                         self.regs.pc = addr;
                         16
                     } else {
@@ -602,24 +650,24 @@ impl Cpu {
                 }
                 4 => {
                     // LD (C), A
-                    bus.write(0xFF00 | self.regs.c as u16, self.regs.a);
+                    self.mem_write(bus, 0xFF00 | self.regs.c as u16, self.regs.a);
                     8
                 }
                 5 => {
                     // LD (a16), A
                     let addr = self.fetch_u16(bus);
-                    bus.write(addr, self.regs.a);
+                    self.mem_write(bus, addr, self.regs.a);
                     16
                 }
                 6 => {
                     // LD A, (C)
-                    self.regs.a = bus.read(0xFF00 | self.regs.c as u16);
+                    self.regs.a = self.mem_read(bus, 0xFF00 | self.regs.c as u16);
                     8
                 }
                 _ => {
                     // LD A, (a16)
                     let addr = self.fetch_u16(bus);
-                    self.regs.a = bus.read(addr);
+                    self.regs.a = self.mem_read(bus, addr);
                     16
                 }
             },
@@ -627,6 +675,7 @@ impl Cpu {
                 0 => {
                     // JP a16
                     self.regs.pc = self.fetch_u16(bus);
+                    self.idle(bus);
                     16
                 }
                 1 => {
@@ -689,6 +738,7 @@ impl Cpu {
             }
             _ => unreachable!("x and z are 2- and 3-bit fields"),
         };
+        debug_assert_eq!(self.cycles, cycles, "timing of opcode ${op:02X}");
         Some(cycles)
     }
 

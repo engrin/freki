@@ -44,12 +44,10 @@ impl GameBoy {
         })
     }
 
-    /// Executes one CPU instruction and advances the rest of the hardware.
-    /// Returns the number of T-cycles it took.
+    /// Executes one CPU instruction. The rest of the hardware is advanced during the
+    /// instruction, one M-cycle at a time. Returns the number of T-cycles it took.
     pub fn step(&mut self) -> Result<u32, CpuError> {
-        let cycles = self.cpu.step(&mut self.bus)?;
-        self.bus.tick(cycles);
-        Ok(cycles)
+        self.cpu.step(&mut self.bus)
     }
 
     /// Runs until the PPU has produced a complete frame.
