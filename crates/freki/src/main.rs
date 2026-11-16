@@ -1,10 +1,12 @@
-//! freki desktop frontend: window, keyboard input, sound, frame pacing and save files.
+//! freki desktop frontend: window, keyboard and gamepad input, sound, frame pacing and
+//! save files.
 //!
 //! Usage: `freki <rom.gb>`
 //!
 //! Battery-backed games are saved next to the ROM as `<rom>.sav`.
 
 mod audio;
+mod gamepad;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -16,6 +18,7 @@ use freki_core::{Button, FRAMES_PER_SECOND, GameBoy, SCREEN_HEIGHT, SCREEN_WIDTH
 use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
 
 use audio::Audio;
+use gamepad::Gamepads;
 
 /// Classic DMG green palette as 0RGB, indexed by shade (0 = lightest).
 const PALETTE: [u32; 4] = [0x00E0_F8D0, 0x0088_C070, 0x0034_6856, 0x0008_1820];
@@ -100,11 +103,16 @@ fn run_window(gb: &mut GameBoy, save_path: &Path) -> Result<(), Box<dyn Error>> 
     });
     let mut samples = Vec::new();
 
+    let mut gamepads = Gamepads::open();
     let mut pixels = vec![0u32; SCREEN_WIDTH * SCREEN_HEIGHT];
     let mut last_save = Instant::now();
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        gamepads.update();
         for (key, button) in KEYMAP {
-            gb.set_button(button, window.is_key_down(key));
+            gb.set_button(
+                button,
+                window.is_key_down(key) || gamepads.is_pressed(button),
+            );
         }
 
         gb.run_frame()?;

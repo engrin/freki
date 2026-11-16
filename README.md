@@ -15,7 +15,7 @@ Named after Freki, one of Odin's two wolves.
 | Path | What |
 |---|---|
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
-| `crates/freki` | Desktop frontend: window and input ([minifb](https://crates.io/crates/minifb)), sound ([cpal](https://crates.io/crates/cpal)), save files |
+| `crates/freki` | Desktop frontend: window and keyboard ([minifb](https://crates.io/crates/minifb)), gamepads ([gilrs](https://crates.io/crates/gilrs)), sound ([cpal](https://crates.io/crates/cpal)), save files |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ## Build and run
@@ -26,12 +26,14 @@ Requires nightly Rust.
 cargo run --release -- path/to/game.gb
 ```
 
-| Key | Game Boy |
-|---|---|
-| Arrow keys | D-pad |
-| X / Z | A / B |
-| Enter / Backspace | Start / Select |
-| Esc | Quit |
+| Game Boy | Keyboard | Gamepad |
+|---|---|---|
+| D-pad | Arrow keys | D-pad or left stick |
+| A / B | X / Z | Right / bottom face button (Nintendo layout) |
+| Start / Select | Enter / Backspace | Start / Select (Back) |
+| Quit | Esc | |
+
+Gamepads can be plugged in while freki is running.
 
 Battery-backed games are saved next to the ROM as `<rom>.sav` (about once a second
 while the game writes to it, and on exit).
@@ -39,8 +41,8 @@ while the game writes to it, and on exit).
 Emulation speed follows the sound card's clock, so audio stays in sync. Without an audio
 device freki still runs, paced at ~60 fps.
 
-On Linux you need the X11/Wayland and ALSA development headers
-(`libxkbcommon-dev libwayland-dev libasound2-dev` on Debian/Ubuntu).
+On Linux you need the X11/Wayland, ALSA and udev development headers
+(`libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev` on Debian/Ubuntu).
 
 ## Testing
 
