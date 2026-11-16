@@ -17,7 +17,7 @@ use crate::cpu_view::{self, CpuView};
 use crate::debug::DebugViews;
 use crate::gamepad::Gamepads;
 use crate::session::{Session, file_name};
-use crate::settings::{self, Settings};
+use crate::settings::{self, FAST_FORWARD_SPEEDS, Palette, Settings};
 use crate::states::SLOTS;
 
 const KEYMAP: [(Key, Button); 8] = [
@@ -44,49 +44,6 @@ const MAX_RATE_ADJUST: f64 = 0.005;
 const MAX_FRAMES_PER_UPDATE: u32 = 4;
 /// How long a status message stays in the status bar.
 const STATUS_DURATION: Duration = Duration::from_secs(3);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Palette {
-    Green,
-    Grey,
-    Pocket,
-}
-
-impl Palette {
-    const ALL: [Palette; 3] = [Palette::Green, Palette::Grey, Palette::Pocket];
-
-    fn name(self) -> &'static str {
-        match self {
-            Palette::Green => "DMG green",
-            Palette::Grey => "Greyscale",
-            Palette::Pocket => "Pocket",
-        }
-    }
-
-    /// RGB for shades 0 (lightest) to 3 (darkest).
-    fn colors(self) -> [[u8; 3]; 4] {
-        match self {
-            Palette::Green => [
-                [0xE0, 0xF8, 0xD0],
-                [0x88, 0xC0, 0x70],
-                [0x34, 0x68, 0x56],
-                [0x08, 0x18, 0x20],
-            ],
-            Palette::Grey => [
-                [0xFF, 0xFF, 0xFF],
-                [0xAA, 0xAA, 0xAA],
-                [0x55, 0x55, 0x55],
-                [0x00, 0x00, 0x00],
-            ],
-            Palette::Pocket => [
-                [0xC4, 0xCF, 0xA1],
-                [0x8B, 0x95, 0x6D],
-                [0x4D, 0x53, 0x3C],
-                [0x1F, 0x1F, 0x1F],
-            ],
-        }
-    }
-}
 
 /// Frame pacing statistics, shown in the status bar by View → Show frame timing.
 struct Timing {
@@ -172,8 +129,9 @@ pub struct FrekiApp {
 
     paused: bool,
     rewinding: bool,
-    palette: Palette,
-    scale: u32,
+    /// Fast-forward toggled on in the menu (holding Tab also fast-forwards).
+    fast_forward: bool,
+    fast_forward_held: bool,
     status: Option<(String, Instant)>,
     /// Frames of emulation owed to real time.
     frame_debt: f64,
@@ -212,8 +170,8 @@ impl FrekiApp {
             samples: Vec::new(),
             paused: false,
             rewinding: false,
-            palette: Palette::Green,
-            scale: 4,
+            fast_forward: false,
+            fast_forward_held: false,
             status: None,
             frame_debt: 0.0,
             last_tick: Instant::now(),
@@ -306,6 +264,7 @@ impl FrekiApp {
                 };
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
                 self.session = Some(session);
+                self.settings.add_recent(path);
                 self.search_ui = SearchUi::default();
                 self.paused = false;
                 self.set_status(message);
@@ -313,7 +272,12 @@ impl FrekiApp {
                     self.set_status(msg);
                 }
             }
-            Err(e) => self.set_status(format!("cannot open {}: {e}", file_name(path))),
+            Err(e) => {
+                if !path.exists() {
+                    self.settings.remove_recent(path);
+                }
+                self.set_status(format!("cannot open {}: {e}", file_name(path)));
+            }
         }
     }
 
@@ -350,7 +314,7 @@ impl FrekiApp {
     }
 
     fn set_scale(&mut self, ctx: &egui::Context, scale: u32) {
-        self.scale = scale;
+        self.settings.scale = scale;
         // Room for the menu bar and status bar around the screen.
         let size = vec2(
             (SCREEN_WIDTH as u32 * scale) as f32,
@@ -406,6 +370,7 @@ impl FrekiApp {
             self.debugger_action(cpu_view::Action::StepInstruction);
         }
         self.rewinding = ctx.input(|i| i.key_down(Key::R)) && self.session.is_some();
+        self.fast_forward_held = ctx.input(|i| i.key_down(Key::Tab));
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -468,13 +433,23 @@ impl FrekiApp {
         });
     }
 
+    /// Emulation speed multiplier: 1, or the fast-forward speed.
+    fn speed(&self) -> u32 {
+        if (self.fast_forward || self.fast_forward_held) && !self.rewinding {
+            self.settings.fast_forward_speed
+        } else {
+            1
+        }
+    }
+
     /// Runs as many frames as real time (and the audio queue) calls for.
     fn emulate(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_tick).as_secs_f64();
         self.last_tick = now;
-        self.frame_debt =
-            (self.frame_debt + elapsed * FRAMES_PER_SECOND).min(MAX_FRAMES_PER_UPDATE as f64);
+        let speed = self.speed();
+        self.frame_debt = (self.frame_debt + elapsed * FRAMES_PER_SECOND * speed as f64)
+            .min((MAX_FRAMES_PER_UPDATE * speed) as f64);
         let frames = self.frame_debt.floor() as u32;
         self.frame_debt -= frames as f64;
 
@@ -507,6 +482,7 @@ impl FrekiApp {
 
         // Keep audio in sync without touching video: steer the sample rate so the buffer
         // stays near its target, and refill it with silence if it ran dry.
+        // While fast-forwarding, sound is muted (the queue is kept topped up with silence).
         if let Some(audio) = &self.audio {
             let rate = audio.sample_rate() as f64;
             let target = rate * AUDIO_LATENCY.as_secs_f64();
@@ -552,7 +528,9 @@ impl FrekiApp {
                 }
             }
             session.gb.drain_audio(&mut self.samples);
-            if let Some(audio) = &self.audio {
+            if let Some(audio) = &self.audio
+                && speed == 1
+            {
                 audio.push(&self.samples);
             }
             self.samples.clear();
@@ -563,7 +541,7 @@ impl FrekiApp {
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
-        let colors = self.palette.colors();
+        let colors = self.settings.palette.colors();
         let mut rgba = Vec::with_capacity(SCREEN_WIDTH * SCREEN_HEIGHT * 4);
         match &self.session {
             Some(session) => {
@@ -595,6 +573,29 @@ impl FrekiApp {
                     ui.close();
                     self.pick_rom(&ctx);
                 }
+                ui.add_enabled_ui(!self.settings.recent.is_empty(), |ui| {
+                    ui.menu_button("Recent", |ui| {
+                        let mut open = None;
+                        for path in &self.settings.recent {
+                            if ui
+                                .button(file_name(path))
+                                .on_hover_text(path.display().to_string())
+                                .clicked()
+                            {
+                                open = Some(path.clone());
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Clear list").clicked() {
+                            self.settings.recent.clear();
+                            ui.close();
+                        }
+                        if let Some(path) = open {
+                            ui.close();
+                            self.open_rom(&ctx, &path);
+                        }
+                    });
+                });
                 if ui
                     .add_enabled(loaded, egui::Button::new("Close ROM"))
                     .clicked()
@@ -621,6 +622,22 @@ impl FrekiApp {
                     self.set_status(msg);
                 }
                 ui.add_enabled(false, egui::Button::new("Rewind").shortcut_text("hold R"));
+                ui.horizontal(|ui| {
+                    ui.add_enabled(
+                        loaded,
+                        egui::Checkbox::new(&mut self.fast_forward, "Fast-forward"),
+                    );
+                    ui.weak("or hold Tab");
+                });
+                ui.menu_button("Fast-forward speed", |ui| {
+                    for speed in FAST_FORWARD_SPEEDS {
+                        ui.radio_value(
+                            &mut self.settings.fast_forward_speed,
+                            speed,
+                            format!("{speed}×"),
+                        );
+                    }
+                });
                 if ui
                     .add_enabled(
                         loaded,
@@ -696,7 +713,10 @@ impl FrekiApp {
             ui.menu_button("View", |ui| {
                 ui.label("Scale");
                 for scale in 2..=6 {
-                    if ui.radio(self.scale == scale, format!("{scale}×")).clicked() {
+                    if ui
+                        .radio(self.settings.scale == scale, format!("{scale}×"))
+                        .clicked()
+                    {
                         ui.close();
                         self.set_scale(&ctx, scale);
                     }
@@ -722,7 +742,7 @@ impl FrekiApp {
                 ui.separator();
                 ui.label("Palette");
                 for palette in Palette::ALL {
-                    ui.radio_value(&mut self.palette, palette, palette.name());
+                    ui.radio_value(&mut self.settings.palette, palette, palette.name());
                 }
             });
 
@@ -784,6 +804,9 @@ impl FrekiApp {
                 ui.separator();
                 if self.paused {
                     ui.label("paused");
+                    ui.separator();
+                } else if self.speed() > 1 {
+                    ui.label(format!("fast-forward {}×", self.speed()));
                     ui.separator();
                 }
             }
@@ -1013,6 +1036,7 @@ impl FrekiApp {
                         ("Save / load state", "F5 / F8"),
                         ("Previous / next slot", "F6 / F7"),
                         ("Rewind", "hold R"),
+                        ("Fast-forward", "hold Tab"),
                         ("Pause", "P"),
                         ("Cheats on/off", "F9"),
                         ("Open ROM / reset / quit", "Ctrl+O / Ctrl+R / Ctrl+Q"),
@@ -1081,7 +1105,8 @@ impl eframe::App for FrekiApp {
             self.debugger_action(action);
         }
         if let Some(session) = &self.session {
-            self.debug.show(&ctx, &session.gb, &self.palette.colors());
+            self.debug
+                .show(&ctx, &session.gb, &self.settings.palette.colors());
         }
 
         ctx.request_repaint();

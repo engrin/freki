@@ -30,9 +30,11 @@ Requires nightly Rust.
 cargo run --release -- path/to/game.gb   # or start without a ROM and use File → Open ROM…
 ```
 
-ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, quit),
-Emulation (pause, reset, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
+ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, recent
+ROMs, quit), Emulation (pause, fast-forward, reset, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
 search), View (scale, palette, frame timing, debug views) and Help (controls, about).
+Palettes: DMG green, greyscale, Pocket and Light (backlit). The palette, scale, recent ROMs,
+fast-forward speed and boot ROM choice are remembered between runs.
 
 View → Tiles, Tile map and Sprites show video memory live: all 384 tiles, either tile map
 with the visible screen area outlined, and the 40 sprites with position, tile and flags.
@@ -70,6 +72,7 @@ are not supported yet.
 | F8 | Load state from the current slot |
 | F6 / F7 | Previous / next slot (0–9) |
 | R (hold) | Rewind, up to 20 seconds, at 2× speed (sound muted) |
+| Tab (hold) | Fast-forward (2×–8×, set under Emulation; sound muted) |
 
 Save states are written next to the ROM as `<rom>.ss0` … `<rom>.ss9` (about 40 KB each).
 They only load into the same game, and only in freki versions with the same state format.
