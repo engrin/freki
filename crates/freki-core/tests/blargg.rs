@@ -196,3 +196,36 @@ fn cgb_mem_timing() {
         run_blargg_cgb(&format!("mem_timing/{test}"));
     }
 }
+
+macro_rules! blargg_cgb {
+    ($dir:literal: $($(#[$attr:meta])* $test:ident => $file:literal,)*) => {
+        $(
+            #[test]
+            $(#[$attr])*
+            fn $test() {
+                run_blargg_cgb(concat!($dir, "/", $file));
+            }
+        )*
+    };
+}
+
+blargg_cgb! { "cgb_sound":
+    cgb_sound_01_registers => "01-registers.gb",
+    cgb_sound_02_len_ctr => "02-len ctr.gb",
+    cgb_sound_03_trigger => "03-trigger.gb",
+    cgb_sound_04_sweep => "04-sweep.gb",
+    cgb_sound_05_sweep_details => "05-sweep details.gb",
+    cgb_sound_06_overflow_on_trigger => "06-overflow on trigger.gb",
+    cgb_sound_07_len_sweep_period_sync => "07-len sweep period sync.gb",
+    cgb_sound_08_len_ctr_during_power => "08-len ctr during power.gb",
+    cgb_sound_09_wave_read_while_on => "09-wave read while on.gb",
+    cgb_sound_10_wave_trigger_while_on => "10-wave trigger while on.gb",
+    cgb_sound_11_regs_after_power => "11-regs after power.gb",
+    cgb_sound_12_wave => "12-wave.gb",
+}
+
+/// The combined ROM runs all 12 CGB sound tests in a row.
+#[test]
+fn cgb_sound_all() {
+    run_blargg_cgb("cgb_sound.gb");
+}

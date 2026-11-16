@@ -166,6 +166,7 @@ impl Bus {
         self.cgb_hardware = true;
         self.cgb = true;
         self.ppu.set_cgb();
+        self.apu.set_cgb();
     }
 
     /// Switches CGB hardware to DMG compatibility mode: the game sees a DMG, but its

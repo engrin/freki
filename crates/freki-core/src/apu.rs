@@ -249,11 +249,12 @@ impl Wave {
     }
 
     /// Index of the wave RAM byte a CPU access at `index` really reaches, or `None` if
-    /// the access is lost. While playing, every access hits the byte being played.
-    fn cpu_access(&self, index: usize) -> Option<usize> {
+    /// the access is lost. While playing, every access hits the byte being played; on the
+    /// DMG only right after the channel fetched it, on the CGB always.
+    fn cpu_access(&self, index: usize, cgb: bool) -> Option<usize> {
         if !self.on {
             Some(index)
-        } else if self.since_fetch < WAVE_ACCESS_WINDOW {
+        } else if cgb || self.since_fetch < WAVE_ACCESS_WINDOW {
             Some(self.position as usize / 2)
         } else {
             None
@@ -288,8 +289,10 @@ impl Wave {
         sample >> (self.level - 1)
     }
 
-    fn trigger(&mut self) {
-        self.corrupt_on_retrigger();
+    fn trigger(&mut self, cgb: bool) {
+        if !cgb {
+            self.corrupt_on_retrigger();
+        }
         self.on = self.dac_on;
         self.timer = (2048 - self.period as u32) * 2 + WAVE_TRIGGER_DELAY;
         self.position = 0;
@@ -352,6 +355,8 @@ impl Noise {
 
 #[derive(Serialize, Deserialize)]
 pub struct Apu {
+    /// Game Boy Color sound hardware (differs from the DMG in a few corner cases).
+    cgb: bool,
     powered: bool,
     /// Raw register values for $FF10–$FF2F, used for reads.
     regs: [u8; 0x20],
@@ -383,6 +388,7 @@ impl Default for Apu {
 impl Apu {
     pub fn new() -> Self {
         let mut apu = Self {
+            cgb: false,
             powered: true,
             regs: [0; 0x20],
             ch1: Square::default(),
@@ -453,6 +459,11 @@ impl Apu {
         self.samples.clear();
     }
 
+    /// Switches to the Game Boy Color's sound hardware.
+    pub fn set_cgb(&mut self) {
+        self.cgb = true;
+    }
+
     /// Moves all samples produced so far into `out` (interleaved left, right).
     pub fn drain_samples(&mut self, out: &mut Vec<f32>) {
         out.append(&mut self.samples);
@@ -471,7 +482,7 @@ impl Apu {
                 let i = (addr - 0xFF10) as usize;
                 self.regs[i] | READ_MASKS[i]
             }
-            0xFF30..=0xFF3F => match self.ch3.cpu_access((addr - 0xFF30) as usize) {
+            0xFF30..=0xFF3F => match self.ch3.cpu_access((addr - 0xFF30) as usize, self.cgb) {
                 Some(i) => self.ch3.ram[i],
                 None => 0xFF,
             },
@@ -481,7 +492,7 @@ impl Apu {
 
     pub fn write(&mut self, addr: u16, value: u8) {
         if let 0xFF30..=0xFF3F = addr {
-            if let Some(i) = self.ch3.cpu_access((addr - 0xFF30) as usize) {
+            if let Some(i) = self.ch3.cpu_access((addr - 0xFF30) as usize, self.cgb) {
                 self.ch3.ram[i] = value;
             }
             return;
@@ -492,13 +503,18 @@ impl Apu {
                 // Powering off clears every register. Wave RAM and, on the DMG, the
                 // length counters survive.
                 let ram = self.ch3.ram;
-                let lengths = [
-                    self.ch1.length.counter,
-                    self.ch2.length.counter,
-                    self.ch3.length.counter,
-                    self.ch4.length.counter,
-                ];
+                let lengths = if self.cgb {
+                    [0; 4]
+                } else {
+                    [
+                        self.ch1.length.counter,
+                        self.ch2.length.counter,
+                        self.ch3.length.counter,
+                        self.ch4.length.counter,
+                    ]
+                };
                 *self = Self {
+                    cgb: self.cgb,
                     sample_rate: self.sample_rate,
                     sample_clock: self.sample_clock,
                     samples: std::mem::take(&mut self.samples),
@@ -523,6 +539,9 @@ impl Apu {
         }
         if !self.powered {
             // On the DMG, length counters can still be loaded while the APU is off.
+            if self.cgb {
+                return;
+            }
             match addr {
                 0xFF11 => self.ch1.length.counter = 64 - (value & 0x3F) as u16,
                 0xFF16 => self.ch2.length.counter = 64 - (value & 0x3F) as u16,
@@ -604,7 +623,7 @@ impl Apu {
                     .length
                     .write_control(enable, trigger, 256, first_half);
                 if trigger {
-                    self.ch3.trigger();
+                    self.ch3.trigger(self.cgb);
                 }
                 self.ch3.on &= keep;
             }
@@ -635,6 +654,7 @@ impl Apu {
 
     fn powered_off() -> Self {
         Self {
+            cgb: false,
             powered: false,
             regs: [0; 0x20],
             ch1: Square::default(),

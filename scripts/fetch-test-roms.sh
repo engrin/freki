@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
-#   - Blargg's cpu_instrs, dmg_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
+#   - Blargg's cpu_instrs, dmg_sound, cgb_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
 #   - dmg-acid2 and cgb-acid2 by Matt Currie (MIT), plus their reference screenshots
 #   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG references
 #   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance and emulator-only (MBC) tests
@@ -43,6 +43,16 @@ for rom in "01-registers" "02-len ctr" "03-trigger" "04-sweep" "05-sweep details
            "12-wave write while on"; do
   url="$BLARGG/dmg_sound/rom_singles/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
   fetch "$url" "$DEST/dmg_sound/$rom.gb"
+done
+
+mkdir -p "$DEST/cgb_sound"
+fetch "$BLARGG/cgb_sound/cgb_sound.gb" "$DEST/cgb_sound.gb"
+for rom in "01-registers" "02-len ctr" "03-trigger" "04-sweep" "05-sweep details" \
+           "06-overflow on trigger" "07-len sweep period sync" "08-len ctr during power" \
+           "09-wave read while on" "10-wave trigger while on" "11-regs after power" \
+           "12-wave"; do
+  url="$BLARGG/cgb_sound/rom_singles/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
+  fetch "$url" "$DEST/cgb_sound/$rom.gb"
 done
 
 fetch "$BLARGG/instr_timing/instr_timing.gb" "$DEST/instr_timing.gb"
