@@ -55,7 +55,7 @@ mealybug! {
     m2_win_en_toggle,
     m3_bgp_change,
     m3_bgp_change_sprites,
-    #[ignore = "not yet pixel-exact"]
+    #[ignore = "4 pixels off: BG-off write at pixel 0 during a sprite stall"]
     m3_lcdc_bg_en_change,
     m3_lcdc_bg_map_change,
     m3_lcdc_obj_en_change,
@@ -65,7 +65,7 @@ mealybug! {
     m3_lcdc_tile_sel_change,
     m3_lcdc_tile_sel_win_change,
     m3_lcdc_win_en_change_multiple,
-    #[ignore = "not yet pixel-exact"]
+    #[ignore = "43 pixels off on 7 rows: window enable/WX edge cases"]
     m3_lcdc_win_en_change_multiple_wx,
     m3_lcdc_win_map_change,
     m3_obp0_change,

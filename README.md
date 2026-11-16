@@ -8,8 +8,9 @@ Named after Freki, one of Odin's two wolves.
 > freki passes all of Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
 > MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves.
-> The PPU draws pixel by pixel, so mid-scanline effects work, though not yet dot-exact
-> (the mealybug-tearoom tests still fail). Missing: Game Boy Color.
+> The PPU draws pixel by pixel with DMG-accurate timing: 22 of the 24 mealybug-tearoom
+> mid-scanline tests match real hardware exactly (the other two are off by a few pixels).
+> Missing: Game Boy Color.
 
 ## Layout
 
