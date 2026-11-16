@@ -16,6 +16,7 @@
 use crate::cartridge::Cartridge;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
+use crate::serial::Serial;
 use crate::timer::Timer;
 
 /// Interrupt bits, shared by IE ($FFFF) and IF ($FF0F).
@@ -32,6 +33,7 @@ pub struct Bus {
     pub ppu: Ppu,
     pub timer: Timer,
     pub joypad: Joypad,
+    pub serial: Serial,
     wram: [u8; 0x2000],
     hram: [u8; 0x7F],
     /// Unimplemented I/O registers are stored here so reads return what was written.
@@ -47,11 +49,12 @@ impl Bus {
             ppu: Ppu::new(),
             timer: Timer::new(),
             joypad: Joypad::new(),
+            serial: Serial::new(),
             wram: [0; 0x2000],
             hram: [0; 0x7F],
             io: [0; 0x80],
             interrupt_enable: 0,
-            interrupt_flag: 0xE1,
+            interrupt_flag: 0x01,
         }
     }
 
@@ -67,8 +70,10 @@ impl Bus {
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
             0xFEA0..=0xFEFF => 0xFF,
             0xFF00 => self.joypad.read(),
+            0xFF01..=0xFF02 => self.serial.read(addr),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupt_flag | 0xE0,
+            0xFF46 => self.io[0x46],
             0xFF40..=0xFF4B => self.ppu.read_reg(addr),
             0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize],
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -87,13 +92,25 @@ impl Bus {
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF => {}
             0xFF00 => self.joypad.write(value),
+            0xFF01..=0xFF02 => self.serial.write(addr, value),
             0xFF04..=0xFF07 => self.timer.write(addr, value),
             0xFF0F => self.interrupt_flag = value & 0x1F,
-            // TODO: OAM DMA on writes to $FF46.
+            0xFF46 => self.oam_dma(value),
             0xFF40..=0xFF4B => self.ppu.write_reg(addr, value),
             0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize] = value,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupt_enable = value,
+        }
+    }
+
+    /// OAM DMA: copies 160 bytes from `page`×$100 into OAM. Done instantly; on hardware it
+    /// takes 160 M-cycles during which the CPU can only access HRAM.
+    fn oam_dma(&mut self, page: u8) {
+        self.io[0x46] = page;
+        let src = (page as u16) << 8;
+        for i in 0..0xA0 {
+            let byte = self.read(src + i);
+            self.ppu.write_oam(0xFE00 + i, byte);
         }
     }
 
@@ -103,8 +120,10 @@ impl Bus {
 
     /// Advances all non-CPU hardware by `cycles` T-cycles and collects interrupts.
     pub fn tick(&mut self, cycles: u32) {
+        self.cart.tick(cycles);
         self.interrupt_flag |= self.timer.tick(cycles);
         self.interrupt_flag |= self.ppu.tick(cycles);
         self.interrupt_flag |= self.joypad.take_interrupt();
+        self.interrupt_flag |= self.serial.take_interrupt();
     }
 }

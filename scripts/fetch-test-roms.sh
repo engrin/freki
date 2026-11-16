@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
 #   - Blargg's cpu_instrs (via retrio/gb-test-roms, pinned commit)
-#   - dmg-acid2 by Matt Currie (MIT)
+#   - dmg-acid2 by Matt Currie (MIT), plus its reference screenshot
 set -euo pipefail
 
 DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
 BLARGG="https://raw.githubusercontent.com/retrio/gb-test-roms/c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15"
 ACID2="https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
+ACID2_REF="https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
 
 mkdir -p "$DEST/cpu_instrs"
 
@@ -17,6 +18,7 @@ fetch() { # url dest
 }
 
 fetch "$ACID2" "$DEST/dmg-acid2.gb"
+fetch "$ACID2_REF" "$DEST/dmg-acid2-reference.png"
 fetch "$BLARGG/cpu_instrs/cpu_instrs.gb" "$DEST/cpu_instrs.gb"
 
 for rom in "01-special" "02-interrupts" "03-op sp,hl" "04-op r,imm" "05-op rp" "06-ld r,r" \

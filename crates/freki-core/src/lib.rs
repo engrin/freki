@@ -9,6 +9,7 @@ pub mod cartridge;
 pub mod cpu;
 pub mod joypad;
 pub mod ppu;
+pub mod serial;
 pub mod timer;
 
 pub use cartridge::{Cartridge, CartridgeError};
@@ -69,6 +70,27 @@ impl GameBoy {
 
     pub fn set_button(&mut self, button: Button, pressed: bool) {
         self.bus.joypad.set(button, pressed);
+    }
+
+    /// Every byte the game has sent over the serial port (test ROMs print results here).
+    pub fn serial_output(&self) -> &[u8] {
+        self.bus.serial.output()
+    }
+
+    /// Battery-backed cartridge RAM to write to a save file, or `None` if the cartridge
+    /// has no battery.
+    pub fn save_data(&self) -> Option<&[u8]> {
+        self.bus.cart.has_battery().then(|| self.bus.cart.ram())
+    }
+
+    /// Restores cartridge RAM from a save file.
+    pub fn load_save_data(&mut self, data: &[u8]) {
+        self.bus.cart.load_ram(data);
+    }
+
+    /// Returns `true` if cartridge RAM changed since the last call (i.e. the save is stale).
+    pub fn take_save_dirty(&mut self) -> bool {
+        self.bus.cart.take_ram_dirty()
     }
 
     pub fn cartridge(&self) -> &Cartridge {
