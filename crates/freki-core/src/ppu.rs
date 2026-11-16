@@ -352,7 +352,7 @@ impl Ppu {
     }
 
     /// Value LCDC holds for one T-cycle while the CPU writes it on a DMG: the old value
-    /// with BG enable taken from the new one (OBJ enable clears early in some states).
+    /// with the fetcher-facing bits already new (OBJ enable clears early in some states).
     pub fn dmg_lcdc_write_conflict(&self, old: u8, value: u8) -> u8 {
         let mut old = old;
         let obj_off = value & lcdc::OBJ_ENABLE == 0;
@@ -360,10 +360,10 @@ impl Ppu {
             old &= !lcdc::OBJ_ENABLE;
         }
         // Fetcher-facing bits (maps, tile data, OBJ size) take the new value
-        // at once; OBJ enable keeps the old value; BG enable can only turn on early.
+        // at once; BG and OBJ enable keep their old value until the write completes.
         let early =
             lcdc::BG_MAP_9C00 | lcdc::TILE_DATA_8000 | lcdc::WINDOW_MAP_9C00 | lcdc::OBJ_SIZE_8X16;
-        (old & !early) | (value & early) | (value & lcdc::BG_WINDOW_ENABLE)
+        (old & !early) | (value & early)
     }
 
     /// Notes an LCDC write: disabling the window while it is being fetched turns off the
