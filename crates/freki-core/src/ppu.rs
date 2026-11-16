@@ -13,6 +13,10 @@
 //! - The **window** restarts the fetcher when `WX` matches the position; **sprites** pause
 //!   the pipeline while their tile row is fetched.
 //!
+//! In Game Boy Color mode the fetcher also reads each tile's attributes from VRAM bank 1
+//! (palette, tile bank, flips, priority), sprites pick their palette and tile bank from
+//! OAM, and pixels are coloured through palette RAM into an RGB555 framebuffer.
+//!
 //! Registers are read at the dot they are used, so mid-scanline changes show up exactly
 //! where they happen. Some DMG register writes land slightly off the CPU's M-cycle grid;
 //! the CPU handles that (see `Cpu::mem_write`).
@@ -101,6 +105,8 @@ struct Sprite {
     x: u8,
     tile: u8,
     attr: u8,
+    /// OAM entry (0–39): decides priority between overlapping sprites on the CGB.
+    index: u8,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
@@ -108,6 +114,26 @@ struct ObjPixel {
     color: u8,
     palette1: bool,
     behind_bg: bool,
+    /// CGB palette (0–7) and OAM entry of the sprite the pixel came from.
+    cgb_palette: u8,
+    index: u8,
+}
+
+/// Background FIFO entries: colour index in bits 0–1; in CGB mode also the palette in
+/// bits 2–4 and the BG-over-OBJ priority attribute in bit 7.
+mod bg_pixel {
+    pub const COLOR: u8 = 0x03;
+    pub const PALETTE_SHIFT: u8 = 2;
+    pub const PRIORITY: u8 = 0x80;
+}
+
+/// CGB tile attributes (VRAM bank 1 tile maps; bits 3–6 also apply to sprites in OAM).
+mod attr {
+    pub const PALETTE: u8 = 0x07;
+    pub const BANK1: u8 = 1 << 3;
+    pub const X_FLIP: u8 = 1 << 5;
+    pub const Y_FLIP: u8 = 1 << 6;
+    pub const PRIORITY: u8 = 1 << 7;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -131,6 +157,8 @@ pub struct Ppu {
     oam: [u8; 0xA0],
     #[serde(with = "BigArray")]
     framebuffer: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
+    /// CGB mode output: RGB555 colours.
+    rgb_framebuffer: Vec<u16>,
     frame_ready: bool,
     /// Dot position within the current scanline.
     dot: u32,
@@ -158,6 +186,8 @@ pub struct Ppu {
     fetch: Fetch,
     tile_map_addr: usize,
     tile: u8,
+    /// CGB attributes of the tile being fetched (0 on the DMG).
+    tile_attr: u8,
     tile_data_addr: usize,
     tile_data: [u8; 2],
     sprites: Vec<Sprite>,
@@ -214,6 +244,7 @@ impl Ppu {
             ocps: 0,
             oam: [0; 0xA0],
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            rgb_framebuffer: vec![0x7FFF; SCREEN_WIDTH * SCREEN_HEIGHT],
             frame_ready: false,
             dot: 0,
             mode: Mode::OamScan,
@@ -229,6 +260,7 @@ impl Ppu {
             fetch: Fetch::Tile1,
             tile_map_addr: 0,
             tile: 0,
+            tile_attr: 0,
             tile_data_addr: 0,
             tile_data: [0; 2],
             sprites: Vec::with_capacity(MAX_SPRITES_PER_LINE),
@@ -321,6 +353,15 @@ impl Ppu {
     }
 
     /// Returns `true` once per completed frame.
+    /// The screen in CGB mode, as RGB555 colours (bits 0–4 red, 5–9 green, 10–14 blue).
+    pub fn rgb_framebuffer(&self) -> &[u16] {
+        &self.rgb_framebuffer
+    }
+
+    pub fn is_cgb(&self) -> bool {
+        self.cgb
+    }
+
     pub fn take_frame_ready(&mut self) -> bool {
         std::mem::take(&mut self.frame_ready)
     }
@@ -685,6 +726,7 @@ impl Ppu {
                 x: s[1],
                 tile: s[2],
                 attr: s[3],
+                index: index as u8,
             });
         }
     }
@@ -718,7 +760,8 @@ impl Ppu {
         }
 
         // DMG quirk: a pixel is inserted when WX matches again after the window started.
-        if self.wx == self.position.wrapping_add(7)
+        if !self.cgb
+            && self.wx == self.position.wrapping_add(7)
             && self.wx_triggered
             && !self.window_being_fetched
             && self.fetch == Fetch::Tile1
@@ -824,7 +867,16 @@ impl Ppu {
         } else {
             (0x1000 + (self.tile as i8 as isize) * 16) as usize
         };
-        base + (self.fetcher_y() & 7) as usize * 2
+        let bank = if self.tile_attr & attr::BANK1 != 0 {
+            0x2000
+        } else {
+            0
+        };
+        let mut row = self.fetcher_y() & 7;
+        if self.tile_attr & attr::Y_FLIP != 0 {
+            row = 7 - row;
+        }
+        bank + base + row as usize * 2
     }
 
     /// One step of the background/window fetcher.
@@ -852,6 +904,11 @@ impl Ppu {
             }
             Fetch::Tile2 => {
                 self.tile = self.vram[self.tile_map_addr];
+                self.tile_attr = if self.cgb {
+                    self.vram[0x2000 + self.tile_map_addr]
+                } else {
+                    0
+                };
                 self.fetch = Fetch::Low1;
             }
             Fetch::Low1 => {
@@ -883,7 +940,8 @@ impl Ppu {
         if !self.bg_fifo.is_empty() {
             return;
         }
-        if self.wy_triggered
+        if !self.cgb
+            && self.wy_triggered
             && self.lcdc & lcdc::WINDOW_ENABLE == 0
             && !self.disable_insertion_glitch
         {
@@ -899,9 +957,12 @@ impl Ppu {
             }
         }
         let [lo, hi] = self.tile_data;
-        for bit in (0..8).rev() {
+        let a = self.tile_attr;
+        let extra = ((a & attr::PALETTE) << bg_pixel::PALETTE_SHIFT) | (a & attr::PRIORITY);
+        for i in 0..8 {
+            let bit = if a & attr::X_FLIP != 0 { i } else { 7 - i };
             self.bg_fifo
-                .push_back((((hi >> bit) & 1) << 1) | ((lo >> bit) & 1));
+                .push_back(extra | (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1));
         }
         self.fetch = Fetch::Tile1;
     }
@@ -950,7 +1011,12 @@ impl Ppu {
             row ^= mask; // vertical flip
         }
         let tile = if tall { tile & 0xFE } else { tile };
-        tile as usize * 16 + row as usize * 2
+        let bank = if self.cgb && attr & self::attr::BANK1 != 0 {
+            0x2000
+        } else {
+            0
+        };
+        bank + tile as usize * 16 + row as usize * 2
     }
 
     /// Mixes a sprite row into the object FIFO; earlier sprites keep their pixels.
@@ -959,16 +1025,21 @@ impl Ppu {
             self.obj_fifo.push_back(ObjPixel::default());
         }
         let attr = self.obj_attr[1];
+        let index = self.sprites[self.next_sprite].index;
         let flip = attr & 0x20 != 0;
         for i in 0..8u8 {
             let bit = if flip { i } else { 7 - i };
             let color = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
             let target = &mut self.obj_fifo[i as usize];
-            if color != 0 && target.color == 0 {
+            // DMG: sprites fetched first (lower X) win. CGB: the lower OAM entry wins.
+            let wins = target.color == 0 || (self.cgb && index < target.index);
+            if color != 0 && wins {
                 *target = ObjPixel {
                     color,
                     palette1: attr & 0x10 != 0,
                     behind_bg: attr & 0x80 != 0,
+                    cgb_palette: attr & self::attr::PALETTE,
+                    index,
                 };
             }
         }
@@ -1014,6 +1085,20 @@ impl Ppu {
             return;
         }
 
+        if (self.lcd_x as usize) < SCREEN_WIDTH {
+            let i = self.ly as usize * SCREEN_WIDTH + self.lcd_x as usize;
+            if self.cgb {
+                self.rgb_framebuffer[i] = self.cgb_pixel(bg, obj);
+            } else {
+                self.framebuffer[i] = self.dmg_pixel(bg & bg_pixel::COLOR, obj);
+            }
+        }
+        self.position += 1;
+        self.lcd_x += 1;
+    }
+
+    /// DMG pixel mixing: the shade (0–3) of a background colour and an object pixel.
+    fn dmg_pixel(&self, bg: u8, obj: ObjPixel) -> u8 {
         let bg = if self.lcdc & lcdc::BG_WINDOW_ENABLE != 0 {
             bg
         } else {
@@ -1021,17 +1106,31 @@ impl Ppu {
         };
         let draw_obj =
             obj.color != 0 && self.lcdc & lcdc::OBJ_ENABLE != 0 && !(obj.behind_bg && bg != 0);
-        let shade = if draw_obj {
+        if draw_obj {
             let palette = if obj.palette1 { self.obp1 } else { self.obp0 };
             (palette >> (obj.color * 2)) & 3
         } else {
             (self.bgp >> (bg * 2)) & 3
-        };
-        if (self.lcd_x as usize) < SCREEN_WIDTH {
-            self.framebuffer[self.ly as usize * SCREEN_WIDTH + self.lcd_x as usize] = shade;
         }
-        self.position += 1;
-        self.lcd_x += 1;
+    }
+
+    /// CGB pixel mixing: the RGB555 colour of a background FIFO entry and an object pixel.
+    /// LCDC bit 0 is the master priority switch: when clear, objects are always on top.
+    /// Otherwise a non-zero background colour covers the object if either the tile's
+    /// priority attribute or the object's behind-background flag is set.
+    fn cgb_pixel(&self, bg: u8, obj: ObjPixel) -> u16 {
+        let color = bg & bg_pixel::COLOR;
+        let bg_on_top = self.lcdc & lcdc::BG_WINDOW_ENABLE != 0
+            && color != 0
+            && (bg & bg_pixel::PRIORITY != 0 || obj.behind_bg);
+        let (ram, palette, color) =
+            if obj.color != 0 && self.lcdc & lcdc::OBJ_ENABLE != 0 && !bg_on_top {
+                (&self.obj_palettes, obj.cgb_palette, obj.color)
+            } else {
+                (&self.bg_palettes, bg >> bg_pixel::PALETTE_SHIFT & 7, color)
+            };
+        let i = palette as usize * 8 + color as usize * 2;
+        u16::from_le_bytes([ram[i], ram[i + 1]]) & 0x7FFF
     }
 
     /// Mode 3 is over: switch to HBlank and prepare the window for the next line.
@@ -1041,11 +1140,13 @@ impl Ppu {
         let row = self.ly as usize * SCREEN_WIDTH;
         while (self.lcd_x as usize) < SCREEN_WIDTH {
             let x = self.lcd_x as usize;
-            self.framebuffer[row + x] = if x == 0 {
-                0
+            if x == 0 {
+                self.framebuffer[row] = 0;
+                self.rgb_framebuffer[row] = 0x7FFF;
             } else {
-                self.framebuffer[row + x - 1]
-            };
+                self.framebuffer[row + x] = self.framebuffer[row + x - 1];
+                self.rgb_framebuffer[row + x] = self.rgb_framebuffer[row + x - 1];
+            }
             self.lcd_x += 1;
         }
         self.position = POSITION_START;

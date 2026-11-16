@@ -48,6 +48,24 @@ pub enum Model {
     Cgb,
 }
 
+/// The current picture, 160×144 pixels row by row.
+#[derive(Debug, Clone, Copy)]
+pub enum Screen<'a> {
+    /// DMG: shades 0 (lightest) to 3 (darkest); the frontend picks the colours.
+    Shades(&'a [u8; SCREEN_WIDTH * SCREEN_HEIGHT]),
+    /// CGB: RGB555 colours (bits 0–4 red, 5–9 green, 10–14 blue).
+    Rgb555(&'a [u16]),
+}
+
+/// Converts an RGB555 colour to 8-bit RGB by bit replication (no colour correction).
+pub fn rgb555_to_rgb888(color: u16) -> [u8; 3] {
+    let channel = |shift: u16| {
+        let c = ((color >> shift) & 0x1F) as u8;
+        (c << 3) | (c >> 2)
+    };
+    [channel(0), channel(5), channel(10)]
+}
+
 /// A complete Game Boy: CPU plus everything on the memory bus.
 pub struct GameBoy {
     cpu: Cpu,
@@ -198,6 +216,15 @@ impl GameBoy {
     }
 
     /// The current screen as 160×144 shade indices (0 = lightest, 3 = darkest).
+    /// The current picture: shades on a DMG, colours on a CGB.
+    pub fn screen(&self) -> Screen<'_> {
+        if self.bus.cgb {
+            Screen::Rgb555(self.bus.ppu.rgb_framebuffer())
+        } else {
+            Screen::Shades(self.bus.ppu.framebuffer())
+        }
+    }
+
     pub fn framebuffer(&self) -> &[u8; SCREEN_WIDTH * SCREEN_HEIGHT] {
         self.bus.ppu.framebuffer()
     }

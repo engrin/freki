@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
 #   - Blargg's cpu_instrs, dmg_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
-#   - dmg-acid2 by Matt Currie (MIT), plus its reference screenshot
+#   - dmg-acid2 and cgb-acid2 by Matt Currie (MIT), plus their reference screenshots
 #   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG references
 #   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance and emulator-only (MBC) tests
 set -euo pipefail
@@ -10,6 +10,8 @@ DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
 BLARGG="https://raw.githubusercontent.com/retrio/gb-test-roms/c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15"
 ACID2="https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
 ACID2_REF="https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
+CGB_ACID2="https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc"
+CGB_ACID2_REF="https://raw.githubusercontent.com/mattcurrie/cgb-acid2/master/img/reference.png"
 MTS="mts-20240926-1737-443f6e1"
 MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS/$MTS.tar.xz"
 MEALYBUG="https://raw.githubusercontent.com/mattcurrie/mealybug-tearoom-tests/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4"
@@ -24,6 +26,8 @@ fetch() { # url dest
 
 fetch "$ACID2" "$DEST/dmg-acid2.gb"
 fetch "$ACID2_REF" "$DEST/dmg-acid2-reference.png"
+fetch "$CGB_ACID2" "$DEST/cgb-acid2.gbc"
+fetch "$CGB_ACID2_REF" "$DEST/cgb-acid2-reference.png"
 fetch "$BLARGG/cpu_instrs/cpu_instrs.gb" "$DEST/cpu_instrs.gb"
 
 for rom in "01-special" "02-interrupts" "03-op sp,hl" "04-op r,imm" "05-op rp" "06-ld r,r" \

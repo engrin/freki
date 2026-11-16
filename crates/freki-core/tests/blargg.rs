@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use freki_core::{CLOCK_HZ, GameBoy};
+use freki_core::{CLOCK_HZ, GameBoy, Model};
 
 /// Emulated seconds a ROM may run before it counts as hung.
 const TIMEOUT_SECONDS: u64 = 60;
@@ -62,12 +62,25 @@ fn serial_result(gb: &GameBoy) -> Outcome {
 }
 
 fn run_blargg(name: &str) {
+    run_on(name, false);
+}
+
+/// Runs a test on the Game Boy Color, by marking the ROM as a CGB game.
+fn run_blargg_cgb(name: &str) {
+    run_on(name, true);
+}
+
+fn run_on(name: &str, cgb: bool) {
     let path = rom_path(name);
-    let Ok(rom) = std::fs::read(&path) else {
+    let Ok(mut rom) = std::fs::read(&path) else {
         eprintln!("skipping {name}: not found (run scripts/fetch-test-roms.sh)");
         return;
     };
+    if cgb {
+        rom[0x143] = 0x80;
+    }
     let mut gb = GameBoy::new(rom).expect("ROM loads");
+    assert_eq!(gb.model() == Model::Cgb, cgb);
 
     let budget = CLOCK_HZ as u64 * TIMEOUT_SECONDS;
     let mut cycles = 0u64;
@@ -156,4 +169,26 @@ blargg! { "mem_timing-2":
     mem_timing2_01_read => "01-read_timing.gb",
     mem_timing2_02_write => "02-write_timing.gb",
     mem_timing2_03_modify => "03-modify_timing.gb",
+}
+
+/// The CPU and timing tests on the Game Boy Color (same results as on the DMG).
+#[test]
+fn cgb_cpu_instrs_all() {
+    run_blargg_cgb("cpu_instrs.gb");
+}
+
+#[test]
+fn cgb_instr_timing() {
+    run_blargg_cgb("instr_timing.gb");
+}
+
+#[test]
+fn cgb_mem_timing() {
+    for test in [
+        "01-read_timing.gb",
+        "02-write_timing.gb",
+        "03-modify_timing.gb",
+    ] {
+        run_blargg_cgb(&format!("mem_timing/{test}"));
+    }
 }

@@ -71,3 +71,55 @@ pub fn compare(name: &str, actual: &[u8], expected: &[u8]) -> Result<(), String>
         path.display()
     ))
 }
+
+/// Loads a reference screenshot as 8-bit RGB pixels.
+pub fn load_rgb_reference(path: &Path) -> Vec<[u8; 3]> {
+    let bytes = std::fs::read(path).expect("read reference PNG");
+    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().expect("PNG header");
+    let mut buf = vec![0; reader.output_buffer_size().expect("buffer size")];
+    let info = reader.next_frame(&mut buf).expect("PNG data");
+    assert_eq!(
+        (info.width, info.height),
+        (SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32),
+        "{}",
+        path.display()
+    );
+    let channels = info.color_type.samples();
+    buf[..info.buffer_size()]
+        .chunks_exact(channels)
+        .map(|px| [px[0], px[1], px[2]])
+        .collect()
+}
+
+/// Compares an RGB screen with a reference; on mismatch writes `target/<name>-actual.png`.
+pub fn compare_rgb(name: &str, actual: &[[u8; 3]], expected: &[[u8; 3]]) -> Result<(), String> {
+    let wrong: Vec<usize> = (0..actual.len())
+        .filter(|&i| actual[i] != expected[i])
+        .collect();
+    if wrong.is_empty() {
+        return Ok(());
+    }
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("{name}-actual.png"));
+    let file = std::fs::File::create(&path).expect("create PNG");
+    let mut encoder = png::Encoder::new(file, SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let data: Vec<u8> = actual.iter().flatten().copied().collect();
+    encoder
+        .write_header()
+        .and_then(|mut w| w.write_image_data(&data))
+        .expect("write PNG");
+    let mut rows: Vec<usize> = wrong.iter().map(|&i| i / SCREEN_WIDTH).collect();
+    rows.dedup();
+    Err(format!(
+        "{name}: {} of {} pixels differ (rows {:?}). Screen saved to {}",
+        wrong.len(),
+        actual.len(),
+        rows,
+        path.display()
+    ))
+}
