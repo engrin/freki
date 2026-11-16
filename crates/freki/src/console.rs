@@ -28,6 +28,13 @@ memory search (find the address of lives, money, ...):
 memory:
   peek ADDR [COUNT]            show memory
   poke ADDR VALUE              write memory once
+debugger (also View → Debugger):
+  regs                         show CPU registers
+  dis [ADDR] [N]               disassemble N instructions (default: at PC, 10)
+  step [N]                     execute N instructions (pause first)
+  break ADDR | unbreak ADDR    set / remove a breakpoint
+  watch ADDR [END] [r|w|rw]    stop when the CPU reads/writes ADDR..END (default w)
+  unwatch N | breaks           remove watchpoint N / list all
 other:
   pause | resume               pause emulation (also P in the window)
   help
@@ -37,7 +44,8 @@ pub struct Console {
     lines: Receiver<String>,
     cheat_file: PathBuf,
     search: Option<MemorySearch>,
-    pub paused: bool,
+    /// Set by `pause` / `resume`; applied by the app.
+    pause_request: Option<bool>,
 }
 
 impl Console {
@@ -55,6 +63,11 @@ impl Console {
         Self::with_receiver(rx, PathBuf::new())
     }
 
+    /// A pending `pause` (true) or `resume` (false) command.
+    pub fn take_pause_request(&mut self) -> Option<bool> {
+        self.pause_request.take()
+    }
+
     /// Sets the `.cht` file used by `cheat save` and `cheat reload` (the loaded ROM's).
     pub fn set_cheat_file(&mut self, path: PathBuf) {
         self.cheat_file = path;
@@ -65,7 +78,7 @@ impl Console {
             lines,
             cheat_file,
             search: None,
-            paused: false,
+            pause_request: None,
         }
     }
 
@@ -96,13 +109,43 @@ impl Console {
             [] => Ok(String::new()),
             ["help" | "?"] => Ok(HELP.to_string()),
             ["pause"] => {
-                self.paused = true;
+                self.pause_request = Some(true);
                 Ok("paused".into())
             }
             ["resume"] => {
-                self.paused = false;
+                self.pause_request = Some(false);
                 Ok("resumed".into())
             }
+            ["regs"] => Ok(registers(gb)),
+            ["dis"] => Ok(disassembly(gb, gb.pc(), 10)),
+            ["dis", addr] => Ok(disassembly(gb, parse(addr)?, 10)),
+            ["dis", addr, n] => Ok(disassembly(gb, parse(addr)?, index(n)?.min(100))),
+            ["step"] => step(gb, 1),
+            ["step", n] => step(gb, index(n)?.min(100_000)),
+            ["break", addr] => {
+                let addr = parse(addr)?;
+                gb.breakpoints_mut().pc.insert(addr);
+                Ok(format!("breakpoint at ${addr:04X}"))
+            }
+            ["unbreak", addr] => {
+                let addr = parse(addr)?;
+                if gb.breakpoints_mut().pc.remove(&addr) {
+                    Ok(format!("removed breakpoint at ${addr:04X}"))
+                } else {
+                    Err(format!("no breakpoint at ${addr:04X}"))
+                }
+            }
+            ["watch", rest @ ..] => watch(gb, rest),
+            ["unwatch", n] => {
+                let i = index(n)?;
+                let watches = &mut gb.breakpoints_mut().watches;
+                if i >= watches.len() {
+                    return Err(format!("no watchpoint {i}"));
+                }
+                watches.remove(i);
+                Ok(format!("removed watchpoint {i}"))
+            }
+            ["breaks"] => Ok(list_breaks(gb)),
             ["cheats"] | ["cheat", "list"] => Ok(list_cheats(gb)),
             ["cheat", rest @ ..] => self.cheat(rest, gb),
             ["search", rest @ ..] => self.search(rest, gb),
@@ -208,6 +251,136 @@ impl Console {
             _ => Err("usage: search start|eq|ne|changed|same|up|down|list|add (type help)".into()),
         }
     }
+}
+
+/// CPU registers and flags on one line.
+pub fn registers(gb: &GameBoy) -> String {
+    let r = gb.registers();
+    let flag = |bit: u8, c: char| if r.f & bit != 0 { c } else { '-' };
+    format!(
+        "AF=${:04X} BC=${:04X} DE=${:04X} HL=${:04X} SP=${:04X} PC=${:04X} [{}{}{}{}] IME={} {}",
+        r.af(),
+        r.bc(),
+        r.de(),
+        r.hl(),
+        r.sp,
+        r.pc,
+        flag(0x80, 'Z'),
+        flag(0x40, 'N'),
+        flag(0x20, 'H'),
+        flag(0x10, 'C'),
+        u8::from(gb.ime()),
+        if gb.halted() { "HALT" } else { "" }
+    )
+    .trim_end()
+    .to_string()
+}
+
+fn disassembly(gb: &GameBoy, mut addr: u16, count: usize) -> String {
+    let mut out = Vec::new();
+    for _ in 0..count {
+        let ins = gb.disassemble(addr);
+        let marker = if addr == gb.pc() { '>' } else { ' ' };
+        let bp = if gb.breakpoints().pc.contains(&addr) {
+            '*'
+        } else {
+            ' '
+        };
+        let bytes: Vec<String> = ins.bytes.iter().map(|b| format!("{b:02X}")).collect();
+        out.push(format!(
+            "{marker}{bp}${addr:04X}  {:<9} {}",
+            bytes.join(" "),
+            ins.text
+        ));
+        addr = addr.wrapping_add(ins.len as u16);
+    }
+    out.join("\n")
+}
+
+fn step(gb: &mut GameBoy, count: usize) -> Result<String, String> {
+    for i in 0..count {
+        let mut stop = gb.step_checked().map_err(|e| e.to_string())?;
+        // The first step always executes, passing over a breakpoint at the current PC;
+        // later steps stop at breakpoints.
+        if i == 0 && matches!(stop, Some(freki_core::Stop::Breakpoint { .. })) {
+            stop = gb.step_checked().map_err(|e| e.to_string())?;
+        }
+        if let Some(stop) = stop {
+            return Ok(format!(
+                "{}\n{}",
+                describe_stop(&stop),
+                disassembly(gb, gb.pc(), 1)
+            ));
+        }
+    }
+    Ok(format!(
+        "{}\n{}",
+        registers(gb),
+        disassembly(gb, gb.pc(), 1)
+    ))
+}
+
+/// Human-readable reason for a debugger stop.
+pub fn describe_stop(stop: &freki_core::Stop) -> String {
+    match stop {
+        freki_core::Stop::Breakpoint { pc } => format!("breakpoint at ${pc:04X}"),
+        freki_core::Stop::Watch { pc, hit } => {
+            let kind = match hit.access {
+                freki_core::Access::Read => "read",
+                freki_core::Access::Write => "write",
+            };
+            format!(
+                "{kind} ${:04X} = ${:02X} by instruction at ${pc:04X}",
+                hit.addr, hit.value
+            )
+        }
+    }
+}
+
+fn watch(gb: &mut GameBoy, args: &[&str]) -> Result<String, String> {
+    let (mode, addrs): (&str, Vec<&str>) = match args.last() {
+        Some(&m @ ("r" | "w" | "rw")) => (m, args[..args.len() - 1].to_vec()),
+        _ => ("w", args.to_vec()),
+    };
+    let (start, end) = match addrs.as_slice() {
+        [a] => (parse(a)?, parse(a)?),
+        [a, b] => (parse(a)?, parse(b)?),
+        _ => return Err("usage: watch ADDR [END] [r|w|rw]".into()),
+    };
+    let w = freki_core::Watchpoint::new(start, end, mode.contains('r'), mode.contains('w'));
+    let text = describe_watch(&w);
+    gb.breakpoints_mut().watches.push(w);
+    Ok(format!("watching {text}"))
+}
+
+/// e.g. `$C000-$C00F rw`.
+pub fn describe_watch(w: &freki_core::Watchpoint) -> String {
+    let range = if w.start == w.end {
+        format!("${:04X}", w.start)
+    } else {
+        format!("${:04X}-${:04X}", w.start, w.end)
+    };
+    let mode = match (w.read, w.write) {
+        (true, true) => "rw",
+        (true, false) => "r",
+        _ => "w",
+    };
+    format!("{range} {mode}")
+}
+
+fn list_breaks(gb: &GameBoy) -> String {
+    let b = gb.breakpoints();
+    if b.is_empty() {
+        return "no breakpoints or watchpoints".into();
+    }
+    let mut out = Vec::new();
+    for pc in &b.pc {
+        out.push(format!("  break ${pc:04X}"));
+    }
+    for (i, w) in b.watches.iter().enumerate() {
+        out.push(format!("  watch {i}: {}", describe_watch(w)));
+    }
+    out.join("\n")
 }
 
 /// Loads a `.cht` file into the cheat list, if it exists. Returns a message to show.
@@ -363,6 +536,26 @@ mod tests {
         assert!(c.execute("cheat reload", &mut gb).contains("loaded 1"));
         assert!(!gb.cheats().list()[0].enabled);
         fs::remove_file(&c.cheat_file).unwrap();
+    }
+
+    #[test]
+    fn debugger_commands() {
+        let mut gb = counting_gb();
+        let mut c = console("debug");
+        assert!(c.execute("regs", &mut gb).contains("PC=$0100"));
+        assert!(c.execute("dis $0150 2", &mut gb).contains("INC A"));
+        assert!(c.execute("break $0151", &mut gb).contains("$0151"));
+        assert!(c.execute("watch $C000 w", &mut gb).contains("$C000 w"));
+        assert!(c.execute("breaks", &mut gb).contains("break $0151"));
+        // Stepping from $0100 reaches the loop and stops at the breakpoint.
+        let out = c.execute("step 20", &mut gb);
+        assert!(out.contains("breakpoint at $0151"), "{out}");
+        let out = c.execute("step 5", &mut gb);
+        assert!(out.contains("write $C000"), "{out}");
+        assert!(c.execute("unwatch 0", &mut gb).contains("removed"));
+        assert!(c.execute("unbreak $0151", &mut gb).contains("removed"));
+        assert!(c.execute("pause", &mut gb).contains("paused"));
+        assert_eq!(c.take_pause_request(), Some(true));
     }
 
     #[test]

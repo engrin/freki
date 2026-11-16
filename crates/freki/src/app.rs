@@ -13,6 +13,7 @@ use freki_core::{
 
 use crate::audio::Audio;
 use crate::console::{self, Console};
+use crate::cpu_view::{self, CpuView};
 use crate::debug::DebugViews;
 use crate::gamepad::Gamepads;
 use crate::session::{Session, file_name};
@@ -178,6 +179,7 @@ pub struct FrekiApp {
     show_timing: bool,
     timing: Timing,
     debug: DebugViews,
+    cpu_view: CpuView,
 
     show_cheats: bool,
     show_search: bool,
@@ -215,6 +217,7 @@ impl FrekiApp {
             show_timing: false,
             timing: Timing::new(),
             debug: DebugViews::new(),
+            cpu_view: CpuView::new(),
             show_cheats: false,
             show_search: false,
             show_controls: false,
@@ -319,7 +322,7 @@ impl FrekiApp {
             self.with_session(|s| s.reset().map(|()| "reset".to_string()));
         }
         // Single-key hotkeys don't fire while typing into a text field.
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.text_edit_focused() {
             return;
         }
         let pressed = |key| ctx.input(|i| i.key_pressed(key));
@@ -344,10 +347,66 @@ impl FrekiApp {
             self.toggle_cheats();
         }
         if pressed(Key::P) {
-            self.paused = !self.paused;
-            self.set_status(if self.paused { "paused" } else { "resumed" });
+            self.set_paused(!self.paused);
+        }
+        if pressed(Key::F10) && self.paused {
+            self.debugger_action(cpu_view::Action::Continue);
+        }
+        if pressed(Key::F11) && self.paused {
+            self.debugger_action(cpu_view::Action::StepInstruction);
         }
         self.rewinding = ctx.input(|i| i.key_down(Key::R)) && self.session.is_some();
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        if !paused {
+            self.cpu_view.last_stop = None;
+        }
+        self.set_status(if paused { "paused" } else { "resumed" });
+    }
+
+    /// Executes a debugger request (continue, pause or one of the step sizes).
+    fn debugger_action(&mut self, action: cpu_view::Action) {
+        use cpu_view::Action;
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let gb = &mut session.gb;
+        let result: Result<Option<freki_core::Stop>, freki_core::CpuError> = match action {
+            Action::Continue => {
+                self.set_paused(false);
+                return;
+            }
+            Action::Pause => {
+                self.set_paused(true);
+                return;
+            }
+            // A step always executes, passing over a breakpoint at the current PC.
+            Action::StepInstruction => match gb.step_checked() {
+                Ok(Some(freki_core::Stop::Breakpoint { .. })) => gb.step_checked(),
+                other => other,
+            },
+            Action::StepScanline => {
+                let ly = gb.peek(0xFF44);
+                let mut result = Ok(None);
+                // A scanline is 456 dots; bound the loop in case the LCD is off.
+                for _ in 0..200 {
+                    result = gb.step_checked();
+                    if !matches!(result, Ok(None)) || gb.peek(0xFF44) != ly {
+                        break;
+                    }
+                }
+                result
+            }
+            Action::StepFrame => gb.run_frame_checked(),
+        };
+        gb.drain_audio(&mut self.samples);
+        self.samples.clear();
+        match result {
+            Ok(stop) => self.cpu_view.last_stop = stop,
+            Err(e) => self.set_status(format!("emulation stopped: {e}")),
+        }
     }
 
     fn toggle_cheats(&mut self) {
@@ -369,7 +428,7 @@ impl FrekiApp {
         let frames = self.frame_debt.floor() as u32;
         self.frame_debt -= frames as f64;
 
-        let typing = ctx.egui_wants_keyboard_input();
+        let typing = ctx.text_edit_focused();
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -422,12 +481,25 @@ impl FrekiApp {
                     .gb
                     .set_button(button, down || self.gamepads.is_pressed(button));
             }
-            if let Err(e) = session.run_frame() {
-                self.paused = true;
-                let msg = format!("emulation stopped: {e}");
-                eprintln!("freki: {msg}");
-                self.status = Some((msg, Instant::now()));
-                break;
+            match session.run_frame() {
+                Ok(None) => {}
+                Ok(Some(stop)) => {
+                    // Breakpoint or watchpoint: pause and show the debugger.
+                    self.paused = true;
+                    let msg = console::describe_stop(&stop);
+                    eprintln!("freki: {msg}");
+                    self.status = Some((msg, Instant::now()));
+                    self.cpu_view.last_stop = Some(stop);
+                    self.cpu_view.open = true;
+                    break;
+                }
+                Err(e) => {
+                    self.paused = true;
+                    let msg = format!("emulation stopped: {e}");
+                    eprintln!("freki: {msg}");
+                    self.status = Some((msg, Instant::now()));
+                    break;
+                }
             }
             session.gb.drain_audio(&mut self.samples);
             if let Some(audio) = &self.audio {
@@ -579,6 +651,10 @@ impl FrekiApp {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_timing, "Show frame timing");
+                ui.add_enabled(
+                    loaded,
+                    egui::Checkbox::new(&mut self.cpu_view.open, "Debugger"),
+                );
                 ui.add_enabled(
                     loaded,
                     egui::Checkbox::new(&mut self.debug.show_tiles, "Tiles"),
@@ -909,6 +985,9 @@ impl eframe::App for FrekiApp {
         }
         self.handle_hotkeys(&ctx);
         self.console.poll(self.session.as_mut().map(|s| &mut s.gb));
+        if let Some(paused) = self.console.take_pause_request() {
+            self.set_paused(paused);
+        }
         self.emulate(&ctx);
         self.update_texture(&ctx);
 
@@ -920,6 +999,12 @@ impl eframe::App for FrekiApp {
         self.cheat_window(&ctx);
         self.search_window(&ctx);
         self.info_windows(&ctx);
+        if self.cpu_view.open
+            && let Some(session) = self.session.as_mut()
+            && let Some(action) = self.cpu_view.show(&ctx, &mut session.gb, self.paused)
+        {
+            self.debugger_action(action);
+        }
         if let Some(session) = &self.session {
             self.debug.show(&ctx, &session.gb, &self.palette.colors());
         }

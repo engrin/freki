@@ -11,6 +11,7 @@
 mod app;
 mod audio;
 mod console;
+mod cpu_view;
 mod debug;
 mod gamepad;
 mod session;

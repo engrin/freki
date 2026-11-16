@@ -36,6 +36,12 @@ View → Tiles, Tile map and Sprites show video memory live: all 384 tiles, eith
 with the visible screen area outlined, and the 40 sprites with position, tile and flags.
 Hover tiles and map cells for their addresses.
 
+View → Debugger pauses and steps the CPU (F10 continue, F11 step one instruction, or step a
+scanline or frame), shows registers, disassembly around PC, memory and the stack, and sets
+breakpoints (click the dot next to an instruction) and read/write watchpoints on address
+ranges. Hitting one pauses the game and opens the debugger. The terminal console has the
+same tools: `regs`, `dis`, `step`, `break`, `watch`, `breaks`.
+
 | Game Boy | Keyboard | Gamepad |
 |---|---|---|
 | D-pad | Arrow keys | D-pad or left stick |

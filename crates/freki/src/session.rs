@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use freki_core::{FRAMES_PER_SECOND, GameBoy, Rewind};
+use freki_core::{FRAMES_PER_SECOND, GameBoy, Rewind, Stop};
 
 use crate::states::{StateSlots, write_atomic};
 
@@ -62,14 +62,14 @@ impl Session {
         self.rom_path.with_extension("cht")
     }
 
-    /// Runs one frame, keeping a rewind snapshot every few frames.
-    pub fn run_frame(&mut self) -> Result<(), Box<dyn Error>> {
+    /// Runs one frame, keeping a rewind snapshot every few frames. Returns early with the
+    /// reason if a breakpoint or watchpoint is hit.
+    pub fn run_frame(&mut self) -> Result<Option<Stop>, Box<dyn Error>> {
         if self.frame.is_multiple_of(REWIND_INTERVAL) {
             self.rewind.push(self.gb.save_state());
         }
         self.frame = self.frame.wrapping_add(1);
-        self.gb.run_frame()?;
-        Ok(())
+        Ok(self.gb.run_frame_checked()?)
     }
 
     /// Steps back one rewind snapshot. Returns `false` when the history is exhausted.
