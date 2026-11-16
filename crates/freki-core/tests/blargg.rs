@@ -76,11 +76,15 @@ fn run_on(name: &str, cgb: bool) {
         eprintln!("skipping {name}: not found (run scripts/fetch-test-roms.sh)");
         return;
     };
-    if cgb {
+    // Some of these ROMs are flagged as CGB-compatible: choose the model explicitly.
+    let model = if cgb {
         rom[0x143] = 0x80;
-    }
-    let mut gb = GameBoy::new(rom).expect("ROM loads");
-    assert_eq!(gb.model() == Model::Cgb, cgb);
+        Model::Cgb
+    } else {
+        Model::Dmg
+    };
+    let mut gb = GameBoy::with_model(rom, model).expect("ROM loads");
+    assert_eq!(gb.model(), model);
 
     let budget = CLOCK_HZ as u64 * TIMEOUT_SECONDS;
     let mut cycles = 0u64;
