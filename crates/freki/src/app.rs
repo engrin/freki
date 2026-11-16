@@ -8,7 +8,7 @@ use eframe::egui::{
     TextureOptions, pos2, vec2,
 };
 use freki_core::{
-    Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, SCREEN_HEIGHT, SCREEN_WIDTH,
+    BootRom, Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, SCREEN_HEIGHT, SCREEN_WIDTH,
 };
 
 use crate::audio::Audio;
@@ -17,6 +17,7 @@ use crate::cpu_view::{self, CpuView};
 use crate::debug::DebugViews;
 use crate::gamepad::Gamepads;
 use crate::session::{Session, file_name};
+use crate::settings::{self, Settings};
 use crate::states::SLOTS;
 
 const KEYMAP: [(Key, Button); 8] = [
@@ -162,6 +163,7 @@ struct SearchUi {
 
 pub struct FrekiApp {
     session: Option<Session>,
+    settings: Settings,
     audio: Option<Audio>,
     gamepads: Gamepads,
     console: Console,
@@ -202,6 +204,7 @@ impl FrekiApp {
         };
         let mut app = Self {
             session: None,
+            settings: Settings::load(cc.storage),
             audio,
             gamepads: Gamepads::open(),
             console: Console::start(),
@@ -240,9 +243,56 @@ impl FrekiApp {
         self.status = Some((message, Instant::now()));
     }
 
+    /// The boot ROM to start games with, if enabled and usable (problems are reported).
+    fn boot_rom(&mut self) -> Option<BootRom> {
+        match self.settings.boot_rom() {
+            Ok(boot) => boot,
+            Err(e) => {
+                self.set_status(format!("boot ROM not used: {e}"));
+                None
+            }
+        }
+    }
+
+    fn pick_boot_rom(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose DMG boot ROM")
+            .add_filter("Boot ROM", &["bin", "gb", "rom"])
+            .pick_file()
+        else {
+            return;
+        };
+        match settings::read_boot_rom(&path) {
+            Ok(_) => {
+                self.settings.boot_rom_path = Some(path);
+                self.settings.use_boot_rom = true;
+                self.boot_rom_changed();
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
+    /// Applies the boot ROM setting to the running game from its next reset.
+    fn boot_rom_changed(&mut self) {
+        let boot = self.boot_rom();
+        let on = boot.is_some();
+        if let Some(session) = &mut self.session {
+            session.set_boot_rom(boot);
+            let when = "from the next reset (Ctrl+R) or ROM load";
+            self.set_status(if on {
+                format!("boot ROM on {when}")
+            } else {
+                format!("boot ROM off {when}")
+            });
+        } else {
+            self.set_status(if on { "boot ROM on" } else { "boot ROM off" });
+        }
+    }
+
     fn open_rom(&mut self, ctx: &egui::Context, path: &Path) {
         self.close_rom();
-        match Session::open(path) {
+        let boot = self.boot_rom();
+        match Session::open(path, boot) {
             Ok((mut session, message)) => {
                 if let Some(audio) = &self.audio {
                     session.gb.set_audio_sample_rate(audio.sample_rate());
@@ -581,6 +631,8 @@ impl FrekiApp {
                     ui.close();
                     self.with_session(|s| s.reset().map(|()| "reset".to_string()));
                 }
+                ui.separator();
+                ui.menu_button("Boot ROM", |ui| self.boot_rom_menu(ui));
             });
 
             ui.menu_button("States", |ui| {
@@ -685,6 +737,29 @@ impl FrekiApp {
                 }
             });
         });
+    }
+
+    fn boot_rom_menu(&mut self, ui: &mut egui::Ui) {
+        let chosen = self.settings.boot_rom_path.is_some();
+        if ui
+            .add_enabled(
+                chosen,
+                egui::Checkbox::new(&mut self.settings.use_boot_rom, "Run boot ROM at start"),
+            )
+            .changed()
+        {
+            self.boot_rom_changed();
+        }
+        if ui.button("Choose file…").clicked() {
+            ui.close();
+            self.pick_boot_rom();
+        }
+        let file = match &self.settings.boot_rom_path {
+            Some(path) => file_name(path),
+            None => "no file chosen".into(),
+        };
+        ui.weak(file);
+        ui.weak("A 256-byte DMG boot ROM dump (not included).");
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -1010,6 +1085,10 @@ impl eframe::App for FrekiApp {
         }
 
         ctx.request_repaint();
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.settings.save(storage);
     }
 
     fn on_exit(&mut self) {

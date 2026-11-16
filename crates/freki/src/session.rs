@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use freki_core::{FRAMES_PER_SECOND, GameBoy, Rewind, Stop};
+use freki_core::{BootRom, CartridgeError, FRAMES_PER_SECOND, GameBoy, Rewind, Stop};
 
 use crate::states::{StateSlots, write_atomic};
 
@@ -16,8 +16,19 @@ pub const REWIND_INTERVAL: u32 = 2;
 /// …and this much history is kept (each snapshot is ~40 KB).
 const REWIND_SECONDS: f64 = 20.0;
 
+/// A machine with `rom` inserted: started by the boot ROM if there is one, otherwise in
+/// the state the boot ROM leaves behind.
+fn power_on(rom: Vec<u8>, boot_rom: Option<BootRom>) -> Result<GameBoy, CartridgeError> {
+    match boot_rom {
+        Some(boot) => GameBoy::with_boot_rom(rom, boot),
+        None => GameBoy::new(rom),
+    }
+}
+
 pub struct Session {
     pub gb: GameBoy,
+    /// Runs before the game on every (re)start, if set.
+    boot_rom: Option<BootRom>,
     pub rom_path: PathBuf,
     pub title: String,
     save_path: PathBuf,
@@ -28,11 +39,15 @@ pub struct Session {
 }
 
 impl Session {
-    /// Loads a ROM and its battery save, if any. Returns the session and a status message.
-    pub fn open(rom_path: &Path) -> Result<(Self, String), Box<dyn Error>> {
+    /// Loads a ROM and its battery save, if any; with `boot_rom`, the game starts from
+    /// power-on with the boot ROM. Returns the session and a status message.
+    pub fn open(
+        rom_path: &Path,
+        boot_rom: Option<BootRom>,
+    ) -> Result<(Self, String), Box<dyn Error>> {
         let rom =
             fs::read(rom_path).map_err(|e| format!("cannot read {}: {e}", rom_path.display()))?;
-        let mut gb = GameBoy::new(rom)?;
+        let mut gb = power_on(rom, boot_rom.clone())?;
         let save_path = rom_path.with_extension("sav");
         let mut message = format!("loaded {}", file_name(rom_path));
         if gb.save_data().is_some()
@@ -46,6 +61,7 @@ impl Session {
         Ok((
             Self {
                 gb,
+                boot_rom,
                 rom_path: rom_path.to_path_buf(),
                 title,
                 save_path,
@@ -56,6 +72,11 @@ impl Session {
             },
             message,
         ))
+    }
+
+    /// Uses `boot_rom` (or none) from the next reset on.
+    pub fn set_boot_rom(&mut self, boot_rom: Option<BootRom>) {
+        self.boot_rom = boot_rom;
     }
 
     pub fn cheat_file(&self) -> PathBuf {
@@ -92,7 +113,7 @@ impl Session {
     pub fn reset(&mut self) -> Result<(), Box<dyn Error>> {
         self.write_save()?;
         let rom = fs::read(&self.rom_path)?;
-        let mut gb = GameBoy::new(rom)?;
+        let mut gb = power_on(rom, self.boot_rom.clone())?;
         if let Some(data) = self.gb.save_data() {
             gb.load_save_data(data);
         }

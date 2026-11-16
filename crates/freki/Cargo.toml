@@ -9,7 +9,8 @@ authors.workspace = true
 
 [dependencies]
 cpal = "0.18.2"
-eframe = "0.37.0"
+eframe = { version = "0.37.0", features = ["persistence"] }
 freki-core = { version = "0.1.0", path = "../freki-core" }
 gilrs = "0.11.2"
 rfd = "0.18.0"
+serde = { version = "1.0.229", features = ["derive"] }

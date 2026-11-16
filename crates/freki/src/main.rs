@@ -5,7 +5,8 @@
 //! window.
 //!
 //! Files next to the ROM: `<rom>.sav` (battery save), `<rom>.ss0` … `<rom>.ss9` (save
-//! states) and `<rom>.cht` (cheats). The terminal freki was started from accepts cheat and
+//! states) and `<rom>.cht` (cheats). Settings such as the boot ROM are kept in the
+//! platform's app data directory. The terminal freki was started from accepts cheat and
 //! memory commands while the game runs (`help` lists them).
 
 mod app;
@@ -15,6 +16,7 @@ mod cpu_view;
 mod debug;
 mod gamepad;
 mod session;
+mod settings;
 mod states;
 
 use std::path::PathBuf;

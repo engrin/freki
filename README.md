@@ -31,7 +31,7 @@ cargo run --release -- path/to/game.gb   # or start without a ROM and use File �
 ```
 
 ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, quit),
-Emulation (pause, reset), States (save/load, slot), Cheats (on/off, cheat manager, memory
+Emulation (pause, reset, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
 search), View (scale, palette, frame timing, debug views) and Help (controls, about).
 
 View → Tiles, Tile map and Sprites show video memory live: all 384 tiles, either tile map
@@ -53,6 +53,14 @@ same tools: `regs`, `dis`, `step`, `break`, `watch`, `breaks`.
 | Pause | P | |
 
 Gamepads can be plugged in while freki is running.
+
+### Boot ROM
+
+By default games start in the state the boot ROM leaves behind. To see the scrolling
+Nintendo logo and hear the "ding", choose a dump of the 256-byte DMG boot ROM under
+Emulation → Boot ROM → Choose file… (it is Nintendo's code and not included). It applies
+from the next reset or ROM load, and freki remembers the choice. Game Boy Color boot ROMs
+are not supported yet.
 
 ### Save states and rewind
 
