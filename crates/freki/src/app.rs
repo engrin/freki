@@ -32,9 +32,11 @@ const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O)
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const RESET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
 
-/// Audio queued ahead of playback. Emulation slows down when more than this is
-/// buffered and speeds up when less than a quarter is, so audio stays in sync.
+/// Audio kept queued ahead of playback. Video runs at the Game Boy's own frame rate;
+/// audio stays in sync by nudging the output sample rate towards this buffer level.
 const AUDIO_LATENCY: Duration = Duration::from_millis(60);
+/// Largest audio rate correction (0.5 %: inaudible).
+const MAX_RATE_ADJUST: f64 = 0.005;
 /// Never emulate more than this many frames in one UI update (e.g. after a stall).
 const MAX_FRAMES_PER_UPDATE: u32 = 4;
 /// How long a status message stays in the status bar.
@@ -83,6 +85,69 @@ impl Palette {
     }
 }
 
+/// Frame pacing statistics, shown in the status bar by View → Show frame timing.
+struct Timing {
+    since: Instant,
+    frames: u32,
+    updates: u32,
+    catch_ups: u32,
+    /// Results of the last full second.
+    fps: f64,
+    refresh: f64,
+    catch_ups_per_s: u32,
+    audio_ms: f64,
+    rate_adjust: f64,
+}
+
+impl Timing {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            frames: 0,
+            updates: 0,
+            catch_ups: 0,
+            fps: 0.0,
+            refresh: 0.0,
+            catch_ups_per_s: 0,
+            audio_ms: 0.0,
+            rate_adjust: 0.0,
+        }
+    }
+
+    /// Records one UI update that emulated `frames` frames.
+    fn record(&mut self, frames: u32) {
+        self.updates += 1;
+        self.frames += frames;
+        if frames > 1 {
+            self.catch_ups += 1;
+        }
+        let elapsed = self.since.elapsed().as_secs_f64();
+        if elapsed >= 1.0 {
+            self.fps = self.frames as f64 / elapsed;
+            self.refresh = self.updates as f64 / elapsed;
+            self.catch_ups_per_s = self.catch_ups;
+            *self = Self {
+                since: Instant::now(),
+                frames: 0,
+                updates: 0,
+                catch_ups: 0,
+                ..*self
+            };
+        }
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "{:.1} fps · display {:.0} Hz · {} catch-up(s)/s · audio {:.0} ms ({:+.2} %)",
+            self.fps,
+            self.refresh,
+            self.catch_ups_per_s,
+            self.audio_ms,
+            self.rate_adjust * 100.0
+        )
+    }
+}
+
 /// Input state of the memory search window.
 #[derive(Default)]
 struct SearchUi {
@@ -109,6 +174,8 @@ pub struct FrekiApp {
     /// Frames of emulation owed to real time.
     frame_debt: f64,
     last_tick: Instant,
+    show_timing: bool,
+    timing: Timing,
 
     show_cheats: bool,
     show_search: bool,
@@ -143,6 +210,8 @@ impl FrekiApp {
             status: None,
             frame_debt: 0.0,
             last_tick: Instant::now(),
+            show_timing: false,
+            timing: Timing::new(),
             show_cheats: false,
             show_search: false,
             show_controls: false,
@@ -294,7 +363,7 @@ impl FrekiApp {
         self.last_tick = now;
         self.frame_debt =
             (self.frame_debt + elapsed * FRAMES_PER_SECOND).min(MAX_FRAMES_PER_UPDATE as f64);
-        let mut frames = self.frame_debt.floor() as u32;
+        let frames = self.frame_debt.floor() as u32;
         self.frame_debt -= frames as f64;
 
         let typing = ctx.egui_wants_keyboard_input();
@@ -322,16 +391,24 @@ impl FrekiApp {
         if self.paused {
             return;
         }
+        self.timing.record(frames);
 
-        // Keep audio in sync: skip a frame when too much is queued, add one when starved.
+        // Keep audio in sync without touching video: steer the sample rate so the buffer
+        // stays near its target, and refill it with silence if it ran dry.
         if let Some(audio) = &self.audio {
-            let target = (audio.sample_rate() as f64 * AUDIO_LATENCY.as_secs_f64()) as usize;
-            let queued = audio.queued_frames();
-            if queued > target {
-                frames = frames.saturating_sub(1);
-            } else if queued < target / 4 && frames < MAX_FRAMES_PER_UPDATE {
-                frames += 1;
+            let rate = audio.sample_rate() as f64;
+            let target = rate * AUDIO_LATENCY.as_secs_f64();
+            let mut queued = audio.queued_frames() as f64;
+            if queued < target / 4.0 {
+                audio.push_silence((target - queued) as usize);
+                queued = target;
             }
+            let adjust = ((target - queued) / target).clamp(-1.0, 1.0) * MAX_RATE_ADJUST;
+            session
+                .gb
+                .adjust_audio_sample_rate((rate * (1.0 + adjust)).round() as u32);
+            self.timing.audio_ms = queued / rate * 1000.0;
+            self.timing.rate_adjust = adjust;
         }
 
         self.gamepads.update();
@@ -498,6 +575,8 @@ impl FrekiApp {
                     }
                 }
                 ui.separator();
+                ui.checkbox(&mut self.show_timing, "Show frame timing");
+                ui.separator();
                 ui.label("Palette");
                 for palette in Palette::ALL {
                     ui.radio_value(&mut self.palette, palette, palette.name());
@@ -543,6 +622,10 @@ impl FrekiApp {
                 }
             }
             // Pause state is shown above; don't repeat a pause/resume message next to it.
+            if self.show_timing && self.session.is_some() {
+                ui.label(self.timing.summary());
+                ui.separator();
+            }
             if let Some((message, _)) = &self.status
                 && message != "paused"
             {

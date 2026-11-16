@@ -429,6 +429,15 @@ impl Apu {
         self.charge_factor = 0.999_958_f32.powf(CLOCK_HZ as f32 / rate as f32);
     }
 
+    /// Changes the output rate slightly without resetting the sampling clock, for keeping
+    /// audio in sync with the display (dynamic rate control). No effect until
+    /// [`Apu::set_sample_rate`] has been called.
+    pub fn adjust_sample_rate(&mut self, rate: u32) {
+        if self.sample_rate.is_some() {
+            self.sample_rate = Some(rate);
+        }
+    }
+
     /// Keeps the frontend's output settings when a save state replaces this APU.
     pub(crate) fn adopt_output_from(&mut self, old: &Apu) {
         self.sample_rate = old.sample_rate;

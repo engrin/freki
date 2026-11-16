@@ -129,6 +129,12 @@ impl GameBoy {
         self.bus.apu.set_sample_rate(rate);
     }
 
+    /// Nudges the audio output rate (e.g. ±0.5 %) without a click, so the frontend can keep
+    /// audio buffering steady while video runs at the Game Boy's own frame rate.
+    pub fn adjust_audio_sample_rate(&mut self, rate: u32) {
+        self.bus.apu.adjust_sample_rate(rate);
+    }
+
     /// Moves the audio produced so far into `out` as interleaved stereo `f32` samples.
     pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
         self.bus.apu.drain_samples(out);

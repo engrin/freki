@@ -56,6 +56,14 @@ impl Audio {
         self.queue.lock().unwrap().extend(samples);
     }
 
+    /// Queues `frames` stereo frames of silence (to refill an empty buffer cleanly).
+    pub fn push_silence(&self, frames: usize) {
+        self.queue
+            .lock()
+            .unwrap()
+            .extend(std::iter::repeat_n(0.0, frames * 2));
+    }
+
     /// Number of stereo frames waiting to be played.
     pub fn queued_frames(&self) -> usize {
         self.queue.lock().unwrap().len() / 2
