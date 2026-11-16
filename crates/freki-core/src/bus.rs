@@ -51,9 +51,8 @@ pub struct Bus {
     wram: [u8; 0x2000],
     #[serde(with = "BigArray")]
     hram: [u8; 0x7F],
-    /// Unimplemented I/O registers are stored here so reads return what was written.
-    #[serde(with = "BigArray")]
-    io: [u8; 0x80],
+    /// Last value written to DMA ($FF46).
+    dma_page: u8,
     pub interrupt_enable: u8,
     pub interrupt_flag: u8,
     dma: Dma,
@@ -83,7 +82,7 @@ impl Bus {
             breaks: Breakpoints::default(),
             wram: [0; 0x2000],
             hram: [0; 0x7F],
-            io: [0; 0x80],
+            dma_page: 0xFF,
             interrupt_enable: 0,
             interrupt_flag: 0x01,
             dma: Dma::default(),
@@ -113,9 +112,9 @@ impl Bus {
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupt_flag | 0xE0,
             0xFF10..=0xFF3F => self.apu.read(addr),
-            0xFF46 => self.io[0x46],
+            0xFF46 => self.dma_page,
             0xFF40..=0xFF4B => self.ppu.read_reg(addr),
-            0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize],
+            0xFF00..=0xFF7F => 0xFF, // unmapped on the DMG
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupt_enable,
         }
@@ -133,12 +132,18 @@ impl Bus {
             0xFEA0..=0xFEFF => {}
             0xFF00 => self.joypad.write(value),
             0xFF01..=0xFF02 => self.serial.write(addr, value),
-            0xFF04..=0xFF07 => self.timer.write(addr, value),
+            0xFF04 => {
+                // Resetting the counter can make the serial clock (bit 8) fall.
+                let serial_clock_high = self.timer.counter() & 0x100 != 0;
+                self.timer.write(addr, value);
+                self.serial.clock(serial_clock_high as u32);
+            }
+            0xFF05..=0xFF07 => self.timer.write(addr, value),
             0xFF0F => self.interrupt_flag = value & 0x1F,
             0xFF10..=0xFF3F => self.apu.write(addr, value),
             0xFF46 => self.oam_dma(value),
             0xFF40..=0xFF4B => self.ppu.write_reg(addr, value),
-            0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize] = value,
+            0xFF00..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupt_enable = value,
         }
@@ -147,7 +152,7 @@ impl Bus {
     /// Starts an OAM DMA from `page`×$100 (see [`Dma`]). A transfer already running keeps
     /// going during the new one's setup cycle.
     fn oam_dma(&mut self, page: u8) {
-        self.io[0x46] = page;
+        self.dma_page = page;
         self.dma.pending = Some((page, 8));
     }
 
@@ -229,7 +234,11 @@ impl Bus {
             }
         }
         self.apu.tick(cycles);
+        let counter = self.timer.counter() as u32;
         self.interrupt_flag |= self.timer.tick(cycles);
+        // Falling edges of counter bit 8 clock the serial port.
+        self.serial
+            .clock(((counter + cycles) >> 9) - (counter >> 9));
         self.interrupt_flag |= self.ppu.tick(cycles);
         self.interrupt_flag |= self.joypad.take_interrupt();
         self.interrupt_flag |= self.serial.take_interrupt();

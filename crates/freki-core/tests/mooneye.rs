@@ -58,11 +58,8 @@ mooneye! {
     add_sp_e_timing: "acceptance/add_sp_e_timing.gb",
     bits_mem_oam: "acceptance/bits/mem_oam.gb",
     bits_reg_f: "acceptance/bits/reg_f.gb",
-    #[ignore = "not passing yet"]
     bits_unused_hwio_gs: "acceptance/bits/unused_hwio-GS.gb",
-    #[ignore = "not passing yet"]
     boot_div_dmgabcmgb: "acceptance/boot_div-dmgABCmgb.gb",
-    #[ignore = "not passing yet"]
     boot_hwio_dmgabcmgb: "acceptance/boot_hwio-dmgABCmgb.gb",
     boot_regs_dmgabc: "acceptance/boot_regs-dmgABC.gb",
     call_cc_timing: "acceptance/call_cc_timing.gb",
@@ -120,7 +117,6 @@ mooneye! {
     reti_intr_timing: "acceptance/reti_intr_timing.gb",
     reti_timing: "acceptance/reti_timing.gb",
     rst_timing: "acceptance/rst_timing.gb",
-    #[ignore = "not passing yet"]
     serial_boot_sclk_align_dmgabcmgb: "acceptance/serial/boot_sclk_align-dmgABCmgb.gb",
     timer_div_write: "acceptance/timer/div_write.gb",
     timer_rapid_toggle: "acceptance/timer/rapid_toggle.gb",

@@ -34,7 +34,7 @@ impl Joypad {
     pub fn new() -> Self {
         Self {
             pressed: 0,
-            select: 0x30,
+            select: 0x00, // as the boot ROM leaves it (P1 reads $CF)
             irq: false,
         }
     }

@@ -26,7 +26,7 @@ pub struct Timer {
 impl Timer {
     pub fn new() -> Self {
         Self {
-            counter: 0xAB00,
+            counter: 0xABCC,
             ..Default::default()
         }
     }
@@ -67,6 +67,11 @@ impl Timer {
             }
             _ => {}
         }
+    }
+
+    /// The internal 16-bit counter (DIV is its upper byte).
+    pub fn counter(&self) -> u16 {
+        self.counter
     }
 
     /// The signal whose falling edge increments TIMA.
@@ -117,12 +122,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn div_write_can_increment_tima() {
+        let mut t = Timer::new();
+        t.write(0xFF04, 0);
+        t.write(0xFF07, 0b101);
+        t.tick(8); // counter bit 3 set
+        t.write(0xFF04, 0); // falling edge
+        assert_eq!(t.read(0xFF05), 1);
+    }
+
+    #[test]
     fn tima_overflow_reloads_and_interrupts() {
         let mut t = Timer::new();
+        t.write(0xFF04, 0);
         t.write(0xFF07, 0b101); // enabled, 262144 Hz = every 16 T-cycles
         t.write(0xFF06, 0x42);
         t.write(0xFF05, 0xFF);
-        t.write(0xFF04, 0);
         assert_eq!(t.tick(16), 0, "overflow: TIMA reads 0 for one M-cycle");
         assert_eq!(t.read(0xFF05), 0);
         assert_eq!(t.tick(4), interrupt::TIMER);
