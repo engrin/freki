@@ -8,7 +8,8 @@ Named after Freki, one of Odin's two wolves.
 > freki passes all of Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
 > MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves.
-> Missing: Game Boy Color, mid-scanline PPU effects.
+> The PPU draws pixel by pixel, so mid-scanline effects work, though not yet dot-exact
+> (the mealybug-tearoom tests still fail). Missing: Game Boy Color.
 
 ## Layout
 
@@ -47,7 +48,7 @@ On Linux you need the X11/Wayland, ALSA and udev development headers
 ## Testing
 
 ```sh
-./scripts/fetch-test-roms.sh                        # Blargg tests and dmg-acid2
+./scripts/fetch-test-roms.sh                        # Blargg, dmg-acid2, mealybug-tearoom
 cargo test --workspace                              # unit tests, Blargg, dmg-acid2 (headless)
 ```
 
