@@ -134,6 +134,8 @@ pub struct Ppu {
     tile_data: [u8; 2],
     sprites: Vec<Sprite>,
     next_sprite: usize,
+    /// Pipeline paused for one dot (window start with WX = 0 and fine scrolling).
+    window_stall: bool,
     obj_fetch: ObjFetch,
     obj_attr: [u8; 2],
     obj_low: u8,
@@ -195,6 +197,7 @@ impl Ppu {
             tile_data: [0; 2],
             sprites: Vec::with_capacity(MAX_SPRITES_PER_LINE),
             next_sprite: 0,
+            window_stall: false,
             obj_fetch: ObjFetch::Idle,
             obj_attr: [0; 2],
             obj_low: 0,
@@ -405,11 +408,20 @@ impl Ppu {
                 0 | 1 if self.ly != 0 || self.dot == 1 => {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
+                    if self.dot == 1 {
+                        self.sprites.clear();
+                    }
                 }
+                // OAM scan checks entry i at dot 2i + 3, with the OBJ size at that moment.
+                3..=81 if self.dot % 2 == 1 => self.scan_oam_entry((self.dot as usize - 3) / 2),
+                _ => {}
+            }
+            match self.dot {
                 MODE3_STAT_DOT => {
                     self.mode = Mode::Drawing;
                     self.irq_mode = Mode::Drawing;
-                    self.oam_scan();
+                    self.sprites.sort_by_key(|s| s.x); // stable: equal X keeps OAM order
+                    self.next_sprite = 0;
                 }
                 PIPELINE_START_DOT => self.start_pipeline(),
                 _ => {}
@@ -454,31 +466,26 @@ impl Ppu {
         irq
     }
 
-    /// Selects up to 10 sprites covering this line, ordered by X (ties: OAM order).
-    fn oam_scan(&mut self) {
+    /// OAM scan step: selects entry `index` if it covers this line (max 10 per line).
+    fn scan_oam_entry(&mut self, index: usize) {
+        if index >= 40 || self.sprites.len() == MAX_SPRITES_PER_LINE {
+            return;
+        }
         let height: i16 = if self.lcdc & lcdc::OBJ_SIZE_8X16 != 0 {
             16
         } else {
             8
         };
-        let ly = self.ly as i16;
-        self.sprites.clear();
-        for s in self.oam.as_chunks::<4>().0 {
-            let top = s[0] as i16 - 16;
-            if (top..top + height).contains(&ly) {
-                self.sprites.push(Sprite {
-                    y: s[0],
-                    x: s[1],
-                    tile: s[2],
-                    attr: s[3],
-                });
-                if self.sprites.len() == MAX_SPRITES_PER_LINE {
-                    break;
-                }
-            }
+        let s = &self.oam[index * 4..index * 4 + 4];
+        let top = s[0] as i16 - 16;
+        if (top..top + height).contains(&(self.ly as i16)) {
+            self.sprites.push(Sprite {
+                y: s[0],
+                x: s[1],
+                tile: s[2],
+                attr: s[3],
+            });
         }
-        self.sprites.sort_by_key(|s| s.x); // stable: equal X keeps OAM order
-        self.next_sprite = 0;
     }
 
     fn start_pipeline(&mut self) {
@@ -491,6 +498,7 @@ impl Ppu {
         self.fetch = Fetch::Tile1;
         self.obj_fetch = ObjFetch::Idle;
         self.during_object_fetch = false;
+        self.window_stall = false;
         self.disable_insertion_glitch = false;
         self.insert_bg_pixel = false;
     }
@@ -502,7 +510,11 @@ impl Ppu {
             return;
         }
 
-        self.check_window();
+        if self.window_stall {
+            self.window_stall = false;
+        } else if self.check_window() {
+            return;
+        }
 
         // DMG quirk: a pixel is inserted when WX matches again after the window started.
         if self.wx == self.position.wrapping_add(7)
@@ -548,10 +560,11 @@ impl Ppu {
         if x > POSITION_START { 0 } else { x }
     }
 
-    /// Starts the window if WX matches the current position.
-    fn check_window(&mut self) {
+    /// Starts the window if WX matches the current position. Returns `true` if the rest
+    /// of this dot is delayed by a pipeline stall.
+    fn check_window(&mut self) -> bool {
         if self.wx_triggered || !self.wy_triggered || self.lcdc & lcdc::WINDOW_ENABLE == 0 {
-            return;
+            return false;
         }
         let pos = self.position;
         let activate = if self.wx == 0 {
@@ -579,7 +592,13 @@ impl Ppu {
             self.wx_triggered = true;
             self.fetch = Fetch::Tile1;
             self.window_being_fetched = true;
+            if self.wx == 0 && self.scx & 7 != 0 {
+                // DMG: starting the window at WX = 0 with fine scroll costs one extra dot.
+                self.window_stall = true;
+                return true;
+            }
         }
+        false
     }
 
     /// Y used by the fetcher: the window line, or LY + SCY for the background.

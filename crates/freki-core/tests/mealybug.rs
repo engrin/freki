@@ -81,7 +81,6 @@ mealybug! {
     #[ignore = "not yet pixel-exact"]
     m3_scy_change,
     m3_window_timing,
-    #[ignore = "not yet pixel-exact"]
     m3_window_timing_wx_0,
     m3_wx_4_change,
     m3_wx_4_change_sprites,
