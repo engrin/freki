@@ -135,7 +135,6 @@ mooneye! {
     mbc1_bits_bank2: "emulator-only/mbc1/bits_bank2.gb",
     mbc1_bits_mode: "emulator-only/mbc1/bits_mode.gb",
     mbc1_bits_ramg: "emulator-only/mbc1/bits_ramg.gb",
-    #[ignore = "not passing yet"]
     mbc1_multicart_rom_8mb: "emulator-only/mbc1/multicart_rom_8Mb.gb",
     mbc1_ram_256kb: "emulator-only/mbc1/ram_256kb.gb",
     mbc1_ram_64kb: "emulator-only/mbc1/ram_64kb.gb",

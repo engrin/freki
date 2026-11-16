@@ -27,6 +27,8 @@ pub enum Mbc {
         bank2: u8,
         /// Banking mode ($6000–$7FFF): when set, BANK2 also applies to $0000–$3FFF and RAM.
         advanced: bool,
+        /// MBC1M multicart wiring: BANK2 selects ROM bits 4–5 and BANK1 bit 4 is unused.
+        multicart: bool,
     },
     /// MBC2: up to 256 KiB ROM and 512×4 bits of built-in RAM.
     Mbc2 { ram_enabled: bool, rom_bank: u8 },
@@ -157,6 +159,13 @@ pub struct Cartridge {
     ram_dirty: bool,
 }
 
+/// Detects an MBC1M multicart (several games on one 8 Mbit MBC1 cartridge): a second
+/// Nintendo logo in the header of the game at bank $10.
+fn is_mbc1_multicart(rom: &[u8]) -> bool {
+    const LOGO: std::ops::Range<usize> = 0x104..0x134;
+    rom.len() == 0x10_0000 && rom[LOGO] == rom[0x40000 + LOGO.start..0x40000 + LOGO.end]
+}
+
 impl Cartridge {
     pub fn from_rom(rom: Vec<u8>) -> Result<Self, CartridgeError> {
         if rom.len() < 0x8000 {
@@ -170,6 +179,7 @@ impl Cartridge {
                 bank1: 1,
                 bank2: 0,
                 advanced: false,
+                multicart: is_mbc1_multicart(&rom),
             },
             0x05 | 0x06 => Mbc::Mbc2 {
                 ram_enabled: false,
@@ -318,12 +328,20 @@ impl Cartridge {
                 bank1,
                 bank2,
                 advanced,
+                multicart,
                 ..
-            } => match (low, advanced) {
-                (true, false) => 0,
-                (true, true) => (bank2 as usize) << 5,
-                (false, _) => ((bank2 as usize) << 5) | bank1 as usize,
-            },
+            } => {
+                let (shift, bank1) = if multicart {
+                    (4, bank1 & 0x0F)
+                } else {
+                    (5, bank1)
+                };
+                match (low, advanced) {
+                    (true, false) => 0,
+                    (true, true) => (bank2 as usize) << shift,
+                    (false, _) => ((bank2 as usize) << shift) | bank1 as usize,
+                }
+            }
             Mbc::Mbc2 { rom_bank, .. } => {
                 if low {
                     0
@@ -358,6 +376,7 @@ impl Cartridge {
                 bank1,
                 bank2,
                 advanced,
+                ..
             } => match addr {
                 0x0000..=0x1FFF => *ram_enabled = value & 0x0F == 0x0A,
                 0x2000..=0x3FFF => *bank1 = (value & 0x1F).max(1),

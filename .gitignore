@@ -8,5 +8,6 @@
 *.gbc
 *.sav
 /roms/
+/bios/
 *.ss[0-9]
 *.cht
