@@ -251,17 +251,27 @@ impl Ppu {
         self.lcdc & lcdc::LCD_ENABLE != 0
     }
 
+    /// LY as read by the CPU and compared with LYC. Line 153 reads as 0 after its first
+    /// 4 dots, so LYC = 0 matches during the last line of VBlank.
+    fn ly_register(&self) -> u8 {
+        if self.ly == LINES_PER_FRAME - 1 && self.dot >= 4 {
+            0
+        } else {
+            self.ly
+        }
+    }
+
     pub fn read_reg(&self, addr: u16) -> u8 {
         match addr {
             0xFF40 => self.lcdc,
             0xFF41 => {
-                let coincidence = u8::from(self.ly == self.lyc) << 2;
+                let coincidence = u8::from(self.ly_register() == self.lyc) << 2;
                 let mode = if self.lcd_on() { self.mode as u8 } else { 0 };
                 0x80 | self.stat | coincidence | mode
             }
             0xFF42 => self.scy,
             0xFF43 => self.scx,
-            0xFF44 => self.ly,
+            0xFF44 => self.ly_register(),
             0xFF45 => self.lyc,
             0xFF47 => self.bgp,
             0xFF48 => self.obp0,
@@ -360,9 +370,6 @@ impl Ppu {
                         self.window_y = 0xFF;
                         self.wy_triggered = false;
                     }
-                    if self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wy == self.ly {
-                        self.wy_triggered = true;
-                    }
                 }
                 MODE3_STAT_DOT => {
                     self.mode = Mode::Drawing;
@@ -371,6 +378,11 @@ impl Ppu {
                 }
                 PIPELINE_START_DOT => self.start_pipeline(),
                 _ => {}
+            }
+            // The WY == LY comparison runs continuously (not just at line start), so
+            // enabling the window or changing WY mid-line can still trigger it.
+            if !self.wy_triggered && self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wy == self.ly {
+                self.wy_triggered = true;
             }
             if self.pipeline_active {
                 self.mode3_dot();
@@ -386,13 +398,17 @@ impl Ppu {
                 self.irq_mode = Mode::VBlank;
                 self.frame_ready = true;
                 irq |= interrupt::VBLANK;
+                // DMG quirk: entering VBlank also triggers the OAM (mode 2) STAT interrupt.
+                if self.stat & stat::OAM_INT != 0 && !self.stat_line {
+                    irq |= interrupt::STAT;
+                }
             } else if self.ly == LINES_PER_FRAME {
                 self.ly = 0;
             }
         }
 
         // STAT interrupt fires on a rising edge of the OR of all enabled sources.
-        let line = (self.stat & stat::LYC_INT != 0 && self.ly == self.lyc)
+        let line = (self.stat & stat::LYC_INT != 0 && self.ly_register() == self.lyc)
             || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
             || (self.stat & stat::VBLANK_INT != 0 && self.irq_mode == Mode::VBlank)
             || (self.stat & stat::OAM_INT != 0 && self.irq_mode == Mode::OamScan);

@@ -52,7 +52,6 @@ macro_rules! mealybug {
 }
 
 mealybug! {
-    #[ignore = "not yet pixel-exact"]
     m2_win_en_toggle,
     #[ignore = "not yet pixel-exact"]
     m3_bgp_change,
