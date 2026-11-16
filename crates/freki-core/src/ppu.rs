@@ -17,6 +17,8 @@
 //! where they happen. Some DMG register writes land slightly off the CPU's M-cycle grid;
 //! the CPU handles that (see `Cpu::mem_write`).
 
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use std::collections::VecDeque;
 
 use crate::bus::interrupt;
@@ -52,7 +54,7 @@ mod stat {
     pub const LYC_INT: u8 = 1 << 6;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Mode {
     HBlank = 0,
@@ -63,7 +65,7 @@ pub enum Mode {
 
 /// Background fetcher state. VRAM accesses take two dots: the address is formed on the
 /// first (`*1`) and the data read on the second (`*2`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 enum Fetch {
     #[default]
     Tile1,
@@ -76,7 +78,7 @@ enum Fetch {
 }
 
 /// Progress of a sprite fetch, which pauses pixel output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ObjFetch {
     #[default]
     Idle,
@@ -90,7 +92,7 @@ enum ObjFetch {
 }
 
 /// A sprite selected during OAM scan for the current line.
-#[derive(Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 struct Sprite {
     y: u8,
     x: u8,
@@ -98,16 +100,20 @@ struct Sprite {
     attr: u8,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 struct ObjPixel {
     color: u8,
     palette1: bool,
     behind_bg: bool,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Ppu {
+    #[serde(with = "BigArray")]
     vram: [u8; 0x2000],
+    #[serde(with = "BigArray")]
     oam: [u8; 0xA0],
+    #[serde(with = "BigArray")]
     framebuffer: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
     frame_ready: bool,
     /// Dot position within the current scanline.

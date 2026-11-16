@@ -3,6 +3,7 @@
 //! Supported: no MBC, MBC1, MBC2, MBC3 (including the real-time clock) and MBC5.
 //! Together these cover the vast majority of DMG games.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::CLOCK_HZ;
@@ -13,7 +14,7 @@ const RAM_BANK: usize = 0x2000;
 const MBC2_RAM: usize = 512;
 
 /// Memory bank controller and its register state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum Mbc {
     /// No MBC: 32 KiB ROM, optionally up to 8 KiB RAM.
     RomOnly,
@@ -47,7 +48,7 @@ pub enum Mbc {
 }
 
 /// MBC3 real-time clock. It runs on emulated time: one second per [`CLOCK_HZ`] T-cycles.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rtc {
     /// Live registers: seconds, minutes, hours, day low, day high.
     regs: [u8; 5],
@@ -144,7 +145,10 @@ impl fmt::Display for CartridgeError {
 
 impl std::error::Error for CartridgeError {}
 
+#[derive(Serialize, Deserialize)]
 pub struct Cartridge {
+    /// Not part of save states: restored from the loaded ROM.
+    #[serde(skip)]
     rom: Vec<u8>,
     ram: Vec<u8>,
     mbc: Mbc,
@@ -200,6 +204,13 @@ impl Cartridge {
             battery,
             ram_dirty: false,
         })
+    }
+
+    /// Moves the ROM over from `old` (save states do not contain it). Battery RAM restored
+    /// from a state is marked dirty so the save file is brought in line with it.
+    pub(crate) fn adopt_rom_from(&mut self, old: &mut Cartridge) {
+        self.rom = std::mem::take(&mut old.rom);
+        self.ram_dirty = self.battery;
     }
 
     /// Game title from the header ($0134–$0143), trimmed at the first NUL.

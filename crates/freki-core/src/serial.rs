@@ -4,7 +4,9 @@
 //! Blargg's print their results this way, so tests can run without a screen.
 
 use crate::bus::interrupt;
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize)]
 pub struct Serial {
     data: u8,
     control: u8,

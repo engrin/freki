@@ -19,6 +19,8 @@ use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 /// Interrupt bits, shared by IE ($FFFF) and IF ($FF0F).
 pub mod interrupt {
@@ -29,6 +31,7 @@ pub mod interrupt {
     pub const JOYPAD: u8 = 1 << 4;
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Bus {
     pub cart: Cartridge,
     pub ppu: Ppu,
@@ -36,9 +39,12 @@ pub struct Bus {
     pub joypad: Joypad,
     pub serial: Serial,
     pub apu: Apu,
+    #[serde(with = "BigArray")]
     wram: [u8; 0x2000],
+    #[serde(with = "BigArray")]
     hram: [u8; 0x7F],
     /// Unimplemented I/O registers are stored here so reads return what was written.
+    #[serde(with = "BigArray")]
     io: [u8; 0x80],
     pub interrupt_enable: u8,
     pub interrupt_flag: u8,
@@ -117,6 +123,13 @@ impl Bus {
             let byte = self.read(src + i);
             self.ppu.write_oam(0xFE00 + i, byte);
         }
+    }
+
+    /// After loading a save state into `self`: takes over what states do not contain
+    /// from the bus being replaced (the ROM and the audio output configuration).
+    pub(crate) fn adopt_runtime_from(&mut self, old: &mut Bus) {
+        self.cart.adopt_rom_from(&mut old.cart);
+        self.apu.adopt_output_from(&old.apu);
     }
 
     pub fn read_u16(&self, addr: u16) -> u16 {

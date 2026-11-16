@@ -6,6 +6,7 @@
 //! frontend drains with [`Apu::drain_samples`].
 
 use crate::CLOCK_HZ;
+use serde::{Deserialize, Serialize};
 
 /// The frame sequencer runs at 512 Hz.
 const FRAME_SEQUENCER_PERIOD: u32 = CLOCK_HZ / 512;
@@ -28,7 +29,7 @@ const READ_MASKS: [u8; 0x20] = [
 ];
 
 /// Length counter: silences a channel after a programmable time.
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct Length {
     counter: u16,
     enabled: bool,
@@ -68,7 +69,7 @@ impl Length {
 }
 
 /// Volume envelope (NRx2).
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct Envelope {
     initial: u8,
     increase: bool,
@@ -112,7 +113,7 @@ impl Envelope {
 }
 
 /// Channels 1 and 2. Only channel 1 uses the frequency sweep.
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct Square {
     on: bool,
     duty: u8,
@@ -207,7 +208,7 @@ impl Square {
 }
 
 /// Channel 3: plays 32 4-bit samples from wave RAM.
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct Wave {
     on: bool,
     dac_on: bool,
@@ -297,7 +298,7 @@ impl Wave {
 }
 
 /// Channel 4: pseudo-random noise from a linear-feedback shift register.
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct Noise {
     on: bool,
     shift: u8,
@@ -349,6 +350,7 @@ impl Noise {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Apu {
     powered: bool,
     /// Raw register values for $FF10–$FF2F, used for reads.
@@ -364,6 +366,8 @@ pub struct Apu {
     sample_rate: Option<u32>,
     /// Fixed-point sample clock: adds `sample_rate` per T-cycle, emits at `CLOCK_HZ`.
     sample_clock: u32,
+    /// Not part of save states: output not yet handed to the frontend.
+    #[serde(skip)]
     samples: Vec<f32>,
     /// High-pass filter state (removes the DC offset, like the real hardware's capacitor).
     capacitor: [f32; 2],
@@ -423,6 +427,14 @@ impl Apu {
         self.sample_clock = 0;
         // The DMG's output capacitor discharges by 0.999958 per T-cycle.
         self.charge_factor = 0.999_958_f32.powf(CLOCK_HZ as f32 / rate as f32);
+    }
+
+    /// Keeps the frontend's output settings when a save state replaces this APU.
+    pub(crate) fn adopt_output_from(&mut self, old: &Apu) {
+        self.sample_rate = old.sample_rate;
+        self.sample_clock = old.sample_clock;
+        self.charge_factor = old.charge_factor;
+        self.samples.clear();
     }
 
     /// Moves all samples produced so far into `out` (interleaved left, right).

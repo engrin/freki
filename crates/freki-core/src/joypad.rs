@@ -1,8 +1,9 @@
 //! Joypad register P1/JOYP ($FF00).
 
 use crate::bus::interrupt;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
     Right,
     Left,
@@ -14,6 +15,7 @@ pub enum Button {
     Start,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Joypad {
     /// Pressed buttons; bit set = pressed. Low nibble d-pad, high nibble actions.
     pressed: u8,

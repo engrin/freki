@@ -18,6 +18,7 @@
 //! Writes to some DMG I/O registers land a T-cycle or two off that grid, or briefly show an
 //! intermediate value; see [`Cpu::mem_write`].
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::bus::Bus;
@@ -48,7 +49,7 @@ impl fmt::Display for CpuError {
 
 impl std::error::Error for CpuError {}
 
-#[derive(Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Registers {
     pub a: u8,
     pub f: u8,
@@ -104,6 +105,7 @@ impl Registers {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Cpu {
     pub regs: Registers,
     /// Interrupt master enable.

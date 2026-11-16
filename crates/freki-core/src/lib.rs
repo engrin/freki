@@ -11,12 +11,14 @@ pub mod cpu;
 pub mod joypad;
 pub mod ppu;
 pub mod serial;
+pub mod state;
 pub mod timer;
 
 pub use cartridge::{Cartridge, CartridgeError};
 pub use cpu::CpuError;
 pub use joypad::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+pub use state::{Rewind, StateError};
 
 use bus::Bus;
 use cpu::Cpu;
@@ -118,6 +120,39 @@ impl GameBoy {
 
     pub fn cartridge(&self) -> &Cartridge {
         &self.bus.cart
+    }
+
+    /// Title plus header and global checksums: identifies the game a state belongs to.
+    fn cartridge_identity(&self) -> (String, [u8; 3]) {
+        let cart = &self.bus.cart;
+        let checksums = [
+            cart.read_rom(0x14D),
+            cart.read_rom(0x14E),
+            cart.read_rom(0x14F),
+        ];
+        (cart.title(), checksums)
+    }
+
+    /// Captures the complete machine state (everything except the ROM).
+    pub fn save_state(&self) -> Vec<u8> {
+        let (title, checksums) = self.cartridge_identity();
+        let header = state::Header::new(title, checksums);
+        let mut out = postcard::to_stdvec(&header).expect("header serializes");
+        out.extend(postcard::to_stdvec(&(&self.cpu, &self.bus)).expect("state serializes"));
+        out
+    }
+
+    /// Restores a state from [`GameBoy::save_state`]. The state must come from the same
+    /// game; on error the current state is left untouched.
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let (header, rest): (state::Header, _) = postcard::take_from_bytes(data)?;
+        let (title, checksums) = self.cartridge_identity();
+        header.check(&title, checksums)?;
+        let (cpu, mut bus): (Cpu, Bus) = postcard::from_bytes(rest)?;
+        bus.adopt_runtime_from(&mut self.bus);
+        self.cpu = cpu;
+        self.bus = bus;
+        Ok(())
     }
 }
 

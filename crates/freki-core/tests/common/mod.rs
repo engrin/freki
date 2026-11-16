@@ -1,4 +1,7 @@
-//! Helpers shared by the screenshot-comparison tests.
+//! Helpers shared by the screenshot-comparison and save state tests.
+
+// Shared by several test binaries; each uses only some of these helpers.
+#![allow(dead_code)]
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};

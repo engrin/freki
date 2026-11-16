@@ -1,8 +1,9 @@
 //! DIV/TIMA/TMA/TAC timer ($FF04–$FF07).
 
 use crate::bus::interrupt;
+use serde::{Deserialize, Serialize};
 
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Timer {
     /// Internal 16-bit counter; DIV is its upper byte.
     counter: u16,
