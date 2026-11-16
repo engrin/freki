@@ -65,7 +65,7 @@ mealybug! {
     m3_lcdc_tile_sel_change,
     m3_lcdc_tile_sel_win_change,
     m3_lcdc_win_en_change_multiple,
-    #[ignore = "43 pixels off on 7 rows: window enable/WX edge cases"]
+    #[ignore = "3 pixels off on 2 rows: window start edge cases (unit-specific on DMG)"]
     m3_lcdc_win_en_change_multiple_wx,
     m3_lcdc_win_map_change,
     m3_obp0_change,

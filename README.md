@@ -9,7 +9,7 @@ Named after Freki, one of Odin's two wolves.
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
 > MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves.
 > The PPU draws pixel by pixel with DMG-accurate timing: 22 of the 24 mealybug-tearoom
-> mid-scanline tests match real hardware exactly (the other two are off by a few pixels).
+> mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels).
 > Missing: Game Boy Color.
 
 ## Layout
