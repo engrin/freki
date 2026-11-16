@@ -54,13 +54,11 @@ macro_rules! mealybug {
 mealybug! {
     m2_win_en_toggle,
     m3_bgp_change,
-    #[ignore = "not yet pixel-exact"]
     m3_bgp_change_sprites,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_bg_en_change,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_bg_map_change,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_en_change,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_en_change_variant,
@@ -77,10 +75,8 @@ mealybug! {
     m3_lcdc_win_en_change_multiple_wx,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_win_map_change,
-    #[ignore = "not yet pixel-exact"]
     m3_obp0_change,
     m3_scx_high_5_bits,
-    #[ignore = "not yet pixel-exact"]
     m3_scx_low_3_bits,
     #[ignore = "not yet pixel-exact"]
     m3_scy_change,

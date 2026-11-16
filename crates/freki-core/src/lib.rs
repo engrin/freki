@@ -38,9 +38,12 @@ impl GameBoy {
     /// Creates a Game Boy with `rom` inserted, in the post-boot-ROM state.
     pub fn new(rom: Vec<u8>) -> Result<Self, CartridgeError> {
         let cart = Cartridge::from_rom(rom)?;
+        let logo: [u8; 48] = std::array::from_fn(|i| cart.read_rom(0x104 + i as u16));
+        let mut bus = Bus::new(cart);
+        bus.ppu.load_boot_logo(&logo);
         Ok(Self {
             cpu: Cpu::new_post_boot(),
-            bus: Bus::new(cart),
+            bus,
         })
     }
 

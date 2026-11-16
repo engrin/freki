@@ -221,6 +221,38 @@ impl Ppu {
         }
     }
 
+    /// Recreates the VRAM contents the DMG boot ROM leaves behind: the cartridge header's
+    /// logo (`$0104–$0133`) decompressed into tiles 1–24, the ® symbol in tile 25, and
+    /// their tile map entries. Some games and tests rely on these tiles being there.
+    pub fn load_boot_logo(&mut self, logo: &[u8; 48]) {
+        /// Doubles each bit of a nibble horizontally: 0b1011 -> 0b11001111.
+        fn widen(nibble: u8) -> u8 {
+            (0..4).fold(0, |acc, bit| {
+                acc | (((nibble >> bit) & 1) * 0b11) << (bit * 2)
+            })
+        }
+        // Each logo byte becomes 4 tile rows: one nibble per two (doubled) rows,
+        // written to the low bitplane only.
+        for (i, &byte) in logo.iter().enumerate() {
+            for (half, nibble) in [byte >> 4, byte & 0x0F].into_iter().enumerate() {
+                let row = widen(nibble);
+                let addr = 0x10 + i * 8 + half * 4;
+                self.vram[addr] = row;
+                self.vram[addr + 2] = row;
+            }
+        }
+        const REGISTERED: [u8; 8] = [0x3C, 0x42, 0xB9, 0xA5, 0xB9, 0xA5, 0x42, 0x3C];
+        for (i, &row) in REGISTERED.iter().enumerate() {
+            self.vram[0x190 + i * 2] = row;
+        }
+        // Tile map: tiles 1–12 at $9904, 13–24 at $9924, ® at $9910.
+        for i in 0..12u8 {
+            self.vram[0x1904 + i as usize] = i + 1;
+            self.vram[0x1924 + i as usize] = i + 13;
+        }
+        self.vram[0x1910] = 0x19;
+    }
+
     pub fn framebuffer(&self) -> &[u8; SCREEN_WIDTH * SCREEN_HEIGHT] {
         &self.framebuffer
     }
@@ -845,6 +877,19 @@ mod tests {
         ppu.write_reg(0xFF47, 0b1110_0100); // identity palette
         ppu.tick(DOTS_PER_LINE);
         assert_eq!(&ppu.framebuffer[..9], &[3, 3, 3, 3, 3, 3, 3, 3, 0]);
+    }
+
+    #[test]
+    fn boot_logo_is_decompressed_like_the_boot_rom() {
+        let mut ppu = Ppu::new();
+        let mut logo = [0u8; 48];
+        logo[0] = 0xCE; // first byte of the Nintendo logo
+        ppu.load_boot_logo(&logo);
+        // $C = 1100 -> 11110000, $E = 1110 -> 11111100; each row twice, low plane only.
+        assert_eq!(&ppu.vram[0x10..0x18], &[0xF0, 0, 0xF0, 0, 0xFC, 0, 0xFC, 0]);
+        assert_eq!(ppu.vram[0x190], 0x3C); // ® tile
+        assert_eq!(ppu.vram[0x1904], 1);
+        assert_eq!(ppu.vram[0x1910], 0x19);
     }
 
     /// Dots STAT reports mode 3 on line 0 with the given setup.
