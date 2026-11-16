@@ -6,7 +6,7 @@ members = ["crates/freki-core", "crates/freki"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/engrin/gameboy-emu"
+repository = "https://github.com/engrin/freki"
 authors = ["engrin"]
 
 [profile.release]
