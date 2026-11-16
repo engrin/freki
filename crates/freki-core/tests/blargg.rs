@@ -139,3 +139,10 @@ blargg! { "dmg_sound":
 fn cpu_instrs_all() {
     run_blargg("cpu_instrs.gb");
 }
+
+/// The combined ROM runs all 12 sound tests in a row. Fails until 09, 10 and 12 pass.
+#[test]
+#[ignore = "includes the three wave-RAM timing tests that need M-cycle accuracy"]
+fn dmg_sound_all() {
+    run_blargg("dmg_sound.gb");
+}
