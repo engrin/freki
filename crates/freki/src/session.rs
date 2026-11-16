@@ -13,7 +13,7 @@ use crate::states::{StateSlots, write_atomic};
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
 /// A rewind snapshot is taken every this many frames…
 pub const REWIND_INTERVAL: u32 = 2;
-/// …and this much history is kept (each snapshot is ~40 KB).
+/// …and this much history is kept (stored as differences: a few MB in all).
 const REWIND_SECONDS: f64 = 20.0;
 
 /// How games start: on which console, and with which boot ROMs.

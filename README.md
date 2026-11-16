@@ -89,7 +89,7 @@ in grey. Changes apply from the next reset or ROM load, and freki remembers them
 | Tab (hold) | Fast-forward (2×–8×, set under Emulation; sound muted) |
 | F12 | Screenshot: the screen as shown, saved next to the ROM as `<rom>-001.png`, … |
 
-Save states are written next to the ROM as `<rom>.ss0` … `<rom>.ss9` (about 40 KB each).
+Save states are written next to the ROM as `<rom>.ss0` … `<rom>.ss9` (about 150 KB each).
 They only load into the same game, and only in freki versions with the same state format.
 Status messages appear in the window title.
 

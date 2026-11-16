@@ -82,15 +82,23 @@ impl From<postcard::Error> for StateError {
 }
 
 /// A bounded history of save states for rewinding. When full, the oldest is dropped.
+///
+/// Only the newest snapshot is kept whole. Each older one is stored as its difference to
+/// the next newer one (XOR, with runs of zeros compressed): consecutive states differ in
+/// only a few bytes, so this takes a fraction of the memory. Both `push` and `pop` touch
+/// only the newest snapshot and one difference.
 pub struct Rewind {
-    snapshots: VecDeque<Vec<u8>>,
+    newest: Option<Vec<u8>>,
+    /// `older.back()` turns `newest` into the snapshot before it, and so on backwards.
+    older: VecDeque<Vec<u8>>,
     capacity: usize,
 }
 
 impl Rewind {
     pub fn new(capacity: usize) -> Self {
         Self {
-            snapshots: VecDeque::with_capacity(capacity),
+            newest: None,
+            older: VecDeque::new(),
             capacity,
         }
     }
@@ -99,32 +107,106 @@ impl Rewind {
         if self.capacity == 0 {
             return;
         }
-        if self.snapshots.len() == self.capacity {
-            self.snapshots.pop_front();
+        if let Some(previous) = self.newest.take() {
+            self.older.push_back(diff(&state, &previous));
+            if self.older.len() >= self.capacity {
+                self.older.pop_front();
+            }
         }
-        self.snapshots.push_back(state);
+        self.newest = Some(state);
     }
 
     /// Removes and returns the most recent snapshot.
     pub fn pop(&mut self) -> Option<Vec<u8>> {
-        self.snapshots.pop_back()
+        let state = self.newest.take()?;
+        if let Some(diff) = self.older.pop_back() {
+            self.newest = Some(apply(&state, &diff));
+        }
+        Some(state)
     }
 
     pub fn len(&self) -> usize {
-        self.snapshots.len()
+        self.older.len() + usize::from(self.newest.is_some())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.snapshots.is_empty()
+        self.newest.is_none()
     }
 
     pub fn clear(&mut self) {
-        self.snapshots.clear();
+        self.newest = None;
+        self.older.clear();
     }
 
     /// Total bytes held, for diagnostics.
     pub fn memory_used(&self) -> usize {
-        self.snapshots.iter().map(Vec::len).sum()
+        self.newest.as_ref().map_or(0, Vec::len) + self.older.iter().map(Vec::len).sum::<usize>()
+    }
+}
+
+/// Encodes how to turn `base` into `target`: target's length, then the bytes of
+/// `target XOR base` (base padded with zeros) as alternating (zero run, literal run)
+/// pairs, lengths as LEB128 varints.
+fn diff(base: &[u8], target: &[u8]) -> Vec<u8> {
+    let byte_at = |i: usize| target[i] ^ base.get(i).copied().unwrap_or(0);
+    let mut out = Vec::new();
+    write_varint(&mut out, target.len());
+    let mut i = 0;
+    while i < target.len() {
+        let zeros_start = i;
+        while i < target.len() && byte_at(i) == 0 {
+            i += 1;
+        }
+        let literal_start = i;
+        // A literal run ends at the next stretch of at least 4 zero bytes.
+        while i < target.len() && (i..(i + 4).min(target.len())).any(|j| byte_at(j) != 0) {
+            i += 1;
+        }
+        write_varint(&mut out, literal_start - zeros_start);
+        write_varint(&mut out, i - literal_start);
+        out.extend((literal_start..i).map(byte_at));
+    }
+    out
+}
+
+/// Rebuilds the target of [`diff`] from `base`.
+fn apply(base: &[u8], diff: &[u8]) -> Vec<u8> {
+    let mut pos = 0;
+    let len = read_varint(diff, &mut pos);
+    let mut out: Vec<u8> = (0..len)
+        .map(|i| base.get(i).copied().unwrap_or(0))
+        .collect();
+    let mut i = 0;
+    while i < len {
+        i += read_varint(diff, &mut pos);
+        let literal = read_varint(diff, &mut pos);
+        for byte in &mut out[i..i + literal] {
+            *byte ^= diff[pos];
+            pos += 1;
+        }
+        i += literal;
+    }
+    out
+}
+
+fn write_varint(out: &mut Vec<u8>, mut value: usize) {
+    while value >= 0x80 {
+        out.push(value as u8 | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn read_varint(data: &[u8], pos: &mut usize) -> usize {
+    let (mut value, mut shift) = (0usize, 0);
+    loop {
+        let byte = data[*pos];
+        *pos += 1;
+        value |= ((byte & 0x7F) as usize) << shift;
+        if byte < 0x80 {
+            return value;
+        }
+        shift += 7;
     }
 }
 
@@ -142,6 +224,42 @@ mod tests {
         assert_eq!(r.pop(), Some(vec![3]));
         assert_eq!(r.pop(), Some(vec![2]));
         assert_eq!(r.pop(), None);
+    }
+
+    #[test]
+    fn diffs_round_trip_including_length_changes() {
+        let base: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
+        let mut target = base.clone();
+        target[3] ^= 0xFF;
+        target[500..510].fill(0x42);
+        for t in [
+            target.clone(),
+            target[..700].to_vec(),
+            [&target[..], &[1, 2, 3]].concat(),
+        ] {
+            let d = diff(&base, &t);
+            assert_eq!(apply(&base, &d), t);
+        }
+        assert!(diff(&base, &target).len() < 40, "small changes, small diff");
+        assert_eq!(apply(&base, &diff(&base, &[])), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn rewind_returns_every_snapshot_and_saves_memory() {
+        let mut r = Rewind::new(100);
+        let mut state = vec![0u8; 50_000];
+        let mut states = Vec::new();
+        for frame in 0..60u32 {
+            state[(frame as usize * 811) % 50_000] = frame as u8;
+            state[123] = frame as u8;
+            states.push(state.clone());
+            r.push(state.clone());
+        }
+        assert!(r.memory_used() < 60_000, "{} bytes", r.memory_used());
+        for expected in states.iter().rev() {
+            assert_eq!(r.pop().as_ref(), Some(expected));
+        }
+        assert!(r.is_empty());
     }
 
     #[test]
