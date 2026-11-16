@@ -370,7 +370,6 @@ impl FrekiApp {
             self.debugger_action(cpu_view::Action::StepInstruction);
         }
         self.rewinding = ctx.input(|i| i.key_down(Key::R)) && self.session.is_some();
-        self.fast_forward_held = ctx.input(|i| i.key_down(Key::Tab));
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -1110,6 +1109,29 @@ impl eframe::App for FrekiApp {
         }
 
         ctx.request_repaint();
+    }
+
+    /// Takes Tab away from egui (which would move keyboard focus through the menus on
+    /// every key repeat) and uses it as the fast-forward key, except while typing.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if ctx.text_edit_focused() {
+            return;
+        }
+        raw_input.events.retain(|event| match event {
+            egui::Event::Key {
+                key: Key::Tab,
+                pressed,
+                ..
+            } => {
+                self.fast_forward_held = *pressed;
+                false
+            }
+            egui::Event::WindowFocused(false) => {
+                self.fast_forward_held = false;
+                true
+            }
+            _ => true,
+        });
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
