@@ -262,7 +262,12 @@ pub const SEARCH_RANGES: [std::ops::RangeInclusive<u16>; 3] =
 impl MemorySearch {
     /// Starts a search over all searchable RAM, using `read` to get current values.
     pub fn start(read: impl Fn(u16) -> u8) -> Self {
-        let candidates = SEARCH_RANGES
+        Self::start_in(&SEARCH_RANGES, read)
+    }
+
+    /// Starts a search over the given address ranges.
+    pub fn start_in(ranges: &[std::ops::RangeInclusive<u16>], read: impl Fn(u16) -> u8) -> Self {
+        let candidates = ranges
             .iter()
             .flat_map(|r| r.clone())
             .map(|a| (a, read(a)))

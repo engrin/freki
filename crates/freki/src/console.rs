@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::BufRead;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -41,8 +41,8 @@ pub struct Console {
 }
 
 impl Console {
-    /// Starts reading commands from stdin. `cheat_file` is the ROM's `.cht` path.
-    pub fn start(cheat_file: PathBuf) -> Self {
+    /// Starts reading commands from stdin.
+    pub fn start() -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
@@ -52,7 +52,12 @@ impl Console {
                 }
             }
         });
-        Self::with_receiver(rx, cheat_file)
+        Self::with_receiver(rx, PathBuf::new())
+    }
+
+    /// Sets the `.cht` file used by `cheat save` and `cheat reload` (the loaded ROM's).
+    pub fn set_cheat_file(&mut self, path: PathBuf) {
+        self.cheat_file = path;
     }
 
     fn with_receiver(lines: Receiver<String>, cheat_file: PathBuf) -> Self {
@@ -65,29 +70,19 @@ impl Console {
     }
 
     /// Executes all commands typed since the last call, printing their output.
-    pub fn poll(&mut self, gb: &mut GameBoy) {
+    /// Without a loaded game only `help` works.
+    pub fn poll(&mut self, mut gb: Option<&mut GameBoy>) {
         while let Ok(line) = self.lines.try_recv() {
-            let output = self.execute(&line, gb);
+            let output = match gb.as_deref_mut() {
+                Some(gb) => self.execute(&line, gb),
+                None if line.trim() == "help" => HELP.to_string(),
+                None if line.trim().is_empty() => String::new(),
+                None => "error: no game loaded (File → Open ROM…)".to_string(),
+            };
             if !output.is_empty() {
                 println!("{output}");
             }
         }
-    }
-
-    /// Loads the `.cht` file, if there is one. Returns a message to show.
-    pub fn load_cheat_file(&self, gb: &mut GameBoy) -> Option<String> {
-        let text = fs::read_to_string(&self.cheat_file).ok()?;
-        gb.cheats_mut().clear();
-        let errors = gb.cheats_mut().load_text(&text);
-        let mut msg = format!(
-            "loaded {} cheat(s) from {}",
-            gb.cheats().list().len(),
-            self.cheat_file.display()
-        );
-        for (line, e) in errors {
-            msg.push_str(&format!("\n  line {line}: {e}"));
-        }
-        Some(msg)
     }
 
     /// Runs one command and returns its output (errors as `error: …`).
@@ -147,13 +142,8 @@ impl Console {
                 gb.cheats_mut().enabled = *state == "on";
                 Ok(format!("all cheats {state}"))
             }
-            ["save"] => {
-                fs::write(&self.cheat_file, gb.cheats().to_text())
-                    .map_err(|e| format!("cannot write {}: {e}", self.cheat_file.display()))?;
-                Ok(format!("saved to {}", self.cheat_file.display()))
-            }
-            ["reload"] => Ok(self
-                .load_cheat_file(gb)
+            ["save"] => save_cheat_file(&self.cheat_file, gb),
+            ["reload"] => Ok(load_cheat_file(&self.cheat_file, gb)
                 .unwrap_or_else(|| format!("{} not found", self.cheat_file.display()))),
             _ => Err("usage: cheat list|add|on|off|rm|all|save|reload (type help)".into()),
         }
@@ -161,7 +151,7 @@ impl Console {
 
     fn search(&mut self, args: &[&str], gb: &mut GameBoy) -> Result<String, String> {
         if let ["start"] = args {
-            let s = MemorySearch::start(|a| gb.peek(a));
+            let s = gb.start_memory_search();
             let n = s.len();
             self.search = Some(s);
             return Ok(format!(
@@ -218,6 +208,29 @@ impl Console {
             _ => Err("usage: search start|eq|ne|changed|same|up|down|list|add (type help)".into()),
         }
     }
+}
+
+/// Loads a `.cht` file into the cheat list, if it exists. Returns a message to show.
+pub fn load_cheat_file(path: &Path, gb: &mut GameBoy) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    gb.cheats_mut().clear();
+    let errors = gb.cheats_mut().load_text(&text);
+    let mut msg = format!(
+        "loaded {} cheat(s) from {}",
+        gb.cheats().list().len(),
+        path.display()
+    );
+    for (line, e) in errors {
+        msg.push_str(&format!("\n  line {line}: {e}"));
+    }
+    Some(msg)
+}
+
+/// Writes the cheat list to a `.cht` file.
+pub fn save_cheat_file(path: &Path, gb: &GameBoy) -> Result<String, String> {
+    fs::write(path, gb.cheats().to_text())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(format!("saved cheats to {}", path.display()))
 }
 
 fn describe(gb: &GameBoy, i: usize) -> String {

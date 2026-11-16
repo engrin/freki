@@ -17,7 +17,7 @@ Named after Freki, one of Odin's two wolves.
 | Path | What |
 |---|---|
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
-| `crates/freki` | Desktop frontend: window and keyboard ([minifb](https://crates.io/crates/minifb)), gamepads ([gilrs](https://crates.io/crates/gilrs)), sound ([cpal](https://crates.io/crates/cpal)), save files |
+| `crates/freki` | Desktop app: GUI with menus ([egui](https://crates.io/crates/egui)), gamepads ([gilrs](https://crates.io/crates/gilrs)), sound ([cpal](https://crates.io/crates/cpal)), save files, save states, cheats |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ## Build and run
@@ -25,15 +25,20 @@ Named after Freki, one of Odin's two wolves.
 Requires nightly Rust.
 
 ```sh
-cargo run --release -- path/to/game.gb
+cargo run --release -- path/to/game.gb   # or start without a ROM and use File → Open ROM…
 ```
+
+ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, quit),
+Emulation (pause, reset), States (save/load, slot), Cheats (on/off, cheat manager, memory
+search), View (scale, palette) and Help (controls, about).
 
 | Game Boy | Keyboard | Gamepad |
 |---|---|---|
 | D-pad | Arrow keys | D-pad or left stick |
 | A / B | X / Z | Right / bottom face button (Nintendo layout) |
 | Start / Select | Enter / Backspace | Start / Select (Back) |
-| Quit | Esc | |
+| Open ROM / reset / quit | Ctrl+O / Ctrl+R / Ctrl+Q | |
+| Pause | P | |
 
 Gamepads can be plugged in while freki is running.
 
@@ -52,10 +57,8 @@ Status messages appear in the window title.
 
 ### Cheats
 
-| Key | Action |
-|---|---|
-| F9 | Turn all cheats on/off |
-| P | Pause / resume |
+Cheats → Cheat manager… lists, adds, toggles and removes codes; Cheats → Memory search…
+finds the address of a value and turns it into a cheat. F9 turns all cheats on/off.
 
 GameShark (`01VVLLHH`) and Game Genie (`ABC-DEF` or `ABC-DEF-GHI`) codes are read from
 `<rom>.cht` next to the ROM, one per line with an optional name (`#` starts a comment,

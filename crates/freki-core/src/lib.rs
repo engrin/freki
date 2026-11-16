@@ -97,6 +97,18 @@ impl GameBoy {
         self.bus.write(addr, value);
     }
 
+    /// Starts a memory search over the RAM this cartridge actually has (work RAM, high RAM
+    /// and, if present, cartridge RAM).
+    pub fn start_memory_search(&self) -> MemorySearch {
+        let has_cart_ram = !self.bus.cart.ram().is_empty();
+        let ranges: Vec<_> = cheats::SEARCH_RANGES
+            .iter()
+            .filter(|r| has_cart_ram || *r.start() != 0xA000)
+            .cloned()
+            .collect();
+        MemorySearch::start_in(&ranges, |a| self.peek(a))
+    }
+
     /// The active cheat codes.
     pub fn cheats(&self) -> &Cheats {
         &self.bus.cheats
