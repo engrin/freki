@@ -15,7 +15,7 @@ use freki_core::{
 use crate::audio::Audio;
 use crate::console::{self, Console};
 use crate::cpu_view::{self, CpuView};
-use crate::debug::DebugViews;
+use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
 use crate::session::Start;
 use crate::session::{Session, file_name};
@@ -755,6 +755,10 @@ impl FrekiApp {
                     loaded,
                     egui::Checkbox::new(&mut self.debug.show_sprites, "Sprites"),
                 );
+                ui.add_enabled(
+                    loaded,
+                    egui::Checkbox::new(&mut self.debug.show_palettes, "Palettes"),
+                );
                 ui.separator();
                 ui.label("Palette (Game Boy)");
                 for palette in Palette::ALL {
@@ -1143,8 +1147,12 @@ impl eframe::App for FrekiApp {
             self.debugger_action(action);
         }
         if let Some(session) = &self.session {
-            self.debug
-                .show(&ctx, &session.gb, &self.settings.palette.colors());
+            let palettes = debug::Palettes::new(
+                &session.gb,
+                self.settings.palette.colors(),
+                self.settings.color_correction,
+            );
+            self.debug.show(&ctx, &session.gb, &palettes);
         }
 
         ctx.request_repaint();

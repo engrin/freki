@@ -435,6 +435,21 @@ impl Ppu {
         self.vram[i] = value;
     }
 
+    /// A VRAM byte from a given bank (0 or 1), regardless of VBK (for debuggers).
+    pub fn vram_in_bank(&self, bank: u8, addr: u16) -> u8 {
+        self.vram[(bank as usize & 1) * 0x2000 + (addr as usize & 0x1FFF)]
+    }
+
+    /// CGB palette RAM: background and object palettes (8 × 4 colours, RGB555 LE).
+    pub fn palette_ram(&self) -> (&[u8; 64], &[u8; 64]) {
+        (&self.bg_palettes, &self.obj_palettes)
+    }
+
+    /// Whether CGB rendering features (attributes, palettes, VRAM bank 1) are in use.
+    pub fn cgb_mode(&self) -> bool {
+        self.cgb
+    }
+
     /// Reads palette RAM through BCPD/OCPD (inaccessible while drawing).
     fn read_palette(&self, obj: bool) -> u8 {
         if self.lcd_on() && self.mode == Mode::Drawing {

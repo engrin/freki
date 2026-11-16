@@ -41,9 +41,11 @@ in their own colours, by default corrected to look like the GBC's screen (View �
 correction). The palette, scale, recent ROMs,
 fast-forward speed and boot ROM choice are remembered between runs.
 
-View → Tiles, Tile map and Sprites show video memory live: all 384 tiles, either tile map
-with the visible screen area outlined, and the 40 sprites with position, tile and flags.
-Hover tiles and map cells for their addresses.
+View → Tiles, Tile map, Sprites and Palettes show video memory live: all 384 tiles, either
+tile map with the visible screen area outlined, the 40 sprites with position, tile and flags,
+and the palettes. Hover tiles and map cells for their addresses. For Game Boy Color games
+they show both VRAM banks (with a palette of your choice for tiles), the tile attributes in
+the map, sprite palettes and banks, and all 16 colour palettes with their RGB555 values.
 
 View → Debugger pauses and steps the CPU (F10 continue, F11 step one instruction, or step a
 scanline or frame), shows registers, disassembly around PC, memory and the stack, and sets

@@ -236,6 +236,22 @@ impl GameBoy {
     }
 
     /// The current screen as 160×144 shade indices (0 = lightest, 3 = darkest).
+    /// A VRAM byte from bank 0 or 1, whichever bank the CPU has selected (for debuggers).
+    pub fn peek_vram(&self, bank: u8, addr: u16) -> u8 {
+        self.bus.ppu.vram_in_bank(bank, addr)
+    }
+
+    /// CGB palette RAM (background, objects): 8 palettes × 4 colours, RGB555 little-endian.
+    pub fn palette_ram(&self) -> (&[u8; 64], &[u8; 64]) {
+        self.bus.ppu.palette_ram()
+    }
+
+    /// Whether the game uses Game Boy Color features (not on a DMG, nor in the GBC's
+    /// compatibility mode for original Game Boy games).
+    pub fn cgb_mode(&self) -> bool {
+        self.bus.ppu.cgb_mode()
+    }
+
     /// The current picture: shades on a DMG, colours on a CGB.
     pub fn screen(&self) -> Screen<'_> {
         if self.bus.ppu.outputs_rgb() {
