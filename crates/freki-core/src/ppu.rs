@@ -472,6 +472,13 @@ impl Ppu {
                 }
             } else if self.ly == LINES_PER_FRAME {
                 self.ly = 0;
+            } else if (self.ly as usize) < SCREEN_HEIGHT {
+                // The new line's mode 2 interrupt source rises in the same instant LY changes
+                // (and the LYC source of the previous line drops). Without a gap the combined
+                // STAT line stays high, so an LY=LYC interrupt on the previous line blocks this
+                // line's mode 2 interrupt ("STAT blocking"). Games rely on this, e.g. Pinball
+                // Fantasies. (Line 0 is handled separately: its OAM interrupt comes a dot late.)
+                self.irq_mode = Mode::OamScan;
             }
         }
 
@@ -905,6 +912,36 @@ mod tests {
             }
         }
         assert_eq!(stat_irqs, 1);
+    }
+
+    /// Counts STAT interrupts per line over one frame.
+    fn stat_irqs_per_line(setup: impl FnOnce(&mut Ppu)) -> Vec<u32> {
+        let mut ppu = Ppu::new();
+        setup(&mut ppu);
+        let mut counts = vec![0; LINES_PER_FRAME as usize];
+        for _ in 0..70_224 {
+            // An interrupt raised as LY changes belongs to the new line.
+            if ppu.tick(1) & interrupt::STAT != 0 {
+                counts[ppu.ly as usize] += 1;
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn lyc_interrupt_blocks_next_lines_mode2_interrupt() {
+        // Mode 2 interrupts alone: one per visible line.
+        let oam = stat_irqs_per_line(|p| p.write_reg(0xFF41, stat::OAM_INT));
+        assert!(oam[1..144].iter().all(|&n| n == 1), "{oam:?}");
+        // With LYC = 10 also enabled, line 10 raises the line and line 11's mode 2 source
+        // takes over without a gap: no rising edge, so no interrupt on line 11.
+        let both = stat_irqs_per_line(|p| {
+            p.write_reg(0xFF45, 10);
+            p.write_reg(0xFF41, stat::OAM_INT | stat::LYC_INT);
+        });
+        assert_eq!(both[10], 1, "LYC (and mode 2) on line 10");
+        assert_eq!(both[11], 0, "line 11's mode 2 interrupt is blocked");
+        assert_eq!(both[12], 1);
     }
 
     #[test]
