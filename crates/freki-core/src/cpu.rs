@@ -50,6 +50,9 @@ impl fmt::Display for CpuError {
 
 impl std::error::Error for CpuError {}
 
+/// M-cycles the CPU pauses for after a CGB speed switch.
+const SPEED_SWITCH_M_CYCLES: u32 = 2050;
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Registers {
     pub a: u8,
@@ -130,6 +133,16 @@ impl Cpu {
             regs: Registers::default(),
             ..Self::new_post_boot()
         }
+    }
+
+    /// State after the CGB boot ROM hands over to a CGB game (A = $11 identifies a CGB).
+    pub fn new_post_boot_cgb() -> Self {
+        let mut cpu = Self::new_post_boot();
+        cpu.regs.set_af(0x1180);
+        cpu.regs.set_bc(0x0000);
+        cpu.regs.set_de(0xFF56);
+        cpu.regs.set_hl(0x000D);
+        cpu
     }
 
     pub fn new_post_boot() -> Self {
@@ -214,6 +227,12 @@ impl Cpu {
         }
         let pending = std::mem::take(&mut self.pending);
         match addr {
+            // The write timing quirks below are measured on the DMG.
+            _ if bus.cgb => {
+                self.advance(bus, pending);
+                bus.cpu_write(addr, value);
+                self.pending = 4;
+            }
             0xFF0F => {
                 self.advance(bus, pending + 1);
                 bus.write(addr, value);
@@ -563,9 +582,17 @@ impl Cpu {
                     20
                 }
                 2 => {
-                    // STOP (treated as a 2-byte NOP until CGB speed switching exists)
+                    // STOP: switches CGB speed if armed via KEY1; the CPU then pauses for
+                    // 2050 M-cycles. Otherwise treated as a 2-byte NOP (no low-power mode).
                     self.fetch(bus);
-                    8
+                    if bus.stop() {
+                        for _ in 0..SPEED_SWITCH_M_CYCLES {
+                            self.idle(bus);
+                        }
+                        8 + SPEED_SWITCH_M_CYCLES * 4
+                    } else {
+                        8
+                    }
                 }
                 _ => {
                     // JR e8 / JR cc, e8

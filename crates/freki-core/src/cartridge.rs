@@ -223,11 +223,23 @@ impl Cartridge {
         self.ram_dirty = self.battery;
     }
 
-    /// Game title from the header ($0134–$0143), trimmed at the first NUL.
+    /// Game title from the header ($0134–$0143), trimmed at the first NUL. On CGB games
+    /// $0143 is the CGB flag, not part of the title.
     pub fn title(&self) -> String {
-        let raw = &self.rom[0x134..0x144];
+        let end = if self.supports_cgb() { 0x143 } else { 0x144 };
+        let raw = &self.rom[0x134..end];
         let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         String::from_utf8_lossy(&raw[..end]).trim().to_string()
+    }
+
+    /// Whether the header ($0143 bit 7) says the game uses Game Boy Color features.
+    pub fn supports_cgb(&self) -> bool {
+        self.rom[0x143] & 0x80 != 0
+    }
+
+    /// Whether the game runs only on a Game Boy Color ($0143 = $C0).
+    pub fn cgb_only(&self) -> bool {
+        self.rom[0x143] == 0xC0
     }
 
     pub fn mbc(&self) -> &Mbc {

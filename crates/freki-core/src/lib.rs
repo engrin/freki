@@ -1,4 +1,4 @@
-//! freki-core: a platform-independent Game Boy (DMG) emulation core.
+//! freki-core: a platform-independent Game Boy (DMG) and Game Boy Color emulation core.
 //!
 //! This crate has no OS, windowing or audio dependencies. A frontend feeds it
 //! a ROM and button state, calls [`GameBoy::run_frame`] ~59.7 times a second,
@@ -25,6 +25,7 @@ pub use cpu::{CpuError, Registers};
 pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};
 pub use disasm::{Instruction, disassemble};
 pub use joypad::Button;
+
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use state::{Rewind, StateError};
 
@@ -38,6 +39,15 @@ pub const CYCLES_PER_FRAME: u32 = 70_224;
 /// Native refresh rate (~59.73 Hz).
 pub const FRAMES_PER_SECOND: f64 = CLOCK_HZ as f64 / CYCLES_PER_FRAME as f64;
 
+/// Which hardware is emulated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Model {
+    /// Original Game Boy.
+    Dmg,
+    /// Game Boy Color running a CGB game in colour mode.
+    Cgb,
+}
+
 /// A complete Game Boy: CPU plus everything on the memory bus.
 pub struct GameBoy {
     cpu: Cpu,
@@ -47,18 +57,39 @@ pub struct GameBoy {
 }
 
 impl GameBoy {
-    /// Creates a Game Boy with `rom` inserted, in the post-boot-ROM state.
+    /// Creates a Game Boy with `rom` inserted, in the post-boot-ROM state. Games made for
+    /// the Game Boy Color run on a CGB; all others on a DMG.
     pub fn new(rom: Vec<u8>) -> Result<Self, CartridgeError> {
+        let cgb = rom.get(0x143).is_some_and(|flag| flag & 0x80 != 0);
+        Self::with_model(rom, if cgb { Model::Cgb } else { Model::Dmg })
+    }
+
+    /// Creates a Game Boy of the given model with `rom` inserted, in the post-boot state.
+    /// [`Model::Cgb`] needs a CGB game (DMG games in the CGB's compatibility mode are not
+    /// emulated yet): for other games the DMG is used.
+    pub fn with_model(rom: Vec<u8>, model: Model) -> Result<Self, CartridgeError> {
         let cart = Cartridge::from_rom(rom)?;
+        let cgb = model == Model::Cgb && cart.supports_cgb();
         let logo: [u8; 48] = std::array::from_fn(|i| cart.read_rom(0x104 + i as u16));
         let mut bus = Bus::new(cart);
         bus.ppu.load_boot_logo(&logo);
         bus.ppu.skip_to_post_boot();
+        let cpu = if cgb {
+            bus.set_cgb();
+            Cpu::new_post_boot_cgb()
+        } else {
+            Cpu::new_post_boot()
+        };
         Ok(Self {
-            cpu: Cpu::new_post_boot(),
+            cpu,
             bus,
             resume_at: None,
         })
+    }
+
+    /// The emulated hardware.
+    pub fn model(&self) -> Model {
+        if self.bus.cgb { Model::Cgb } else { Model::Dmg }
     }
 
     /// Creates a Game Boy with `rom` inserted, at power-on: `boot` runs first (logo and
@@ -87,7 +118,7 @@ impl GameBoy {
     /// Ignores breakpoints; see [`GameBoy::run_frame_checked`].
     pub fn run_frame(&mut self) -> Result<(), CpuError> {
         let mut elapsed = 0;
-        while elapsed < CYCLES_PER_FRAME {
+        while elapsed < self.frame_cycles() {
             elapsed += self.step()?;
             if self.bus.ppu.take_frame_ready() {
                 break;
@@ -95,6 +126,12 @@ impl GameBoy {
         }
         self.apply_frame_cheats();
         Ok(())
+    }
+
+    /// CPU cycles in one frame: twice as many in CGB double speed. Bounds a frame while
+    /// the LCD is off (no frame is produced then).
+    fn frame_cycles(&self) -> u32 {
+        CYCLES_PER_FRAME << u32::from(self.bus.double_speed)
     }
 
     fn apply_frame_cheats(&mut self) {
@@ -109,18 +146,24 @@ impl GameBoy {
     /// Returns `Some(stop)` when a breakpoint is reached (the instruction has *not* run;
     /// the next call runs it) or a watchpoint was hit (the instruction has run).
     pub fn step_checked(&mut self) -> Result<Option<Stop>, CpuError> {
+        self.step_checked_cycles().map(|(stop, _)| stop)
+    }
+
+    /// [`GameBoy::step_checked`], also returning the T-cycles taken.
+    fn step_checked_cycles(&mut self) -> Result<(Option<Stop>, u32), CpuError> {
         let pc = self.cpu.regs.pc;
         let resume = self.resume_at.take() == Some(pc);
         if !resume && !self.cpu.halted && self.bus.breaks.pc.contains(&pc) {
             self.resume_at = Some(pc);
-            return Ok(Some(Stop::Breakpoint { pc }));
+            return Ok((Some(Stop::Breakpoint { pc }), 0));
         }
-        self.step()?;
-        Ok(self
+        let cycles = self.step()?;
+        let stop = self
             .bus
             .breaks
             .take_hit()
-            .map(|hit| Stop::Watch { pc, hit }))
+            .map(|hit| Stop::Watch { pc, hit });
+        Ok((stop, cycles))
     }
 
     /// Like [`GameBoy::run_frame`], but stops early at breakpoints and watchpoints.
@@ -129,11 +172,16 @@ impl GameBoy {
         if self.bus.breaks.is_empty() && self.resume_at.is_none() {
             return self.run_frame().map(|()| None);
         }
+        // Counted from where the frame (re)started; resuming after a stop starts afresh,
+        // which only matters with the LCD off.
+        let mut elapsed = 0;
         loop {
-            if let Some(stop) = self.step_checked()? {
+            let (stop, cycles) = self.step_checked_cycles()?;
+            if let Some(stop) = stop {
                 return Ok(Some(stop));
             }
-            if self.bus.ppu.take_frame_ready() {
+            elapsed += cycles;
+            if self.bus.ppu.take_frame_ready() || elapsed >= self.frame_cycles() {
                 self.apply_frame_cheats();
                 return Ok(None);
             }
@@ -338,5 +386,75 @@ mod tests {
     #[test]
     fn boot_rom_must_be_256_bytes() {
         assert_eq!(BootRom::new(&[0; 2304]), Err(BootRomError::WrongSize(2304)));
+    }
+
+    #[test]
+    fn cgb_games_get_banked_memory_and_a_11() {
+        let mut rom = test_rom();
+        rom[0x143] = 0x80;
+        let mut gb = GameBoy::new(rom).unwrap();
+        assert_eq!(gb.model(), Model::Cgb);
+        assert_eq!(
+            gb.registers().a,
+            0x11,
+            "A = $11 tells the game it runs on a CGB"
+        );
+        assert_eq!(gb.cartridge().title(), "FREKI");
+        for (bank, value) in [(1, 0x11), (2, 0x22), (7, 0x77)] {
+            gb.poke(0xFF70, bank);
+            gb.poke(0xD000, value);
+        }
+        gb.poke(0xFF70, 0); // bank 0 selects bank 1
+        assert_eq!(gb.peek(0xD000), 0x11);
+        gb.poke(0xFF70, 2);
+        assert_eq!(
+            (gb.peek(0xD000), gb.peek(0xF000)),
+            (0x22, 0x22),
+            "echo follows SVBK"
+        );
+        gb.poke(0xFF4F, 1);
+        gb.poke(0x8000, 0xB1);
+        gb.poke(0xFF4F, 0);
+        gb.poke(0x8000, 0xB0);
+        gb.poke(0xFF4F, 1);
+        assert_eq!(gb.peek(0x8000), 0xB1);
+    }
+
+    #[test]
+    fn dmg_games_ignore_cgb_registers() {
+        let mut gb = GameBoy::new(test_rom()).unwrap();
+        assert_eq!(gb.model(), Model::Dmg);
+        gb.poke(0xD000, 0x12);
+        gb.poke(0xFF70, 3);
+        assert_eq!((gb.peek(0xFF70), gb.peek(0xD000)), (0xFF, 0x12));
+    }
+
+    #[test]
+    fn stop_switches_to_double_speed_when_armed() {
+        let mut rom = test_rom();
+        rom[0x143] = 0x80;
+        rom[0x150..0x154].copy_from_slice(&[0x10, 0x00, 0x18, 0xFE]); // STOP; JR -2
+        let mut gb = GameBoy::new(rom).unwrap();
+        gb.poke(0xFF4D, 1);
+        while gb.pc() != 0x152 {
+            gb.step().unwrap();
+        }
+        assert_eq!(
+            gb.peek(0xFF4D) & 0x81,
+            0x80,
+            "double speed, switch disarmed"
+        );
+        // A frame now takes twice as many CPU cycles.
+        let mut cycles = 0;
+        gb.bus.ppu.take_frame_ready();
+        while !gb.bus.ppu.take_frame_ready() {
+            cycles += gb.step().unwrap();
+        }
+        assert!(cycles > CYCLES_PER_FRAME, "{cycles}");
+        cycles = 0;
+        while !gb.bus.ppu.take_frame_ready() {
+            cycles += gb.step().unwrap();
+        }
+        assert!((2 * CYCLES_PER_FRAME - 16..=2 * CYCLES_PER_FRAME + 16).contains(&cycles));
     }
 }

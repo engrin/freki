@@ -112,8 +112,21 @@ struct ObjPixel {
 
 #[derive(Serialize, Deserialize)]
 pub struct Ppu {
+    /// Game Boy Color mode (colour palettes, VRAM bank 1, tile attributes).
+    cgb: bool,
+    /// VRAM: bank 0 at 0–$1FFF, bank 1 (CGB) at $2000–$3FFF.
     #[serde(with = "BigArray")]
-    vram: [u8; 0x2000],
+    vram: [u8; 0x4000],
+    /// VBK ($FF4F): VRAM bank the CPU sees (CGB).
+    vbk: u8,
+    /// CGB palette RAM: 8 palettes × 4 colours × 2 bytes (RGB555, little-endian).
+    #[serde(with = "BigArray")]
+    bg_palettes: [u8; 64],
+    #[serde(with = "BigArray")]
+    obj_palettes: [u8; 64],
+    /// BCPS/OCPS ($FF68/$FF6A): palette RAM index and auto-increment flag (bit 7).
+    bcps: u8,
+    ocps: u8,
     #[serde(with = "BigArray")]
     oam: [u8; 0xA0],
     #[serde(with = "BigArray")]
@@ -192,7 +205,13 @@ impl Default for Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Self {
-            vram: [0; 0x2000],
+            cgb: false,
+            vram: [0; 0x4000],
+            vbk: 0,
+            bg_palettes: [0xFF; 64],
+            obj_palettes: [0xFF; 64],
+            bcps: 0,
+            ocps: 0,
             oam: [0; 0xA0],
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             frame_ready: false,
@@ -310,11 +329,51 @@ impl Ppu {
         self.mode
     }
 
+    /// Switches to Game Boy Color mode.
+    pub fn set_cgb(&mut self) {
+        self.cgb = true;
+    }
+
+    fn vram_index(&self, addr: u16) -> usize {
+        (self.vbk as usize & 1) * 0x2000 + (addr as usize - 0x8000)
+    }
+
     pub fn read_vram(&self, addr: u16) -> u8 {
-        self.vram[(addr - 0x8000) as usize]
+        self.vram[self.vram_index(addr)]
     }
     pub fn write_vram(&mut self, addr: u16, value: u8) {
-        self.vram[(addr - 0x8000) as usize] = value;
+        let i = self.vram_index(addr);
+        self.vram[i] = value;
+    }
+
+    /// Reads palette RAM through BCPD/OCPD (inaccessible while drawing).
+    fn read_palette(&self, obj: bool) -> u8 {
+        if self.lcd_on() && self.mode == Mode::Drawing {
+            return 0xFF;
+        }
+        let (ram, index) = if obj {
+            (&self.obj_palettes, self.ocps)
+        } else {
+            (&self.bg_palettes, self.bcps)
+        };
+        ram[(index & 0x3F) as usize]
+    }
+
+    /// Writes palette RAM through BCPD/OCPD; the index auto-increments if enabled (even
+    /// when the write is blocked during drawing).
+    fn write_palette(&mut self, obj: bool, value: u8) {
+        let accessible = !(self.lcd_on() && self.mode == Mode::Drawing);
+        let (ram, index) = if obj {
+            (&mut self.obj_palettes, &mut self.ocps)
+        } else {
+            (&mut self.bg_palettes, &mut self.bcps)
+        };
+        if accessible {
+            ram[(*index & 0x3F) as usize] = value;
+        }
+        if *index & 0x80 != 0 {
+            *index = 0x80 | (index.wrapping_add(1) & 0x3F);
+        }
     }
     pub fn read_oam(&self, addr: u16) -> u8 {
         self.oam[(addr - 0xFE00) as usize]
@@ -414,6 +473,11 @@ impl Ppu {
             0xFF49 => self.obp1,
             0xFF4A => self.wy,
             0xFF4B => self.wx,
+            0xFF4F => 0xFE | self.vbk,
+            0xFF68 => 0x40 | self.bcps,
+            0xFF69 => self.read_palette(false),
+            0xFF6A => 0x40 | self.ocps,
+            0xFF6B => self.read_palette(true),
             _ => 0xFF,
         }
     }
@@ -458,6 +522,11 @@ impl Ppu {
             0xFF49 => self.obp1 = value,
             0xFF4A => self.wy = value,
             0xFF4B => self.wx = value,
+            0xFF4F => self.vbk = value & 1,
+            0xFF68 => self.bcps = value & 0xBF,
+            0xFF69 => self.write_palette(false, value),
+            0xFF6A => self.ocps = value & 0xBF,
+            0xFF6B => self.write_palette(true, value),
             _ => {}
         }
     }

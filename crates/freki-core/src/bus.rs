@@ -5,7 +5,7 @@
 //! | 0000–7FFF   | Cartridge ROM (banked by the MBC) |
 //! | 8000–9FFF   | VRAM                              |
 //! | A000–BFFF   | Cartridge RAM                     |
-//! | C000–DFFF   | Work RAM                          |
+//! | C000–DFFF   | Work RAM (D000–DFFF banked on CGB) |
 //! | E000–FDFF   | Echo of C000–DDFF                 |
 //! | FE00–FE9F   | OAM (sprite attributes)           |
 //! | FEA0–FEFF   | Unusable                          |
@@ -48,8 +48,18 @@ pub struct Bus {
     /// Not part of save states: kept across loads.
     #[serde(skip)]
     pub breaks: Breakpoints,
-    #[serde(with = "BigArray")]
-    wram: [u8; 0x2000],
+    /// Game Boy Color mode: a CGB game running on CGB hardware.
+    pub cgb: bool,
+    /// Work RAM: 8 banks of 4 KiB (the DMG only uses banks 0 and 1).
+    wram: Vec<u8>,
+    /// SVBK ($FF70): work RAM bank at $D000 (CGB).
+    svbk: u8,
+    /// KEY1 ($FF4D) bit 0: a speed switch is armed and happens on the next STOP (CGB).
+    speed_switch_armed: bool,
+    /// CGB double speed: the CPU, timer, serial port and OAM DMA run twice as fast.
+    pub double_speed: bool,
+    /// Odd T-cycle left over when halving CPU cycles for the PPU and APU.
+    half_cycle: u32,
     #[serde(with = "BigArray")]
     hram: [u8; 0x7F],
     /// Not part of save states: kept across loads.
@@ -86,7 +96,12 @@ impl Bus {
             apu: Apu::new(),
             cheats: Cheats::new(),
             breaks: Breakpoints::default(),
-            wram: [0; 0x2000],
+            cgb: false,
+            wram: vec![0; 0x8000],
+            svbk: 0,
+            speed_switch_armed: false,
+            double_speed: false,
+            half_cycle: 0,
             hram: [0; 0x7F],
             boot_rom: None,
             boot_rom_mapped: false,
@@ -114,6 +129,34 @@ impl Bus {
         self.boot_rom_mapped
     }
 
+    /// Switches to Game Boy Color mode.
+    pub fn set_cgb(&mut self) {
+        self.cgb = true;
+        self.ppu.set_cgb();
+    }
+
+    /// Index into `wram` for an address in $C000–$FDFF.
+    fn wram_index(&self, addr: u16) -> usize {
+        let offset = addr as usize & 0x0FFF;
+        if addr & 0x1000 == 0 {
+            offset
+        } else {
+            let bank = if self.cgb { (self.svbk & 7).max(1) } else { 1 };
+            bank as usize * 0x1000 + offset
+        }
+    }
+
+    /// STOP: performs an armed CGB speed switch. Returns whether it switched.
+    pub fn stop(&mut self) -> bool {
+        if !(self.cgb && self.speed_switch_armed) {
+            return false;
+        }
+        self.speed_switch_armed = false;
+        self.double_speed = !self.double_speed;
+        self.timer.write(0xFF04, 0);
+        true
+    }
+
     // Specific I/O registers are matched before the generic $FF00–$FF7F fallback.
     #[allow(clippy::match_overlapping_arm)]
     pub fn read(&self, addr: u16) -> u8 {
@@ -131,8 +174,7 @@ impl Bus {
             }
             0x8000..=0x9FFF => self.ppu.read_vram(addr),
             0xA000..=0xBFFF => self.cart.read_ram(addr),
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize],
+            0xC000..=0xFDFF => self.wram[self.wram_index(addr)],
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
             0xFEA0..=0xFEFF => 0xFF,
             0xFF00 => self.joypad.read(),
@@ -142,6 +184,11 @@ impl Bus {
             0xFF10..=0xFF3F => self.apu.read(addr),
             0xFF46 => self.dma_page,
             0xFF40..=0xFF4B => self.ppu.read_reg(addr),
+            0xFF4D if self.cgb => {
+                0x7E | u8::from(self.double_speed) << 7 | u8::from(self.speed_switch_armed)
+            }
+            0xFF4F | 0xFF68..=0xFF6B if self.cgb => self.ppu.read_reg(addr),
+            0xFF70 if self.cgb => 0xF8 | self.svbk,
             0xFF00..=0xFF7F => 0xFF, // unmapped on the DMG
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupt_enable,
@@ -154,8 +201,10 @@ impl Bus {
             0x0000..=0x7FFF => self.cart.write_rom(addr, value),
             0x8000..=0x9FFF => self.ppu.write_vram(addr, value),
             0xA000..=0xBFFF => self.cart.write_ram(addr, value),
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize] = value,
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize] = value,
+            0xC000..=0xFDFF => {
+                let i = self.wram_index(addr);
+                self.wram[i] = value;
+            }
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF => {}
             0xFF00 => self.joypad.write(value),
@@ -172,6 +221,9 @@ impl Bus {
             0xFF46 => self.oam_dma(value),
             0xFF50 => self.boot_rom_mapped &= value & 1 == 0,
             0xFF40..=0xFF4B => self.ppu.write_reg(addr, value),
+            0xFF4D if self.cgb => self.speed_switch_armed = value & 1 != 0,
+            0xFF4F | 0xFF68..=0xFF6B if self.cgb => self.ppu.write_reg(addr, value),
+            0xFF70 if self.cgb => self.svbk = value & 7,
             0xFF00..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupt_enable = value,
@@ -188,7 +240,7 @@ impl Bus {
     /// What OAM DMA reads at `addr`. On the DMG, sources from $E000 up read work RAM.
     fn dma_source(&self, addr: u16) -> u8 {
         match addr {
-            0xE000..=0xFFFF => self.wram[(addr - 0xE000) as usize & 0x1FFF],
+            0xE000..=0xFFFF => self.wram[self.wram_index(0xC000 | (addr & 0x1FFF))],
             _ => self.read(addr),
         }
     }
@@ -275,19 +327,27 @@ impl Bus {
 
     /// Advances all non-CPU hardware by `cycles` T-cycles and collects interrupts.
     pub fn tick(&mut self, cycles: u32) {
-        self.cart.tick(cycles);
+        // In double speed the PPU, APU and cartridge clock keep running at normal speed.
+        let video_cycles = if self.double_speed {
+            let total = cycles + self.half_cycle;
+            self.half_cycle = total & 1;
+            total / 2
+        } else {
+            cycles
+        };
+        self.cart.tick(video_cycles);
         if self.dma.pending.is_some() || self.dma.active.is_some() {
             for _ in 0..cycles {
                 self.tick_dma();
             }
         }
-        self.apu.tick(cycles);
+        self.apu.tick(video_cycles);
         let counter = self.timer.counter() as u32;
         self.interrupt_flag |= self.timer.tick(cycles);
         // Falling edges of counter bit 8 clock the serial port.
         self.serial
             .clock(((counter + cycles) >> 9) - (counter >> 9));
-        self.interrupt_flag |= self.ppu.tick(cycles);
+        self.interrupt_flag |= self.ppu.tick(video_cycles);
         self.interrupt_flag |= self.joypad.take_interrupt();
         self.interrupt_flag |= self.serial.take_interrupt();
     }
