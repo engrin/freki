@@ -123,25 +123,17 @@ mooneye! {
     #[ignore = "not passing yet"]
     serial_boot_sclk_align_dmgabcmgb: "acceptance/serial/boot_sclk_align-dmgABCmgb.gb",
     timer_div_write: "acceptance/timer/div_write.gb",
-    #[ignore = "not passing yet"]
     timer_rapid_toggle: "acceptance/timer/rapid_toggle.gb",
     timer_tim00: "acceptance/timer/tim00.gb",
-    #[ignore = "not passing yet"]
     timer_tim00_div_trigger: "acceptance/timer/tim00_div_trigger.gb",
     timer_tim01: "acceptance/timer/tim01.gb",
-    #[ignore = "not passing yet"]
     timer_tim01_div_trigger: "acceptance/timer/tim01_div_trigger.gb",
     timer_tim10: "acceptance/timer/tim10.gb",
-    #[ignore = "not passing yet"]
     timer_tim10_div_trigger: "acceptance/timer/tim10_div_trigger.gb",
     timer_tim11: "acceptance/timer/tim11.gb",
-    #[ignore = "not passing yet"]
     timer_tim11_div_trigger: "acceptance/timer/tim11_div_trigger.gb",
-    #[ignore = "not passing yet"]
     timer_tima_reload: "acceptance/timer/tima_reload.gb",
-    #[ignore = "not passing yet"]
     timer_tima_write_reloading: "acceptance/timer/tima_write_reloading.gb",
-    #[ignore = "not passing yet"]
     timer_tma_write_reloading: "acceptance/timer/tma_write_reloading.gb",
     mbc1_bits_bank1: "emulator-only/mbc1/bits_bank1.gb",
     mbc1_bits_bank2: "emulator-only/mbc1/bits_bank2.gb",
