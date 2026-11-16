@@ -218,16 +218,59 @@ struct Wave {
     position: u8,
     ram: [u8; 16],
     length: Length,
+    /// T-cycles since the channel last fetched a byte from wave RAM.
+    since_fetch: u32,
 }
+
+/// On the DMG, CPU access to wave RAM while channel 3 plays only reaches the RAM if it
+/// happens within this many T-cycles after the channel fetched a byte.
+const WAVE_ACCESS_WINDOW: u32 = 2;
+/// Retriggering channel 3 when its next fetch is at most this many T-cycles away
+/// corrupts the start of wave RAM (DMG only).
+const WAVE_CORRUPT_WINDOW: u32 = 2;
+/// Extra delay before the first fetch after a trigger.
+const WAVE_TRIGGER_DELAY: u32 = 6;
 
 impl Wave {
     fn tick(&mut self) {
+        if !self.on {
+            return;
+        }
+        self.since_fetch = self.since_fetch.saturating_add(1);
         if self.timer > 0 {
             self.timer -= 1;
         }
         if self.timer == 0 {
             self.timer = (2048 - self.period as u32) * 2;
             self.position = (self.position + 1) & 31;
+            self.since_fetch = 0;
+        }
+    }
+
+    /// Index of the wave RAM byte a CPU access at `index` really reaches, or `None` if
+    /// the access is lost. While playing, every access hits the byte being played.
+    fn cpu_access(&self, index: usize) -> Option<usize> {
+        if !self.on {
+            Some(index)
+        } else if self.since_fetch < WAVE_ACCESS_WINDOW {
+            Some(self.position as usize / 2)
+        } else {
+            None
+        }
+    }
+
+    /// DMG bug: retriggering just before a fetch overwrites the start of wave RAM with
+    /// the byte (or aligned 4-byte block) about to be read.
+    fn corrupt_on_retrigger(&mut self) {
+        if !self.on || self.timer > WAVE_CORRUPT_WINDOW {
+            return;
+        }
+        let next = ((self.position as usize + 1) & 31) / 2;
+        if next < 4 {
+            self.ram[0] = self.ram[next];
+        } else {
+            let block = next & !3;
+            self.ram.copy_within(block..block + 4, 0);
         }
     }
 
@@ -245,9 +288,11 @@ impl Wave {
     }
 
     fn trigger(&mut self) {
+        self.corrupt_on_retrigger();
         self.on = self.dac_on;
-        self.timer = (2048 - self.period as u32) * 2;
+        self.timer = (2048 - self.period as u32) * 2 + WAVE_TRIGGER_DELAY;
         self.position = 0;
+        self.since_fetch = u32::MAX;
     }
 }
 
@@ -398,14 +443,19 @@ impl Apu {
                 let i = (addr - 0xFF10) as usize;
                 self.regs[i] | READ_MASKS[i]
             }
-            0xFF30..=0xFF3F => self.ch3.ram[(addr - 0xFF30) as usize],
+            0xFF30..=0xFF3F => match self.ch3.cpu_access((addr - 0xFF30) as usize) {
+                Some(i) => self.ch3.ram[i],
+                None => 0xFF,
+            },
             _ => 0xFF,
         }
     }
 
     pub fn write(&mut self, addr: u16, value: u8) {
         if let 0xFF30..=0xFF3F = addr {
-            self.ch3.ram[(addr - 0xFF30) as usize] = value;
+            if let Some(i) = self.ch3.cpu_access((addr - 0xFF30) as usize) {
+                self.ch3.ram[i] = value;
+            }
             return;
         }
         if addr == 0xFF26 {

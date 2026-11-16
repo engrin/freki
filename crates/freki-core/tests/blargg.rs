@@ -124,25 +124,20 @@ blargg! { "dmg_sound":
     dmg_sound_06_overflow_on_trigger => "06-overflow on trigger.gb",
     dmg_sound_07_len_sweep_period_sync => "07-len sweep period sync.gb",
     dmg_sound_08_len_ctr_during_power => "08-len ctr during power.gb",
-    #[ignore = "needs M-cycle-accurate memory timing (wave RAM access while playing)"]
     dmg_sound_09_wave_read_while_on => "09-wave read while on.gb",
-    #[ignore = "needs M-cycle-accurate memory timing (wave RAM access while playing)"]
     dmg_sound_10_wave_trigger_while_on => "10-wave trigger while on.gb",
     dmg_sound_11_regs_after_power => "11-regs after power.gb",
-    #[ignore = "needs M-cycle-accurate memory timing (wave RAM access while playing)"]
     dmg_sound_12_wave_write_while_on => "12-wave write while on.gb",
 }
 
-/// The combined ROM runs all 11 tests in a row (takes ~1 emulated minute).
+/// The combined ROM runs all 11 CPU tests in a row.
 #[test]
-#[ignore = "slow; run with --ignored"]
 fn cpu_instrs_all() {
     run_blargg("cpu_instrs.gb");
 }
 
-/// The combined ROM runs all 12 sound tests in a row. Fails until 09, 10 and 12 pass.
+/// The combined ROM runs all 12 sound tests in a row.
 #[test]
-#[ignore = "includes the three wave-RAM timing tests that need M-cycle accuracy"]
 fn dmg_sound_all() {
     run_blargg("dmg_sound.gb");
 }
