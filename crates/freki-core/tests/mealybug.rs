@@ -57,23 +57,17 @@ mealybug! {
     m3_bgp_change_sprites,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_bg_en_change,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_bg_map_change,
     m3_lcdc_obj_en_change,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_en_change_variant,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_size_change,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_obj_size_change_scx,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_tile_sel_change,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_tile_sel_win_change,
     m3_lcdc_win_en_change_multiple,
     #[ignore = "not yet pixel-exact"]
     m3_lcdc_win_en_change_multiple_wx,
-    #[ignore = "not yet pixel-exact"]
     m3_lcdc_win_map_change,
     m3_obp0_change,
     m3_scx_high_5_bits,
