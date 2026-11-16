@@ -347,6 +347,67 @@ mod tests {
         assert!(matches!(Code::parse("XYZ"), Err(CheatError::Format(_))));
     }
 
+    /// Game Genie decoding as SameBoy implements it (Core/cheats.c), ported literally:
+    /// strip dashes, drop the 8th digit, read "VVAAAA[OO]" as hex, rotate the address
+    /// right by 4 and XOR $F000, rotate the compare byte right by 2 and XOR $BA.
+    #[allow(clippy::manual_rotate)] // kept as literal shifts, like the C original
+    fn sameboy_game_genie(code: &str) -> Option<(u16, u8, Option<u8>)> {
+        let mut digits: String = code.chars().filter(|&c| c != '-').collect();
+        if digits.len() == 9 {
+            digits.remove(7);
+        }
+        if digits.len() != 8 && digits.len() != 6 {
+            return None;
+        }
+        let value = u8::from_str_radix(&digits[0..2], 16).ok()?;
+        let raw = u16::from_str_radix(&digits[2..6], 16).ok()?;
+        let address = ((raw >> 4) | (raw << 12)) ^ 0xF000;
+        if address > 0x7FFF {
+            return None;
+        }
+        let compare = if digits.len() == 8 {
+            let old = u8::from_str_radix(&digits[6..8], 16).ok()?;
+            Some(((old >> 2) | (old << 6)) ^ 0xBA)
+        } else {
+            None
+        };
+        Some((address, value, compare))
+    }
+
+    #[test]
+    fn game_genie_matches_sameboy_reference() {
+        // Deterministic pseudo-random codes covering all digit values and positions.
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut checked = 0;
+        for _ in 0..10_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let d: Vec<char> = (0..9)
+                .map(|i| char::from_digit(((seed >> (i * 4)) & 0xF) as u32, 16).unwrap())
+                .map(|c| c.to_ascii_uppercase())
+                .collect();
+            let long = format!(
+                "{}{}{}-{}{}{}-{}{}{}",
+                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]
+            );
+            let short: String = long[..7].to_string();
+            for code in [long.as_str(), short.as_str(), &long.replace('-', "")] {
+                let ours = Code::parse(code).ok().map(|c| match c {
+                    Code::GameGenie {
+                        address,
+                        value,
+                        compare,
+                    } => (address, value, compare),
+                    Code::GameShark { .. } => panic!("{code} parsed as GameShark"),
+                });
+                assert_eq!(ours, sameboy_game_genie(code), "code {code}");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 30_000);
+    }
+
     #[test]
     fn game_genie_compare_protects_other_banks() {
         let mut cheats = Cheats::new();
