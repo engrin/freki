@@ -1,0 +1,10 @@
+[package]
+name = "freki-core"
+description = "Platform-independent Game Boy (DMG) emulation core for freki"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

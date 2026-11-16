@@ -1,0 +1,10 @@
+/target
+
+# Secrets
+.env
+
+# ROMs are not committed (copyright); test ROMs are fetched by scripts/fetch-test-roms.sh
+*.gb
+*.gbc
+*.sav
+/roms/

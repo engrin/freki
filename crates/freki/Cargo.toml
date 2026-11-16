@@ -1,0 +1,12 @@
+[package]
+name = "freki"
+description = "freki: a Game Boy emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+freki-core = { version = "0.1.0", path = "../freki-core" }
+minifb = "0.29.0"
