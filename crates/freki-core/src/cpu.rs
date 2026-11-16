@@ -430,7 +430,7 @@ impl Cpu {
                 2 => {
                     // STOP (treated as a 2-byte NOP until CGB speed switching exists)
                     self.fetch(bus);
-                    4
+                    8
                 }
                 _ => {
                     // JR e8 / JR cc, e8
