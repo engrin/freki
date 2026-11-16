@@ -591,8 +591,8 @@ impl Ppu {
             if self.wx == pos.wrapping_add(7) {
                 true
             } else if self.wx == pos.wrapping_add(6) && !self.wx_just_changed {
-                // DMG LCD/PPU desync: the window starts a pixel early.
-                self.lcd_x = self.lcd_x.saturating_sub(1);
+                // One position late. Many DMGs also desync the LCD by a pixel here, but the
+                // reference unit for the mealybug screenshots does not, so neither do we.
                 true
             } else {
                 false
