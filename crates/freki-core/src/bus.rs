@@ -199,12 +199,14 @@ impl Bus {
         }
     }
 
-    /// Whether the PPU locks the CPU out of `addr` (VRAM while drawing, OAM during OAM
-    /// scan and drawing).
-    fn ppu_locked(&self, addr: u16) -> bool {
+    /// Whether the PPU locks the CPU out of `addr` for a read or a write (VRAM while
+    /// drawing, OAM during OAM scan and drawing; see [`Ppu`] for the exact windows).
+    fn ppu_locked(&self, addr: u16, write: bool) -> bool {
         match addr {
-            0x8000..=0x9FFF => !self.ppu.cpu_vram_accessible(),
-            0xFE00..=0xFE9F => !self.ppu.cpu_oam_accessible(),
+            0x8000..=0x9FFF if write => !self.ppu.cpu_vram_writable(),
+            0x8000..=0x9FFF => !self.ppu.cpu_vram_readable(),
+            0xFE00..=0xFE9F if write => !self.ppu.cpu_oam_writable(),
+            0xFE00..=0xFE9F => !self.ppu.cpu_oam_readable(),
             _ => false,
         }
     }
@@ -213,7 +215,7 @@ impl Bus {
     pub fn cpu_read(&self, addr: u16) -> u8 {
         if let Some(value) = self.dma_conflict(addr) {
             value
-        } else if self.ppu_locked(addr) {
+        } else if self.ppu_locked(addr, false) {
             0xFF
         } else {
             self.read(addr)
@@ -222,7 +224,7 @@ impl Bus {
 
     /// A write by the CPU (dropped when OAM DMA or the PPU blocks the address).
     pub fn cpu_write(&mut self, addr: u16, value: u8) {
-        if self.dma_conflict(addr).is_none() && !self.ppu_locked(addr) {
+        if self.dma_conflict(addr).is_none() && !self.ppu_locked(addr, true) {
             self.write(addr, value);
         }
     }

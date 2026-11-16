@@ -127,6 +127,9 @@ pub struct Ppu {
     irq_mode: Mode,
     /// Previous level of the combined STAT interrupt line (interrupts fire on rising edges).
     stat_line: bool,
+    /// The first line after the LCD is switched on: it has no mode 2 (STAT goes from mode 0
+    /// straight to mode 3 and OAM stays accessible).
+    first_line: bool,
 
     // ---- pixel pipeline (mode 3) ----
     pipeline_active: bool,
@@ -194,6 +197,7 @@ impl Ppu {
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
             stat_line: false,
+            first_line: false,
             pipeline_active: false,
             bg_fifo: VecDeque::with_capacity(16),
             obj_fifo: VecDeque::with_capacity(16),
@@ -291,13 +295,39 @@ impl Ppu {
         self.oam[(addr - 0xFE00) as usize] = value;
     }
 
-    /// Whether the CPU can access OAM (not during OAM scan and drawing).
-    pub fn cpu_oam_accessible(&self) -> bool {
-        !self.lcd_on() || matches!(self.mode, Mode::HBlank | Mode::VBlank)
+    /// Whether the CPU can read OAM: not during OAM scan and drawing, nor in the last
+    /// 4 dots before a visible line (its OAM scan locks OAM early).
+    pub fn cpu_oam_readable(&self) -> bool {
+        let next_line_visible = (self.ly as usize) < SCREEN_HEIGHT - 1;
+        !self.lcd_on()
+            || (matches!(self.mode, Mode::HBlank | Mode::VBlank)
+                && !(self.ly_changing() && next_line_visible))
     }
 
-    /// Whether the CPU can access VRAM (not while drawing).
-    pub fn cpu_vram_accessible(&self) -> bool {
+    /// Whether the CPU can write OAM: not while drawing, nor during OAM scan except in
+    /// its last M-cycle.
+    pub fn cpu_oam_writable(&self) -> bool {
+        !self.lcd_on()
+            || match self.mode {
+                Mode::HBlank | Mode::VBlank => true,
+                Mode::OamScan => self.dot >= MODE3_STAT_DOT - 3,
+                Mode::Drawing => false,
+            }
+    }
+
+    /// Whether the CPU can read VRAM: not while drawing, nor in the last M-cycle of OAM
+    /// scan.
+    pub fn cpu_vram_readable(&self) -> bool {
+        !self.lcd_on()
+            || match self.mode {
+                Mode::HBlank | Mode::VBlank => true,
+                Mode::OamScan => self.dot < MODE3_STAT_DOT - 3,
+                Mode::Drawing => false,
+            }
+    }
+
+    /// Whether the CPU can write VRAM (not while drawing).
+    pub fn cpu_vram_writable(&self) -> bool {
         !self.lcd_on() || self.mode != Mode::Drawing
     }
 
@@ -305,9 +335,9 @@ impl Ppu {
         self.lcdc & lcdc::LCD_ENABLE != 0
     }
 
-    /// LY as read by the CPU and compared with LYC. Line 153 reads as 0 after its first
+    /// LY as compared with LYC for the STAT interrupt. Line 153 reads as 0 after its first
     /// 4 dots, so LYC = 0 matches during the last line of VBlank.
-    fn ly_register(&self) -> u8 {
+    fn ly_for_lyc(&self) -> u8 {
         if self.ly == LINES_PER_FRAME - 1 && self.dot >= 4 {
             0
         } else {
@@ -315,11 +345,27 @@ impl Ppu {
         }
     }
 
+    /// Whether the line is in its last 4 dots, when LY already reads as the next line and
+    /// the STAT coincidence flag reads as clear (except after line 153, whose LY is already 0).
+    fn ly_changing(&self) -> bool {
+        self.dot >= DOTS_PER_LINE - 4 && self.ly != LINES_PER_FRAME - 1
+    }
+
+    /// LY as read by the CPU.
+    fn ly_register(&self) -> u8 {
+        if self.ly_changing() {
+            self.ly + 1
+        } else {
+            self.ly_for_lyc()
+        }
+    }
+
     pub fn read_reg(&self, addr: u16) -> u8 {
         match addr {
             0xFF40 => self.lcdc,
             0xFF41 => {
-                let coincidence = u8::from(self.ly_register() == self.lyc) << 2;
+                let coincidence =
+                    u8::from(!self.ly_changing() && self.ly_for_lyc() == self.lyc) << 2;
                 let mode = if self.lcd_on() { self.mode as u8 } else { 0 };
                 0x80 | self.stat | coincidence | mode
             }
@@ -361,8 +407,7 @@ impl Ppu {
                     self.wy_triggered = false;
                     self.wx_triggered = false;
                 } else if !was_on && self.lcd_on() {
-                    self.mode = Mode::OamScan;
-                    self.irq_mode = Mode::OamScan;
+                    self.first_line = true;
                 }
             }
             0xFF41 => self.stat = value & 0x78,
@@ -435,6 +480,11 @@ impl Ppu {
                     self.window_y = 0xFF;
                     self.wy_triggered = false;
                 }
+                0 | 1 if self.first_line => {
+                    if self.dot == 1 {
+                        self.sprites.clear();
+                    }
+                }
                 0 | 1 if self.ly != 0 || self.dot == 1 => {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
@@ -471,6 +521,7 @@ impl Ppu {
         self.dot += 1;
         if self.dot == DOTS_PER_LINE {
             self.dot = 0;
+            self.first_line = false;
             self.ly += 1;
             if self.ly as usize == SCREEN_HEIGHT {
                 self.mode = Mode::VBlank;
@@ -494,7 +545,7 @@ impl Ppu {
         }
 
         // STAT interrupt fires on a rising edge of the OR of all enabled sources.
-        let line = (self.stat & stat::LYC_INT != 0 && self.ly_register() == self.lyc)
+        let line = (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
             || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
             || (self.stat & stat::VBLANK_INT != 0 && self.irq_mode == Mode::VBlank)
             || (self.stat & stat::OAM_INT != 0 && self.irq_mode == Mode::OamScan);
