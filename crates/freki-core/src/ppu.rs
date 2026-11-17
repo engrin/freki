@@ -942,12 +942,24 @@ impl Ppu {
         self.obj_size_history =
             self.obj_size_history << 1 | u8::from(self.lcdc & lcdc::OBJ_SIZE_8X16 != 0);
         let mut irq = 0;
+        // At normal speed STAT reads mode 0 from line 153's last 4 dots and mode 2 from the
+        // end of the line (Gambatte's hwtests, ly0/lycint152_ly0stat_*); the interrupt
+        // sources keep their own timing.
+        if self.ly == LINES_PER_FRAME - 1 && !self.double_speed {
+            if self.dot == DOTS_PER_LINE - 5 {
+                self.mode = Mode::HBlank;
+            } else if self.dot == DOTS_PER_LINE - 1 {
+                self.mode = Mode::OamScan;
+            }
+        }
         if (self.ly as usize) < SCREEN_HEIGHT {
             match self.dot {
                 0 if self.ly == 0 => {
-                    // Line 0 is special on the DMG: STAT reads mode 0 for one dot and the
-                    // OAM interrupt fires one dot later than on other lines.
-                    self.mode = Mode::HBlank;
+                    // Line 0 is special: its OAM interrupt fires one dot later than on other
+                    // lines (in double speed STAT also reads mode 0 for one dot).
+                    if self.double_speed {
+                        self.mode = Mode::HBlank;
+                    }
                     self.window_y = 0xFF;
                 }
                 0 | 1 if self.first_line => {
