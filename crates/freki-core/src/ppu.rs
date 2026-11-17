@@ -180,6 +180,9 @@ pub struct Ppu {
     /// The OAM (mode 2) interrupt was enabled when mode 2 started: the source only counts
     /// then, so enabling it later in mode 2 does not request an interrupt.
     oam_int_armed: bool,
+    /// LCDC's OBJ size bit over the last dots (bit 0 = this dot): OAM scan sees a change
+    /// three dots late (Gambatte's hwtests, sprites/late_sizechange*).
+    obj_size_history: u8,
     /// STAT's coincidence flag as it was when the LCD was switched off (it is frozen
     /// while the LCD is off).
     lyc_flag_off: bool,
@@ -273,6 +276,7 @@ impl Ppu {
             irq_mode: Mode::OamScan,
             stat_line: false,
             oam_int_armed: false,
+            obj_size_history: 0,
             lyc_flag_off: false,
             hblank_started: false,
             first_line: false,
@@ -721,6 +725,8 @@ impl Ppu {
     }
 
     fn tick_dot(&mut self) -> u8 {
+        self.obj_size_history =
+            self.obj_size_history << 1 | u8::from(self.lcdc & lcdc::OBJ_SIZE_8X16 != 0);
         let mut irq = 0;
         if (self.ly as usize) < SCREEN_HEIGHT {
             match self.dot {
@@ -744,7 +750,7 @@ impl Ppu {
                         self.sprites.clear();
                     }
                 }
-                // OAM scan checks entry i at dot 2i + 3, with the OBJ size at that moment.
+                // OAM scan checks entry i at dot 2i + 3, with the OBJ size of three dots earlier.
                 3..=81 if self.dot % 2 == 1 => self.scan_oam_entry((self.dot as usize - 3) / 2),
                 _ => {}
             }
@@ -840,7 +846,7 @@ impl Ppu {
         if index >= 40 || self.sprites.len() == MAX_SPRITES_PER_LINE {
             return;
         }
-        let height: i16 = if self.lcdc & lcdc::OBJ_SIZE_8X16 != 0 {
+        let height: i16 = if self.obj_size_history & 0b1000 != 0 {
             16
         } else {
             8
