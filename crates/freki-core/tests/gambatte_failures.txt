@@ -267,7 +267,6 @@ cgb lycEnable/late_ff45_enable_3_dmg08_cgb04c_out1.asm
 cgb lycEnable/late_ff45_enable_ds_2_cgb04c_out1.asm
 cgb lycEnable/late_ff45_enable_ds_lcdoffset1_2_cgb04c_out0.asm
 cgb lycEnable/late_ff45_enable_lcdoffset1_2_cgb04c_out0.asm
-cgb lycEnable/lcdoff_lycirqen_1_dmg08_cgb04c_outE2.asm
 cgb lycEnable/lyc0_ff41_disable_ds_1_cgb04c_outE0.asm
 cgb lycEnable/lyc0_ff45_disable_ds_1_cgb04c_outE0.asm
 cgb lycEnable/lyc0_late_ff45_enable_2_dmg08_outE2_cgb04c_outE0.asm
@@ -625,8 +624,6 @@ dmg lyc153int_m2irq/lyc153int_m2irq_ifw_2_dmg08_cgb04c_out0.asm
 dmg lyc153int_m2irq/lyc153int_m2irq_late_retrigger_2_dmg08_cgb04c_out0.asm
 dmg lycEnable/ff40_disable_2_dmg08_cgb04c_out2.asm
 dmg lycEnable/late_ff45_enable_3_dmg08_cgb04c_out1.asm
-dmg lycEnable/lcdoff_lycirqen_1_dmg08_cgb04c_outE2.asm
-dmg lycEnable/lcdoff_lycirqen_4_dmg08_outE2_cgb04c_outE0.asm
 dmg lycEnable/lyc0_ff45_disable_2_dmg08_outE0_cgb04c_outE2.asm
 dmg lycEnable/lyc0_late_ff45_enable_3_dmg08_cgb04c_outE0.asm
 dmg lycEnable/lyc0_m1disable_2_dmg08_outE2_cgb04c_outE0.asm

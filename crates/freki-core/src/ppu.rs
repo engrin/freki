@@ -876,6 +876,11 @@ impl Ppu {
     pub fn tick(&mut self, cycles: u32) -> u8 {
         let mut irq = 0;
         if !self.lcd_on() {
+            // With the LCD off only a STAT or LYC write can raise the interrupt (through
+            // the LYC flag frozen when the LCD was switched off).
+            if std::mem::take(&mut self.write_irq_in) > 0 {
+                irq |= interrupt::STAT;
+            }
             return irq;
         }
         for _ in 0..cycles {
@@ -1105,7 +1110,15 @@ impl Ppu {
     /// After a STAT or LYC write: if it raised the STAT interrupt line, the interrupt is
     /// requested a few dots later (Gambatte's hwtests, lycEnable/*trigger_delay*).
     fn check_write_irq(&mut self) {
-        if self.lcd_on() && !self.stat_line && self.stat_sources() {
+        if !self.lcd_on() {
+            let line = self.irq_stat & stat::LYC_INT != 0 && self.lyc_flag_off;
+            if line && !self.stat_line {
+                self.write_irq_in = 1;
+            }
+            self.stat_line = line;
+            return;
+        }
+        if !self.stat_line && self.stat_sources() {
             self.stat_line = true;
             self.write_irq_in = if self.dmg_hardware() {
                 WRITE_IRQ_DMG
