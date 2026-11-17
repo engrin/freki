@@ -145,6 +145,15 @@ impl Cpu {
         cpu
     }
 
+    /// After the CGB boot ROM handed over to a DMG game; `b` depends on the header.
+    pub fn new_post_boot_cgb_compat(b: u8) -> Self {
+        let mut cpu = Self::new_post_boot_cgb();
+        cpu.regs.set_bc((b as u16) << 8);
+        cpu.regs.set_de(0x0008);
+        cpu.regs.set_hl(0x007C);
+        cpu
+    }
+
     pub fn new_post_boot() -> Self {
         let mut regs = Registers::default();
         regs.set_af(0x01B0);

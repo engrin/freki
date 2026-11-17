@@ -60,6 +60,8 @@ pub struct Bus {
     wram: Vec<u8>,
     /// SVBK ($FF70): work RAM bank at $D000 (CGB).
     svbk: u8,
+    /// Undocumented CGB registers $FF72–$FF75 (plain storage; $FF75 keeps bits 4–6).
+    undocumented: [u8; 4],
     /// KEY1 ($FF4D) bit 0: a speed switch is armed and happens on the next STOP (CGB).
     speed_switch_armed: bool,
     /// CGB double speed: the CPU, timer, serial port and OAM DMA run twice as fast.
@@ -126,6 +128,7 @@ impl Bus {
             key0_dmg: false,
             wram: vec![0; 0x8000],
             svbk: 0,
+            undocumented: [0; 4],
             speed_switch_armed: false,
             double_speed: false,
             half_cycle: 0,
@@ -256,8 +259,16 @@ impl Bus {
                 0x7E | u8::from(self.double_speed) << 7 | u8::from(self.speed_switch_armed)
             }
             0xFF4F | 0xFF68..=0xFF6C if self.cgb => self.ppu.read_reg(addr),
+            // CGB hardware in DMG compatibility mode still shows VBK and the palette indexes.
+            0xFF4F | 0xFF68 | 0xFF6A if self.cgb_hardware => self.ppu.read_reg(addr),
             0xFF55 if self.cgb => u8::from(!self.hdma.active) << 7 | self.hdma.remaining,
             0xFF70 if self.cgb => 0xF8 | self.svbk,
+            0xFF72 | 0xFF73 if self.cgb_hardware => self.undocumented[addr as usize - 0xFF72],
+            0xFF74 if self.cgb => self.undocumented[2],
+            0xFF75 if self.cgb_hardware => 0x8F | self.undocumented[3],
+            // PCM12/PCM34: the digital outputs of channels 1 and 2, 3 and 4.
+            0xFF76 if self.cgb_hardware => self.apu.pcm(0),
+            0xFF77 if self.cgb_hardware => self.apu.pcm(1),
             0xFF00..=0xFF7F => 0xFF, // unmapped on the DMG
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupt_enable,
@@ -307,6 +318,11 @@ impl Bus {
             }
             0xFF55 if self.cgb => self.start_hdma(value),
             0xFF70 if self.cgb => self.svbk = value & 7,
+            0xFF72 | 0xFF73 if self.cgb_hardware => {
+                self.undocumented[addr as usize - 0xFF72] = value
+            }
+            0xFF74 if self.cgb => self.undocumented[2] = value,
+            0xFF75 if self.cgb_hardware => self.undocumented[3] = value & 0x70,
             0xFF00..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupt_enable = value,

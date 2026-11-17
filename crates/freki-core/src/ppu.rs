@@ -39,6 +39,11 @@ const MODE3_STAT_DOT: u32 = 79;
 const SPRITE_SORT_DOT: u32 = 81;
 /// First dot of the pixel pipeline.
 const PIPELINE_START_DOT: u32 = 86;
+/// CGB: dot of line 143 at which entering VBlank triggers the OAM STAT interrupt
+/// (Mooneye's vblank_stat_intr-C allows 448–451; the DMG fires it at line 144, dot 0).
+const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
+/// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
+const MAX_MODE0_LEAD: u32 = 5;
 const MAX_SPRITES_PER_LINE: usize = 10;
 /// The pipeline's position counter starts at −16 (as an 8-bit value).
 const POSITION_START: u8 = 0u8.wrapping_sub(16);
@@ -318,6 +323,18 @@ impl Ppu {
         self.dot = 396;
         self.mode = Mode::VBlank;
         self.irq_mode = Mode::VBlank;
+    }
+
+    /// Where the CGB boot ROM leaves the PPU for a CGB game or, with `compat`, a DMG
+    /// game (measured with the real boot ROM), with the palette indexes and OBJ palettes
+    /// it wrote.
+    pub fn skip_to_post_boot_cgb(&mut self, compat: bool) {
+        (self.ly, self.dot) = if compat { (148, 364) } else { (144, 152) };
+        self.mode = Mode::VBlank;
+        self.irq_mode = Mode::VBlank;
+        (self.bcps, self.ocps) = if compat { (0x88, 0x90) } else { (0x80, 0x81) };
+        self.obp0 = 0;
+        self.obp1 = 0;
     }
 
     /// Power-on state: LCD off, palettes and VRAM cleared.
@@ -738,7 +755,8 @@ impl Ppu {
                 self.mode3_dot();
                 // STAT switches to mode 0 shortly before the pipeline finishes.
                 if self.mode == Mode::Drawing
-                    && (SCREEN_WIDTH as u8 - 4..SCREEN_WIDTH as u8).contains(&self.position)
+                    && (SCREEN_WIDTH as u8 - MAX_MODE0_LEAD as u8..SCREEN_WIDTH as u8)
+                        .contains(&self.position)
                     && !self.lookahead
                     && self.mode0_due()
                 {
@@ -749,6 +767,15 @@ impl Ppu {
             }
         }
 
+        // On the CGB the same quirk fires a few dots before LY becomes 144.
+        if !self.dmg_hardware()
+            && self.ly as usize == SCREEN_HEIGHT - 1
+            && self.dot == CGB_VBLANK_OAM_INT_DOT
+            && self.stat & stat::OAM_INT != 0
+            && !self.stat_line
+        {
+            irq |= interrupt::STAT;
+        }
         self.dot += 1;
         if self.dot == DOTS_PER_LINE {
             self.dot = 0;
@@ -759,7 +786,7 @@ impl Ppu {
                 self.frame_ready = true;
                 irq |= interrupt::VBLANK;
                 // DMG quirk: entering VBlank also triggers the OAM (mode 2) STAT interrupt.
-                if self.stat & stat::OAM_INT != 0 && !self.stat_line {
+                if self.dmg_hardware() && self.stat & stat::OAM_INT != 0 && !self.stat_line {
                     irq |= interrupt::STAT;
                 }
             } else if self.ly == LINES_PER_FRAME {
@@ -882,9 +909,10 @@ impl Ppu {
     }
 
     /// Whether STAT (and its interrupt) switch to mode 0 on this dot: two dots before the
-    /// pipeline pushes its last pixel (252 dots into a line without stalls), or four dots
-    /// before if the line fetched sprites. Mooneye's intr_2_mode0_timing_sprites pins
-    /// this down, including sprites at X 164–167 that still stall the end of the line.
+    /// pipeline pushes its last pixel (252 dots into a line without stalls), or a few
+    /// more if the line fetched sprites (`mode0_lead`). Mooneye's
+    /// intr_2_mode0_timing_sprites pins this down, including sprites at X 164–167 that
+    /// still stall the end of the line.
     fn mode0_due(&self) -> bool {
         let left = SCREEN_WIDTH as u32 - self.position as u32;
         let match_x = self.x_for_object_match();
@@ -916,13 +944,16 @@ impl Ppu {
         dots <= ahead.mode0_lead()
     }
 
-    /// Dots between mode 0 in STAT and the end of the pipeline (see `mode0_due`).
+    /// Dots between mode 0 in STAT and the end of the pipeline (see `mode0_due`): 2, or
+    /// with sprites 4 on the DMG and 5 on the CGB (both exact for Mooneye's test).
     /// Sprites fetched on the line are approximated by sprites passed with OBJ enabled.
     fn mode0_lead(&self) -> u32 {
-        if self.lcdc & lcdc::OBJ_ENABLE != 0 && self.next_sprite > 0 {
+        if self.lcdc & lcdc::OBJ_ENABLE == 0 || self.next_sprite == 0 {
+            2
+        } else if self.dmg_hardware() {
             4
         } else {
-            2
+            MAX_MODE0_LEAD
         }
     }
 

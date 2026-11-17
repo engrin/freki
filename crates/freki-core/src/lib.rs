@@ -39,6 +39,23 @@ pub const CYCLES_PER_FRAME: u32 = 70_224;
 /// Native refresh rate (~59.73 Hz).
 pub const FRAMES_PER_SECOND: f64 = CLOCK_HZ as f64 / CYCLES_PER_FRAME as f64;
 
+/// DIV counter when the CGB boot ROM hands over to a CGB game, and to a DMG game
+/// (measured with the real boot ROM; it varies a little with the cartridge header).
+const CGB_BOOT_COUNTER: u16 = 0x1E88;
+const CGB_COMPAT_BOOT_COUNTER: u16 = 0x2678;
+
+/// What the CGB boot ROM leaves in B for a DMG game: the sum of the title bytes if the
+/// licensee is Nintendo, otherwise 0.
+fn cart_title_sum(cart: &Cartridge) -> u8 {
+    let old = cart.read_rom(0x14B);
+    let new = [cart.read_rom(0x144), cart.read_rom(0x145)];
+    if old == 0x01 || (old == 0x33 && new == *b"01") {
+        (0x134..=0x143).fold(0u8, |sum, addr| sum.wrapping_add(cart.read_rom(addr)))
+    } else {
+        0
+    }
+}
+
 /// Which hardware is emulated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
@@ -95,11 +112,18 @@ impl GameBoy {
         bus.ppu.skip_to_post_boot();
         let cpu = if model == Model::Cgb {
             bus.set_cgb();
-            if !cgb_game {
+            bus.ppu.skip_to_post_boot_cgb(!cgb_game);
+            if cgb_game {
+                bus.timer = timer::Timer::with_counter(CGB_BOOT_COUNTER);
+                Cpu::new_post_boot_cgb()
+            } else {
                 bus.enter_dmg_compat();
                 bus.ppu.set_grey_compat_palettes();
+                bus.timer = timer::Timer::with_counter(CGB_COMPAT_BOOT_COUNTER);
+                // The boot ROM leaves the joypad with neither button group selected.
+                bus.joypad.write(0x30);
+                Cpu::new_post_boot_cgb_compat(cart_title_sum(&bus.cart))
             }
-            Cpu::new_post_boot_cgb()
         } else {
             Cpu::new_post_boot()
         };
@@ -128,6 +152,7 @@ impl GameBoy {
         let mut bus = Bus::power_on(cart, boot);
         if cgb {
             bus.set_cgb();
+            bus.timer = timer::Timer::power_on_cgb();
         }
         Ok(Self {
             cpu: Cpu::new_power_on(),
@@ -449,6 +474,18 @@ mod tests {
         rom[0x149] = 0x00; // no RAM
         rom[0x150..0x152].copy_from_slice(&[0x18, 0xFE]); // JR -2
         rom
+    }
+
+    #[test]
+    fn cgb_boot_leaves_title_checksum_in_b_for_nintendo_dmg_games() {
+        let regs = |rom: Vec<u8>| GameBoy::with_model(rom, Model::Cgb).unwrap().cpu.regs;
+        let r = regs(test_rom());
+        assert_eq!((r.bc(), r.de(), r.hl()), (0x0000, 0x0008, 0x007C));
+
+        let mut rom = test_rom();
+        rom[0x14B] = 0x01; // Nintendo
+        let sum = b"FREKI".iter().fold(0u8, |a, &b| a.wrapping_add(b));
+        assert_eq!(regs(rom).bc(), (sum as u16) << 8);
     }
 
     #[test]

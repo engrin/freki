@@ -3,7 +3,7 @@
 #   - Blargg's cpu_instrs, dmg_sound, cgb_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
 #   - dmg-acid2 and cgb-acid2 by Matt Currie (MIT), plus their reference screenshots
 #   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG references
-#   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance and emulator-only (MBC) tests
+#   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance, emulator-only (MBC) and misc (CGB) tests
 set -euo pipefail
 
 DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
@@ -76,12 +76,12 @@ for rom in "$DEST"/mealybug/*.gb; do
     && echo "fetch $ref" || echo "no DMG reference for $name"
 done
 
-# Mooneye: prebuilt release tarball; keep the acceptance and emulator-only ROMs.
-if [[ ! -d "$DEST/mooneye/acceptance" ]]; then
+# Mooneye: prebuilt release tarball; keep the acceptance, emulator-only and misc ROMs.
+if [[ ! -d "$DEST/mooneye/misc" ]]; then
   fetch "$MTS_URL" "$DEST/mooneye.tar.xz"
   mkdir -p "$DEST/mooneye"
   tar -xJf "$DEST/mooneye.tar.xz" -C "$DEST/mooneye" --strip-components=1 \
-    "$MTS/acceptance" "$MTS/emulator-only" "$MTS/LICENSE"
+    "$MTS/acceptance" "$MTS/emulator-only" "$MTS/misc" "$MTS/LICENSE"
   rm "$DEST/mooneye.tar.xz"
 fi
 

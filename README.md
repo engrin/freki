@@ -14,8 +14,10 @@ Named after Freki, one of Odin's two wolves.
 > mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels),
 > and all 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,
 > interrupt, PPU mode and VRAM/OAM access timing).
+> On the Game Boy Color, the 58 Mooneye tests meant for all models or the CGB pass as well
+> (boot state, I/O registers, interrupt and PPU timing), with or without its boot ROM.
 > Original Game Boy games can also run colourised on the GBC (with its boot ROM).
-> Missing: CGB-specific PPU timing differences.
+> Missing: CGB-specific mid-scanline PPU timing (no public test ROMs check it).
 
 ## Layout
 

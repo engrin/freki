@@ -459,9 +459,23 @@ impl Apu {
         self.samples.clear();
     }
 
-    /// Switches to the Game Boy Color's sound hardware.
+    /// Switches to the Game Boy Color's sound hardware. Its wave RAM powers on as
+    /// alternating $00 and $FF bytes.
     pub fn set_cgb(&mut self) {
         self.cgb = true;
+        for (i, byte) in self.ch3.ram.iter_mut().enumerate() {
+            *byte = if i % 2 == 0 { 0x00 } else { 0xFF };
+        }
+    }
+
+    /// PCM12 ($FF76, `pair` 0) and PCM34 ($FF77, `pair` 1) on the CGB: the current digital
+    /// outputs (0–15) of channels 1 and 2 or 3 and 4, the second in the high nibble.
+    pub fn pcm(&self, pair: u8) -> u8 {
+        if pair == 0 {
+            self.ch2.output() << 4 | self.ch1.output()
+        } else {
+            self.ch4.output() << 4 | self.ch3.output()
+        }
     }
 
     /// Moves all samples produced so far into `out` (interleaved left, right).

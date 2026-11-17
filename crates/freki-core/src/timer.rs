@@ -4,6 +4,8 @@ use crate::bus::interrupt;
 use serde::{Deserialize, Serialize};
 
 const POWER_ON_COUNTER: u16 = 8;
+/// Like `POWER_ON_COUNTER`, for the CGB boot ROM (Mooneye's boot_div-cgbABCDE).
+const CGB_POWER_ON_COUNTER: u16 = 0u16.wrapping_sub(4);
 
 /// The timer is driven by a 16-bit counter (DIV is its upper byte). TIMA increments on
 /// each falling edge of `TAC enable AND counter bit`; because that signal is checked
@@ -38,6 +40,19 @@ impl Timer {
     pub fn power_on() -> Self {
         Self {
             counter: POWER_ON_COUNTER,
+            ..Default::default()
+        }
+    }
+
+    /// Power-on state of the Game Boy Color.
+    pub fn power_on_cgb() -> Self {
+        Self::with_counter(CGB_POWER_ON_COUNTER)
+    }
+
+    /// A timer whose internal counter (DIV in the upper byte) starts at `counter`.
+    pub fn with_counter(counter: u16) -> Self {
+        Self {
+            counter,
             ..Default::default()
         }
     }

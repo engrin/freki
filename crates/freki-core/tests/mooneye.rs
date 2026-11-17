@@ -3,35 +3,48 @@
 //! A Mooneye ROM finishes by executing `LD B,B` ($40). It passed if B, C, D, E, H, L
 //! then hold the Fibonacci numbers 3, 5, 8, 13, 21, 34; it failed if they hold $42.
 //!
-//! Only tests that apply to a DMG (rev. A–C) are listed. The ROMs are not in the repo;
-//! fetch them with `scripts/fetch-test-roms.sh`. If they are missing, the tests pass.
+//! The tests that apply to a DMG (rev. A–C) run on the DMG. On the Game Boy Color (CPU CGB
+//! A–E) run the tests meant for all models and the CGB-only ones from `misc/`. The ROMs
+//! are not in the repo; fetch them with `scripts/fetch-test-roms.sh`. If they are missing,
+//! the tests pass.
 //!
-//! The boot tests also run through a real DMG boot ROM if one is at `bios/gb_bios.bin`
-//! (not included; Nintendo's copyright), checking that freki's emulation of the boot
-//! sequence hands over to the game in the same state as the built-in post-boot state.
+//! The boot tests also run through real boot ROMs if they are at `bios/gb_bios.bin` and
+//! `bios/gbc_bios.bin` (not included; Nintendo's copyright), checking that freki's emulation
+//! of the boot sequence hands over to the game in the same state as the built-in post-boot
+//! state.
 
 use std::path::PathBuf;
 
-use freki_core::{BootRom, CLOCK_HZ, GameBoy};
+use freki_core::{BootRom, CLOCK_HZ, GameBoy, Model};
 
 /// Emulated seconds a ROM may run before it counts as hung.
 const TIMEOUT_SECONDS: u64 = 20;
 
 fn run(path: &str) {
-    run_with(path, None);
+    run_with(path, Model::Dmg, None);
 }
 
-/// Runs a test after the real DMG boot ROM, if it is present.
-fn run_after_boot_rom(path: &str) {
-    let boot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bios/gb_bios.bin");
+fn run_cgb(path: &str) {
+    run_with(path, Model::Cgb, None);
+}
+
+/// Runs a test after the real DMG or CGB boot ROM, if it is present.
+fn run_after_boot_rom(path: &str, model: Model) {
+    let file = match model {
+        Model::Dmg => "gb_bios.bin",
+        Model::Cgb => "gbc_bios.bin",
+    };
+    let boot = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bios")
+        .join(file);
     let Ok(bytes) = std::fs::read(&boot) else {
         eprintln!("skipping: no boot ROM at {}", boot.display());
         return;
     };
-    run_with(path, Some(BootRom::new(&bytes).expect("DMG boot ROM")));
+    run_with(path, model, Some(BootRom::new(&bytes).expect("boot ROM")));
 }
 
-fn run_with(path: &str, boot: Option<BootRom>) {
+fn run_with(path: &str, model: Model, boot: Option<BootRom>) {
     let full = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../roms/test/mooneye")
         .join(path);
@@ -44,7 +57,7 @@ fn run_with(path: &str, boot: Option<BootRom>) {
     };
     let mut gb = match boot {
         Some(boot) => GameBoy::with_boot_rom(rom, boot),
-        None => GameBoy::new(rom),
+        None => GameBoy::with_model(rom, model),
     }
     .expect("load ROM");
     let mut cycles = 0u64;
@@ -174,19 +187,96 @@ mooneye! {
 }
 
 macro_rules! after_boot_rom {
-    ($($name:ident: $path:literal,)*) => {
+    ($($name:ident: $model:ident $path:literal,)*) => {
         $(
             #[test]
             fn $name() {
-                run_after_boot_rom($path);
+                run_after_boot_rom($path, Model::$model);
             }
         )*
     };
 }
 
 after_boot_rom! {
-    boot_rom_then_boot_div: "acceptance/boot_div-dmgABCmgb.gb",
-    boot_rom_then_boot_hwio: "acceptance/boot_hwio-dmgABCmgb.gb",
-    boot_rom_then_boot_regs: "acceptance/boot_regs-dmgABC.gb",
-    boot_rom_then_sclk_align: "acceptance/serial/boot_sclk_align-dmgABCmgb.gb",
+    boot_rom_then_boot_div: Dmg "acceptance/boot_div-dmgABCmgb.gb",
+    boot_rom_then_boot_hwio: Dmg "acceptance/boot_hwio-dmgABCmgb.gb",
+    boot_rom_then_boot_regs: Dmg "acceptance/boot_regs-dmgABC.gb",
+    boot_rom_then_sclk_align: Dmg "acceptance/serial/boot_sclk_align-dmgABCmgb.gb",
+    cgb_boot_rom_then_boot_div: Cgb "misc/boot_div-cgbABCDE.gb",
+    cgb_boot_rom_then_boot_hwio: Cgb "misc/boot_hwio-C.gb",
+    cgb_boot_rom_then_boot_regs: Cgb "misc/boot_regs-cgb.gb",
+    cgb_boot_rom_then_unused_hwio: Cgb "misc/bits/unused_hwio-C.gb",
+    cgb_boot_rom_then_vblank_stat_intr: Cgb "misc/ppu/vblank_stat_intr-C.gb",
+}
+
+macro_rules! cgb {
+    ($($name:ident: $path:literal,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                run_cgb($path);
+            }
+        )*
+    };
+}
+
+cgb! {
+    cgb_add_sp_e_timing: "acceptance/add_sp_e_timing.gb",
+    cgb_bits_mem_oam: "acceptance/bits/mem_oam.gb",
+    cgb_bits_reg_f: "acceptance/bits/reg_f.gb",
+    cgb_call_cc_timing: "acceptance/call_cc_timing.gb",
+    cgb_call_cc_timing2: "acceptance/call_cc_timing2.gb",
+    cgb_call_timing: "acceptance/call_timing.gb",
+    cgb_call_timing2: "acceptance/call_timing2.gb",
+    cgb_div_timing: "acceptance/div_timing.gb",
+    cgb_ei_sequence: "acceptance/ei_sequence.gb",
+    cgb_ei_timing: "acceptance/ei_timing.gb",
+    cgb_halt_ime0_ei: "acceptance/halt_ime0_ei.gb",
+    cgb_halt_ime0_nointr_timing: "acceptance/halt_ime0_nointr_timing.gb",
+    cgb_halt_ime1_timing: "acceptance/halt_ime1_timing.gb",
+    cgb_if_ie_registers: "acceptance/if_ie_registers.gb",
+    cgb_instr_daa: "acceptance/instr/daa.gb",
+    cgb_interrupts_ie_push: "acceptance/interrupts/ie_push.gb",
+    cgb_intr_timing: "acceptance/intr_timing.gb",
+    cgb_jp_cc_timing: "acceptance/jp_cc_timing.gb",
+    cgb_jp_timing: "acceptance/jp_timing.gb",
+    cgb_ld_hl_sp_e_timing: "acceptance/ld_hl_sp_e_timing.gb",
+    cgb_oam_dma_basic: "acceptance/oam_dma/basic.gb",
+    cgb_oam_dma_reg_read: "acceptance/oam_dma/reg_read.gb",
+    cgb_oam_dma_restart: "acceptance/oam_dma_restart.gb",
+    cgb_oam_dma_start: "acceptance/oam_dma_start.gb",
+    cgb_oam_dma_timing: "acceptance/oam_dma_timing.gb",
+    cgb_pop_timing: "acceptance/pop_timing.gb",
+    cgb_ppu_intr_2_0_timing: "acceptance/ppu/intr_2_0_timing.gb",
+    cgb_ppu_intr_2_mode0_timing: "acceptance/ppu/intr_2_mode0_timing.gb",
+    cgb_ppu_intr_2_mode0_timing_sprites: "acceptance/ppu/intr_2_mode0_timing_sprites.gb",
+    cgb_ppu_intr_2_mode3_timing: "acceptance/ppu/intr_2_mode3_timing.gb",
+    cgb_ppu_intr_2_oam_ok_timing: "acceptance/ppu/intr_2_oam_ok_timing.gb",
+    cgb_ppu_stat_irq_blocking: "acceptance/ppu/stat_irq_blocking.gb",
+    cgb_ppu_stat_lyc_onoff: "acceptance/ppu/stat_lyc_onoff.gb",
+    cgb_push_timing: "acceptance/push_timing.gb",
+    cgb_rapid_di_ei: "acceptance/rapid_di_ei.gb",
+    cgb_ret_cc_timing: "acceptance/ret_cc_timing.gb",
+    cgb_ret_timing: "acceptance/ret_timing.gb",
+    cgb_reti_intr_timing: "acceptance/reti_intr_timing.gb",
+    cgb_reti_timing: "acceptance/reti_timing.gb",
+    cgb_rst_timing: "acceptance/rst_timing.gb",
+    cgb_timer_div_write: "acceptance/timer/div_write.gb",
+    cgb_timer_rapid_toggle: "acceptance/timer/rapid_toggle.gb",
+    cgb_timer_tim00: "acceptance/timer/tim00.gb",
+    cgb_timer_tim00_div_trigger: "acceptance/timer/tim00_div_trigger.gb",
+    cgb_timer_tim01: "acceptance/timer/tim01.gb",
+    cgb_timer_tim01_div_trigger: "acceptance/timer/tim01_div_trigger.gb",
+    cgb_timer_tim10: "acceptance/timer/tim10.gb",
+    cgb_timer_tim10_div_trigger: "acceptance/timer/tim10_div_trigger.gb",
+    cgb_timer_tim11: "acceptance/timer/tim11.gb",
+    cgb_timer_tim11_div_trigger: "acceptance/timer/tim11_div_trigger.gb",
+    cgb_timer_tima_reload: "acceptance/timer/tima_reload.gb",
+    cgb_timer_tima_write_reloading: "acceptance/timer/tima_write_reloading.gb",
+    cgb_timer_tma_write_reloading: "acceptance/timer/tma_write_reloading.gb",
+    cgb_boot_div_cgbabcde: "misc/boot_div-cgbABCDE.gb",
+    cgb_boot_hwio_c: "misc/boot_hwio-C.gb",
+    cgb_boot_regs_cgb: "misc/boot_regs-cgb.gb",
+    cgb_unused_hwio_c: "misc/bits/unused_hwio-C.gb",
+    cgb_vblank_stat_intr_c: "misc/ppu/vblank_stat_intr-C.gb",
 }
