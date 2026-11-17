@@ -928,7 +928,9 @@ impl Ppu {
             && self.wy_triggered
             && self.lcdc & lcdc::WINDOW_ENABLE != 0
             && (160..166).contains(&self.wx);
-        let fifo_ready = self.bg_fifo.len() as u32 >= left || self.fetch >= Fetch::High1;
+        // Enough pixels queued, or the next tile arrives before the FIFO runs dry.
+        let fifo_ready = self.bg_fifo.len() as u32 >= left
+            || (!self.bg_fifo.is_empty() && self.fetch >= Fetch::High1);
         if self.obj_fetch == ObjFetch::Idle
             && !self.window_stall
             && !sprite_ahead
