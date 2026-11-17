@@ -19,7 +19,7 @@ Named after Freki, one of Odin's two wolves.
 > Mid-scanline drawing on the GBC matches real hardware (CPU CGB C) in 20 of the 27
 > mealybug-tearoom-tests that have a CGB reference; the others involve changing the tile
 > data select or sprite settings in the middle of a fetch.
-> Of Gambatte's hardware tests (on-screen results), 1436 of 1651 pass on the DMG and 1924
+> Of Gambatte's hardware tests (on-screen results), 1436 of 1651 pass on the DMG and 2120
 > of 3023 on the GBC; the failures are listed in `crates/freki-core/tests/gambatte_failures.txt`.
 > SameSuite and the AGE test ROMs are not run yet.
 > Original Game Boy games can also run colourised on the GBC (with its boot ROM).

@@ -110,6 +110,7 @@ enum MemoryBus {
     Video,
     External,
     WorkRam,
+    Invalid,
 }
 
 /// OAM DMA state. A write to $FF46 starts a transfer after one M-cycle of setup; it then
@@ -440,10 +441,15 @@ impl Bus {
                 self.dma.active = Some((src, t + 1));
                 return;
             }
-            let mut byte = self.dma_source(src);
+            let mut byte = self.dma_byte(src);
             if let Some(value) = self.dma.write_conflict.take() {
-                // Work RAM's outputs fight the CPU's write (AND); other sources lose to it.
-                byte = if src >= 0xC000 { byte & value } else { value };
+                // DMG: work RAM's outputs fight the CPU's write (AND); other sources lose
+                // to it.
+                byte = if src >= 0xC000 && !self.cgb_hardware {
+                    byte & value
+                } else {
+                    value
+                };
             }
             self.ppu.write_oam(0xFE00 | (src & 0xFF), byte);
             self.dma.active = ((src & 0xFF) < 0x9F).then_some((src + 1, 0));
@@ -451,13 +457,54 @@ impl Bus {
     }
 
     /// The memory bus `addr` (below $FE00) is on: video RAM, the external bus (cartridge;
-    /// on the DMG also work RAM), or the CGB's separate work RAM bus.
+    /// on the DMG also work RAM), the CGB's separate work RAM bus, or (on the CGB, as an
+    /// OAM DMA source from $E000 up) none.
     fn memory_bus(&self, addr: u16) -> MemoryBus {
         match addr {
             0x8000..=0x9FFF => MemoryBus::Video,
-            0xC000..=0xFFFF if self.cgb_hardware => MemoryBus::WorkRam,
+            0xE000..=0xFFFF if self.cgb_hardware => MemoryBus::Invalid,
+            0xC000..=0xDFFF if self.cgb_hardware => MemoryBus::WorkRam,
             _ => MemoryBus::External,
         }
+    }
+
+    /// Whether OAM DMA from `src` blocks the CPU's direct access to `addr` (below $FE00).
+    /// On the CGB, transfers from the external bus or from $E000 up also take over work
+    /// RAM accesses (see [`Bus::dma_wram_index`]).
+    fn dma_blocks(&self, src: u16, addr: u16) -> bool {
+        // As a CPU address, $E000–$FDFF is work RAM's echo.
+        let target = match addr {
+            0xE000..=0xFDFF => self.memory_bus(addr - 0x2000),
+            _ => self.memory_bus(addr),
+        };
+        match self.memory_bus(src) {
+            MemoryBus::External | MemoryBus::Invalid => target != MemoryBus::Video,
+            source => source == target,
+        }
+    }
+
+    /// CGB: where a CPU access to work RAM at `addr` lands while OAM DMA from a source
+    /// other than work RAM runs: the address goes out with the DMA page's bank bit (bit 4
+    /// selects bank 0 or the switchable bank).
+    fn dma_wram_index(&self, addr: u16) -> usize {
+        let bank_bit = (self.dma_page as u16) << 8 & 0x1000;
+        self.wram_index(0xC000 | bank_bit | (addr & 0x0FFF))
+    }
+
+    /// The byte OAM DMA is moving now (from `src`).
+    fn dma_byte(&self, src: u16) -> u8 {
+        if self.memory_bus(src) == MemoryBus::Invalid {
+            0xFF
+        } else {
+            self.dma_source(src)
+        }
+    }
+
+    /// Whether OAM DMA is running from `bus`.
+    fn dma_from(&self, bus: MemoryBus) -> bool {
+        self.dma
+            .active
+            .is_some_and(|(src, _)| self.memory_bus(src) == bus)
     }
 
     /// If OAM DMA blocks the CPU from `addr`: `Some(value)` the CPU sees instead.
@@ -466,9 +513,12 @@ impl Bus {
         match addr {
             0xFE00..=0xFEFF => Some(0xFF),
             0xFF00..=0xFFFF => None,
-            // Same bus as the DMA source: the CPU sees the byte being transferred.
-            _ if self.memory_bus(addr) == self.memory_bus(src) => Some(self.dma_source(src)),
-            _ => None,
+            _ if !self.dma_blocks(src, addr) => None,
+            0xC000..=0xFDFF if self.cgb_hardware && self.memory_bus(src) != MemoryBus::WorkRam => {
+                Some(self.wram[self.dma_wram_index(addr)])
+            }
+            // The CPU sees the byte being transferred.
+            _ => Some(self.dma_byte(src)),
         }
     }
 
@@ -485,8 +535,12 @@ impl Bus {
     }
 
     /// A read by the CPU (subject to OAM DMA bus conflicts and PPU locking).
-    pub fn cpu_read(&self, addr: u16) -> u8 {
+    pub fn cpu_read(&mut self, addr: u16) -> u8 {
         if let Some(value) = self.dma_conflict(addr) {
+            if self.cgb_hardware && addr < 0xFE00 && self.dma_from(MemoryBus::Video) {
+                // CGB: the collision on the video RAM bus clears the byte in transfer.
+                self.dma.write_conflict = Some(0);
+            }
             value
         } else if self.ppu_locked(addr, false) {
             0xFF
@@ -501,6 +555,14 @@ impl Bus {
             if !self.cgb_hardware && addr < 0xFE00 {
                 let previous = self.dma.write_conflict.unwrap_or(0xFF);
                 self.dma.write_conflict = Some(previous & value);
+            } else if self.dma_from(MemoryBus::Video) && addr < 0xFE00 {
+                self.dma.write_conflict = Some(0);
+            } else if addr < 0xC000 {
+                // CGB: the CPU's write replaces the byte in transfer.
+                self.dma.write_conflict = Some(value);
+            } else if addr < 0xFE00 && !self.dma_from(MemoryBus::WorkRam) {
+                let index = self.dma_wram_index(addr);
+                self.wram[index] = value;
             }
         } else if !self.ppu_locked(addr, true) {
             self.write(addr, value);
