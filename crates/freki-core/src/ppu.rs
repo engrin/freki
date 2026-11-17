@@ -44,6 +44,10 @@ const PIPELINE_START_DOT: u32 = 86;
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 /// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
 const MAX_MODE0_LEAD: u32 = 5;
+/// Dots until a STAT or LYC write reaches the STAT interrupt logic: DMG, CGB, CGB in
+/// double speed (Gambatte's hwtests; Gambatte has the same 2-cycle STAT lag on the CGB).
+const STAT_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
+const LYC_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
 /// LY and dot at which line 0's mode 2 interrupt is decided (normal and double speed;
 /// Gambatte's hwtests, m2enable/*ly0*).
 const LY0_OAM_INT_LATCH: (u8, u32) = (153, 455);
@@ -204,6 +208,16 @@ pub struct Ppu {
     /// Dots until a STAT interrupt raised by a register write is requested (0: none).
     #[serde(default)]
     write_irq_in: u8,
+    /// STAT and LYC as the interrupt logic sees them: writes reach it a few dots late.
+    #[serde(default)]
+    irq_stat: u8,
+    #[serde(default)]
+    irq_lyc: u8,
+    /// A STAT / LYC write on its way to `irq_stat` / `irq_lyc`: (value, dots left).
+    #[serde(default)]
+    stat_pending: (u8, u8),
+    #[serde(default)]
+    lyc_pending: (u8, u8),
     /// Dots after STAT's switch to mode 0 until palette RAM unlocks.
     #[serde(default)]
     palette_unlock_in: u8,
@@ -314,6 +328,10 @@ impl Ppu {
             stat_line: false,
             write_irq_in: 0,
             palette_unlock_in: 0,
+            irq_stat: 0,
+            irq_lyc: 0,
+            stat_pending: (0, 0),
+            lyc_pending: (0, 0),
             oam_int_armed: false,
             ly0_oam_int_enabled: false,
             obj_size_history: 0,
@@ -710,18 +728,24 @@ impl Ppu {
             }
             0xFF41 => {
                 self.stat = value & 0x78;
-                // Enabling it in the first M-cycle of mode 2 still counts.
-                if self.irq_mode == Mode::OamScan && self.ly != 0 && self.dot < 4 {
-                    self.oam_int_armed = self.stat & stat::OAM_INT != 0;
+                let delay = self.reg_irq_delay(STAT_IRQ_DELAY);
+                if delay == 0 {
+                    self.apply_irq_stat(self.stat);
+                } else {
+                    self.stat_pending = (self.stat, delay);
                 }
-                self.check_write_irq();
             }
             0xFF42 => self.scy = value,
             0xFF43 => self.scx = value,
             0xFF44 => {} // LY is read-only
             0xFF45 => {
                 self.lyc = value;
-                self.check_write_irq();
+                let delay = self.reg_irq_delay(LYC_IRQ_DELAY);
+                if delay == 0 {
+                    self.apply_irq_lyc(value);
+                } else {
+                    self.lyc_pending = (value, delay);
+                }
             }
             0xFF47 => self.bgp = value,
             0xFF48 => self.obp0 = value,
@@ -794,6 +818,18 @@ impl Ppu {
     }
 
     fn tick_dot(&mut self) -> u8 {
+        if self.stat_pending.1 > 0 {
+            self.stat_pending.1 -= 1;
+            if self.stat_pending.1 == 0 {
+                self.apply_irq_stat(self.stat_pending.0);
+            }
+        }
+        if self.lyc_pending.1 > 0 {
+            self.lyc_pending.1 -= 1;
+            if self.lyc_pending.1 == 0 {
+                self.apply_irq_lyc(self.lyc_pending.0);
+            }
+        }
         self.palette_unlock_in = self.palette_unlock_in.saturating_sub(1);
         self.wy_for_wx.1 = self.wy_for_wx.1.saturating_sub(1);
         self.obj_size_history =
@@ -816,7 +852,7 @@ impl Ppu {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
                     self.oam_int_armed = if self.ly != 0 {
-                        self.stat & stat::OAM_INT != 0
+                        self.irq_stat & stat::OAM_INT != 0
                     } else {
                         self.ly0_oam_int_enabled
                     };
@@ -879,13 +915,13 @@ impl Ppu {
         };
         if self.ly == latch_ly && self.dot == latch_dot {
             self.ly0_oam_int_enabled =
-                self.stat & (stat::OAM_INT | stat::VBLANK_INT) == stat::OAM_INT;
+                self.irq_stat & (stat::OAM_INT | stat::VBLANK_INT) == stat::OAM_INT;
         }
         // On the CGB the same quirk fires a few dots before LY becomes 144.
         if !self.dmg_hardware()
             && self.ly as usize == SCREEN_HEIGHT - 1
             && self.dot == CGB_VBLANK_OAM_INT_DOT
-            && self.stat & stat::OAM_INT != 0
+            && self.irq_stat & stat::OAM_INT != 0
             && !self.stat_line
         {
             irq |= interrupt::STAT;
@@ -900,7 +936,7 @@ impl Ppu {
                 self.frame_ready = true;
                 irq |= interrupt::VBLANK;
                 // DMG quirk: entering VBlank also triggers the OAM (mode 2) STAT interrupt.
-                if self.dmg_hardware() && self.stat & stat::OAM_INT != 0 && !self.stat_line {
+                if self.dmg_hardware() && self.irq_stat & stat::OAM_INT != 0 && !self.stat_line {
                     irq |= interrupt::STAT;
                 }
             } else if self.ly == LINES_PER_FRAME {
@@ -912,7 +948,7 @@ impl Ppu {
                 // line's mode 2 interrupt ("STAT blocking"). Games rely on this, e.g. Pinball
                 // Fantasies. (Line 0 is handled separately: its OAM interrupt comes a dot late.)
                 self.irq_mode = Mode::OamScan;
-                self.oam_int_armed = self.stat & stat::OAM_INT != 0;
+                self.oam_int_armed = self.irq_stat & stat::OAM_INT != 0;
             }
         }
 
@@ -938,14 +974,43 @@ impl Ppu {
 
     /// The OR of all enabled STAT interrupt sources.
     fn stat_sources(&self) -> bool {
-        (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
-            || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
-            || (self.stat & stat::VBLANK_INT != 0
+        (self.irq_stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.irq_lyc)
+            || (self.irq_stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
+            || (self.irq_stat & stat::VBLANK_INT != 0
                 && self.irq_mode == Mode::VBlank
                 && self.ly as usize >= SCREEN_HEIGHT)
-            || ((self.stat & stat::OAM_INT != 0 || self.ly == 0)
+            || ((self.irq_stat & stat::OAM_INT != 0 || self.ly == 0)
                 && self.oam_int_armed
                 && self.irq_mode == Mode::OamScan)
+    }
+
+    /// Dots until a STAT or LYC write reaches the interrupt logic (none with the LCD off).
+    fn reg_irq_delay(&self, delays: (u8, u8, u8)) -> u8 {
+        if !self.lcd_on() {
+            0
+        } else if self.dmg_hardware() {
+            delays.0
+        } else if self.double_speed {
+            delays.2
+        } else {
+            delays.1
+        }
+    }
+
+    /// A STAT write reaches the interrupt logic.
+    fn apply_irq_stat(&mut self, value: u8) {
+        self.irq_stat = value;
+        // Enabling it in the first M-cycle of mode 2 still counts.
+        if self.irq_mode == Mode::OamScan && self.ly != 0 && self.dot < 4 {
+            self.oam_int_armed = self.irq_stat & stat::OAM_INT != 0;
+        }
+        self.check_write_irq();
+    }
+
+    /// An LYC write reaches the interrupt logic.
+    fn apply_irq_lyc(&mut self, value: u8) {
+        self.irq_lyc = value;
+        self.check_write_irq();
     }
 
     /// After a STAT or LYC write: if it raised the STAT interrupt line, the interrupt is
