@@ -708,7 +708,11 @@ impl Ppu {
 
     /// LY as read by the CPU.
     fn ly_register(&self) -> u8 {
-        if self.ly_changing() {
+        // At normal speed LY reads 153 only in line 152's last 4 dots (Gambatte's hwtests,
+        // ly0/lycint152_ly153_*); the LYC comparison still sees 153 for 4 dots.
+        if self.ly == LINES_PER_FRAME - 1 && !self.double_speed {
+            0
+        } else if self.ly_changing() {
             self.ly + 1
         } else {
             self.ly_for_lyc()
