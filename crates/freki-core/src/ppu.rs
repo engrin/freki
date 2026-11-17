@@ -48,6 +48,10 @@ const MAX_MODE0_LEAD: u32 = 5;
 /// HBlank source) or not; later STAT/LYC writes do not change that (Gambatte's hwtests,
 /// m2enable/*late_lycdisable*, *late_m0disable*).
 const M2_LATCH_DOT: u32 = 453;
+/// The mode 2 source only holds the STAT line high for the first M-cycle of mode 2: an
+/// LYC source enabled later in mode 2 still raises an interrupt (Gambatte's hwtests,
+/// lycEnable/late_ff41_enable_after_m2int).
+const OAM_PULSE_DOTS: u32 = 4;
 /// Dots until a STAT or LYC write reaches the STAT interrupt logic: DMG, CGB, CGB in
 /// double speed (Gambatte's hwtests; Gambatte has the same 2-cycle STAT lag on the CGB).
 const STAT_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
@@ -990,7 +994,8 @@ impl Ppu {
                 && self.ly as usize >= SCREEN_HEIGHT)
             || ((self.irq_stat & stat::OAM_INT != 0 || self.ly == 0)
                 && self.oam_int_armed
-                && self.irq_mode == Mode::OamScan)
+                && self.irq_mode == Mode::OamScan
+                && self.dot < OAM_PULSE_DOTS)
     }
 
     /// Dots until a STAT or LYC write reaches the interrupt logic (none with the LCD off).
