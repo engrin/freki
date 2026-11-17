@@ -681,13 +681,25 @@ impl Ppu {
         self.lcdc & lcdc::LCD_ENABLE != 0
     }
 
-    /// LY as compared with LYC for the STAT interrupt. Line 153 reads as 0 after its first
-    /// 4 dots, so LYC = 0 matches during the last line of VBlank.
-    fn ly_for_lyc(&self) -> u8 {
-        if self.ly == LINES_PER_FRAME - 1 && self.dot >= 4 {
-            0
+    /// Whether LY, as compared with LYC for the STAT interrupt, equals `lyc`. Line 153
+    /// compares as 153 for its first 4 dots and then as 0, so LYC = 0 matches during the last
+    /// line of VBlank; at normal speed there is a gap of a few dots in between where neither
+    /// matches (Gambatte's hwtests, ly0/lycint152_lyc0*, lycint152_lyc153flag_*).
+    fn ly_matches(&self, lyc: u8) -> bool {
+        if self.ly != LINES_PER_FRAME - 1 {
+            return self.ly == lyc;
+        }
+        let zero_from = if self.double_speed {
+            4
+        } else if self.dmg_hardware() {
+            6
         } else {
-            self.ly
+            5
+        };
+        if self.dot < 4 {
+            lyc == self.ly
+        } else {
+            self.dot >= zero_from && lyc == 0
         }
     }
 
@@ -700,7 +712,7 @@ impl Ppu {
     /// STAT's LY = LYC coincidence flag (bit 2).
     fn lyc_flag(&self) -> bool {
         if self.lcd_on() {
-            !self.ly_changing() && self.ly_for_lyc() == self.lyc
+            !self.ly_changing() && self.ly_matches(self.lyc)
         } else {
             self.lyc_flag_off
         }
@@ -714,8 +726,10 @@ impl Ppu {
             0
         } else if self.ly_changing() {
             self.ly + 1
+        } else if self.ly == LINES_PER_FRAME - 1 && self.dot >= 4 {
+            0
         } else {
-            self.ly_for_lyc()
+            self.ly
         }
     }
 
@@ -1011,7 +1025,7 @@ impl Ppu {
         if (self.ly as usize) < SCREEN_HEIGHT - 1 && self.dot == M2_LATCH_DOT {
             // Only whether it is blocked: enabling it later still counts.
             self.m2_int_unblocked = self.irq_stat & stat::HBLANK_INT == 0
-                && !(self.irq_stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.irq_lyc);
+                && !(self.irq_stat & stat::LYC_INT != 0 && self.ly_matches(self.irq_lyc));
         }
         // On the CGB the same quirk fires a few dots before LY becomes 144.
         if !self.dmg_hardware()
@@ -1085,7 +1099,7 @@ impl Ppu {
     /// The OR of all enabled STAT interrupt sources.
     fn stat_sources(&self) -> bool {
         (self.irq_stat & stat::LYC_INT != 0
-            && self.ly_for_lyc() == self.irq_lyc
+            && self.ly_matches(self.irq_lyc)
             && !self.exclude_lyc_source)
             || (self.irq_stat & stat::HBLANK_INT != 0
                 && self.irq_mode == Mode::HBlank
