@@ -62,6 +62,9 @@ pub struct Bus {
     svbk: u8,
     /// Undocumented CGB registers $FF72–$FF75 (plain storage; $FF75 keeps bits 4–6).
     undocumented: [u8; 4],
+    /// $FEA0–$FEFF, which the CGB Gambatte was tested on stores like RAM (the DMG reads $00).
+    #[serde(with = "BigArray")]
+    unusable: [u8; 0x60],
     /// KEY1 ($FF4D) bit 0: a speed switch is armed and happens on the next STOP (CGB).
     speed_switch_armed: bool,
     /// CGB double speed: the CPU, timer, serial port and OAM DMA run twice as fast.
@@ -101,6 +104,14 @@ struct Hdma {
 /// T-cycles (at normal speed) the CPU is paused per 16-byte VRAM DMA block.
 const HDMA_BLOCK_CYCLES: u32 = 32;
 
+/// The memory buses OAM DMA can collide with the CPU on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemoryBus {
+    Video,
+    External,
+    WorkRam,
+}
+
 /// OAM DMA state. A write to $FF46 starts a transfer after one M-cycle of setup; it then
 /// copies one byte per M-cycle for 160 M-cycles. While it runs, the CPU cannot use OAM
 /// or the bus the DMA reads from.
@@ -110,6 +121,9 @@ struct Dma {
     pending: Option<(u8, u8)>,
     /// The running transfer: (source address of the next byte, T-cycles into its M-cycle).
     active: Option<(u16, u8)>,
+    /// DMG: a CPU write to the bus the transfer reads from is lost, but pulls the byte
+    /// being transferred low where the written value has 0 bits (AND).
+    write_conflict: Option<u8>,
 }
 
 impl Bus {
@@ -129,6 +143,7 @@ impl Bus {
             wram: vec![0; 0x8000],
             svbk: 0,
             undocumented: [0; 4],
+            unusable: [0; 0x60],
             speed_switch_armed: false,
             double_speed: false,
             half_cycle: 0,
@@ -247,7 +262,8 @@ impl Bus {
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             0xC000..=0xFDFF => self.wram[self.wram_index(addr)],
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
-            0xFEA0..=0xFEFF => 0xFF,
+            0xFEA0..=0xFEFF if self.cgb_hardware => self.unusable[addr as usize - 0xFEA0],
+            0xFEA0..=0xFEFF => 0x00,
             0xFF00 => self.joypad.read(),
             0xFF01..=0xFF02 => self.serial.read(addr),
             0xFF04..=0xFF07 => self.timer.read(addr),
@@ -286,6 +302,7 @@ impl Bus {
                 self.wram[i] = value;
             }
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
+            0xFEA0..=0xFEFF if self.cgb_hardware => self.unusable[addr as usize - 0xFEA0] = value,
             0xFEA0..=0xFEFF => {}
             0xFF00 => self.joypad.write(value),
             0xFF01..=0xFF02 => self.serial.write(addr, value),
@@ -414,21 +431,33 @@ impl Bus {
                 self.dma.active = Some((src, t + 1));
                 return;
             }
-            let byte = self.dma_source(src);
+            let mut byte = self.dma_source(src);
+            if let Some(value) = self.dma.write_conflict.take() {
+                byte &= value;
+            }
             self.ppu.write_oam(0xFE00 | (src & 0xFF), byte);
             self.dma.active = ((src & 0xFF) < 0x9F).then_some((src + 1, 0));
+        }
+    }
+
+    /// The memory bus `addr` (below $FE00) is on: video RAM, the external bus (cartridge;
+    /// on the DMG also work RAM), or the CGB's separate work RAM bus.
+    fn memory_bus(&self, addr: u16) -> MemoryBus {
+        match addr {
+            0x8000..=0x9FFF => MemoryBus::Video,
+            0xC000..=0xFFFF if self.cgb_hardware => MemoryBus::WorkRam,
+            _ => MemoryBus::External,
         }
     }
 
     /// If OAM DMA blocks the CPU from `addr`: `Some(value)` the CPU sees instead.
     fn dma_conflict(&self, addr: u16) -> Option<u8> {
         let (src, _) = self.dma.active?;
-        let on_vram_bus = |a: u16| (0x8000..0xA000).contains(&a);
         match addr {
             0xFE00..=0xFEFF => Some(0xFF),
             0xFF00..=0xFFFF => None,
             // Same bus as the DMA source: the CPU sees the byte being transferred.
-            _ if on_vram_bus(addr) == on_vram_bus(src) => Some(self.dma_source(src)),
+            _ if self.memory_bus(addr) == self.memory_bus(src) => Some(self.dma_source(src)),
             _ => None,
         }
     }
@@ -439,8 +468,8 @@ impl Bus {
         match addr {
             0x8000..=0x9FFF if write => !self.ppu.cpu_vram_writable(),
             0x8000..=0x9FFF => !self.ppu.cpu_vram_readable(),
-            0xFE00..=0xFE9F if write => !self.ppu.cpu_oam_writable(),
-            0xFE00..=0xFE9F => !self.ppu.cpu_oam_readable(),
+            0xFE00..=0xFEFF if write => !self.ppu.cpu_oam_writable(),
+            0xFE00..=0xFEFF => !self.ppu.cpu_oam_readable(),
             _ => false,
         }
     }
@@ -458,7 +487,12 @@ impl Bus {
 
     /// A write by the CPU (dropped when OAM DMA or the PPU blocks the address).
     pub fn cpu_write(&mut self, addr: u16, value: u8) {
-        if self.dma_conflict(addr).is_none() && !self.ppu_locked(addr, true) {
+        if self.dma_conflict(addr).is_some() {
+            if !self.cgb_hardware && addr < 0xFE00 {
+                let previous = self.dma.write_conflict.unwrap_or(0xFF);
+                self.dma.write_conflict = Some(previous & value);
+            }
+        } else if !self.ppu_locked(addr, true) {
             self.write(addr, value);
         }
     }

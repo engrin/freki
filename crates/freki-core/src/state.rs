@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Identifies a freki save state.
 const MAGIC: [u8; 8] = *b"FREKISS\0";
 /// Bump whenever the serialized layout of any hardware struct changes.
-pub const STATE_VERSION: u32 = 6;
+pub const STATE_VERSION: u32 = 7;
 
 /// Written before the hardware state; checked before anything is decoded.
 #[derive(Debug, Serialize, Deserialize)]
