@@ -243,6 +243,10 @@ impl Bus {
             return false;
         }
         self.speed_switch_armed = false;
+        // The switch resets DIV, which can make the frame sequencer's bit fall.
+        if self.timer.counter() >> self.frame_sequencer_bit() & 1 != 0 {
+            self.apu.clock_frame_sequencer();
+        }
         self.double_speed = !self.double_speed;
         self.ppu.double_speed = self.double_speed;
         self.speed_switch_delay = if self.double_speed {
