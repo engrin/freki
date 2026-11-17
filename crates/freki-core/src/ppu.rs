@@ -56,6 +56,12 @@ const OAM_PULSE_DOTS: u32 = 4;
 /// double speed (Gambatte's hwtests; Gambatte has the same 2-cycle STAT lag on the CGB).
 const STAT_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
 const LYC_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
+/// Setting LYC to the next LY within this many dots of the line's end keeps the LYC
+/// source high across the line change (no interrupt), except within the last `TAIL`
+/// dots: DMG, CGB, double speed (Gambatte's hwtests, lycEnable/*late_ff45_enable*,
+/// *weirdpoint*).
+const LYC_FOLLOW_WINDOW: (u8, u8, u8) = (4, 8, 4);
+const LYC_FOLLOW_TAIL: (u8, u8, u8) = (0, 4, 0);
 /// LY and dot at which line 0's mode 2 interrupt is decided (normal and double speed;
 /// Gambatte's hwtests, m2enable/*ly0*).
 const LY0_OAM_INT_LATCH: (u8, u32) = (153, 455);
@@ -226,6 +232,9 @@ pub struct Ppu {
     stat_pending: (u8, u8),
     #[serde(default)]
     lyc_pending: (u8, u8),
+    /// LYC followed LY across the line change (see the LYC write): no rising edge then.
+    #[serde(default)]
+    lyc_edge_masked: bool,
     /// Dots after STAT's switch to mode 0 until palette RAM unlocks.
     #[serde(default)]
     palette_unlock_in: u8,
@@ -341,6 +350,7 @@ impl Ppu {
             irq_lyc: 0,
             stat_pending: (0, 0),
             lyc_pending: (0, 0),
+            lyc_edge_masked: false,
             oam_int_armed: false,
             m2_int_unblocked: false,
             obj_size_history: 0,
@@ -748,6 +758,18 @@ impl Ppu {
             0xFF43 => self.scx = value,
             0xFF44 => {} // LY is read-only
             0xFF45 => {
+                // Moving LYC along with LY just before it increments keeps the LYC source
+                // high: no new interrupt.
+                let window = u32::from(self.reg_irq_delay(LYC_FOLLOW_WINDOW));
+                if self.lcd_on()
+                    && self.ly < LINES_PER_FRAME - 1
+                    && self.dot + window >= DOTS_PER_LINE
+                    && self.dot + u32::from(self.reg_irq_delay(LYC_FOLLOW_TAIL)) < DOTS_PER_LINE
+                    && self.irq_lyc == self.ly
+                    && value == self.ly + 1
+                {
+                    self.lyc_edge_masked = true;
+                }
                 self.lyc = value;
                 let delay = self.reg_irq_delay(LYC_IRQ_DELAY);
                 if delay == 0 {
@@ -941,6 +963,9 @@ impl Ppu {
         self.dot += 1;
         if self.dot == DOTS_PER_LINE {
             self.dot = 0;
+            if std::mem::take(&mut self.lyc_edge_masked) {
+                self.stat_line = true;
+            }
             self.first_line = false;
             self.ly += 1;
             if self.ly as usize == SCREEN_HEIGHT {
