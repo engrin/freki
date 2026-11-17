@@ -44,6 +44,11 @@ const PIPELINE_START_DOT: u32 = 86;
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 /// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
 const MAX_MODE0_LEAD: u32 = 5;
+/// Dots from a STAT/LYC write that raises the STAT line to the interrupt request: DMG,
+/// CGB, CGB in double speed (fitted to Gambatte's hwtests).
+const WRITE_IRQ_DMG: u8 = 5;
+const WRITE_IRQ_CGB: u8 = 5;
+const WRITE_IRQ_DS: u8 = 3;
 /// The dot of line 0 at which the frame's WY latch is reset and checked.
 const WY_LINE0_DOT: u32 = 1;
 const WY2_DMG: u8 = 8;
@@ -188,6 +193,9 @@ pub struct Ppu {
     irq_mode: Mode,
     /// Previous level of the combined STAT interrupt line (interrupts fire on rising edges).
     stat_line: bool,
+    /// Dots until a STAT interrupt raised by a register write is requested (0: none).
+    #[serde(default)]
+    write_irq_in: u8,
     /// The OAM (mode 2) interrupt was enabled when mode 2 started: the source only counts
     /// then, so enabling it later in mode 2 does not request an interrupt.
     oam_int_armed: bool,
@@ -290,6 +298,7 @@ impl Ppu {
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
             stat_line: false,
+            write_irq_in: 0,
             oam_int_armed: false,
             obj_size_history: 0,
             lyc_flag_off: false,
@@ -678,11 +687,15 @@ impl Ppu {
                 if self.irq_mode == Mode::OamScan && self.dot < 4 {
                     self.oam_int_armed = self.stat & stat::OAM_INT != 0;
                 }
+                self.check_write_irq();
             }
             0xFF42 => self.scy = value,
             0xFF43 => self.scx = value,
             0xFF44 => {} // LY is read-only
-            0xFF45 => self.lyc = value,
+            0xFF45 => {
+                self.lyc = value;
+                self.check_write_irq();
+            }
             0xFF47 => self.bgp = value,
             0xFF48 => self.obp0 = value,
             0xFF49 => self.obp1 = value,
@@ -863,18 +876,44 @@ impl Ppu {
         if self.ly as usize == SCREEN_HEIGHT && self.dot == 4 {
             self.irq_mode = Mode::VBlank;
         }
+        if self.write_irq_in > 0 {
+            self.write_irq_in -= 1;
+            if self.write_irq_in == 0 {
+                irq |= interrupt::STAT;
+            }
+        }
         // STAT interrupt fires on a rising edge of the OR of all enabled sources.
-        let line = (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
-            || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
-            || (self.stat & stat::VBLANK_INT != 0 && self.irq_mode == Mode::VBlank)
-            || (self.stat & stat::OAM_INT != 0
-                && self.oam_int_armed
-                && self.irq_mode == Mode::OamScan);
+        let line = self.stat_sources();
         if line && !self.stat_line {
             irq |= interrupt::STAT;
         }
         self.stat_line = line;
         irq
+    }
+
+    /// The OR of all enabled STAT interrupt sources.
+    fn stat_sources(&self) -> bool {
+        (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
+            || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
+            || (self.stat & stat::VBLANK_INT != 0 && self.irq_mode == Mode::VBlank)
+            || (self.stat & stat::OAM_INT != 0
+                && self.oam_int_armed
+                && self.irq_mode == Mode::OamScan)
+    }
+
+    /// After a STAT or LYC write: if it raised the STAT interrupt line, the interrupt is
+    /// requested a few dots later (Gambatte's hwtests, lycEnable/*trigger_delay*).
+    fn check_write_irq(&mut self) {
+        if self.lcd_on() && !self.stat_line && self.stat_sources() {
+            self.stat_line = true;
+            self.write_irq_in = if self.dmg_hardware() {
+                WRITE_IRQ_DMG
+            } else if self.double_speed {
+                WRITE_IRQ_DS
+            } else {
+                WRITE_IRQ_CGB
+            };
+        }
     }
 
     /// OAM scan step: selects entry `index` if it covers this line (max 10 per line).
