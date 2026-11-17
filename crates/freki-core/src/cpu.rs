@@ -601,14 +601,25 @@ impl Cpu {
             self.flush(bus);
             return Ok(self.cycles);
         }
-        if self.ime_pending {
-            self.ime_pending = false;
+        let after_ei = std::mem::take(&mut self.ime_pending);
+        if after_ei {
             self.ime = true;
         }
 
         let pc = self.regs.pc;
         let op = self.fetch(bus);
         let expected = self.execute(bus, op);
+        // HALT right after EI with an interrupt already pending does not halt: the
+        // interrupt is taken with HALT's own address as the return address, so HALT runs
+        // again after the handler (Gambatte's hwtests, halt/ifandie_ei_halt_sra).
+        if after_ei
+            && op == 0x76
+            && self.halted
+            && bus.interrupt_enable & bus.interrupt_flag & 0x1F != 0
+        {
+            self.halted = false;
+            self.regs.pc = pc;
+        }
         self.flush(bus);
         let expected = expected.ok_or(CpuError::IllegalOpcode { opcode: op, pc })?;
         debug_assert_eq!(self.cycles, expected, "timing of opcode ${op:02X}");
