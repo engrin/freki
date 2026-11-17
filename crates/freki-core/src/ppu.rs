@@ -46,6 +46,9 @@ const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 const MAX_MODE0_LEAD: u32 = 5;
 /// The dot of line 0 at which the frame's WY latch is reset and checked.
 const WY_LINE0_DOT: u32 = 1;
+const WY2_DMG: u8 = 8;
+const WY2_CGB: u8 = 12;
+const WY2_CGB_DS: u8 = 6;
 /// Dots of each line at which WY is compared with LY, and with LY + 1.
 const WY_CHECK_DOT: u32 = 451;
 const WY_CHECK_NEXT_DOT: u32 = 455;
@@ -254,6 +257,9 @@ pub struct Ppu {
     obp0: u8,
     obp1: u8,
     wy: u8,
+    /// The WX match sees WY a few dots late: (old value, dots it is still seen).
+    #[serde(default)]
+    wy_for_wx: (u8, u8),
     wx: u8,
 }
 
@@ -327,6 +333,7 @@ impl Ppu {
             obp0: 0xFF,
             obp1: 0xFF,
             wy: 0,
+            wy_for_wx: (0, 0),
             wx: 0,
         }
     }
@@ -679,7 +686,17 @@ impl Ppu {
             0xFF47 => self.bgp = value,
             0xFF48 => self.obp0 = value,
             0xFF49 => self.obp1 = value,
-            0xFF4A => self.wy = value,
+            0xFF4A => {
+                let delay = if self.dmg_hardware() {
+                    WY2_DMG
+                } else if self.double_speed {
+                    WY2_CGB_DS
+                } else {
+                    WY2_CGB
+                };
+                self.wy_for_wx = (self.wy, delay);
+                self.wy = value;
+            }
             0xFF4B => self.wx = value,
             0xFF4F => self.vbk = value & 1,
             0xFF68 => self.bcps = value & 0xBF,
@@ -737,6 +754,7 @@ impl Ppu {
     }
 
     fn tick_dot(&mut self) -> u8 {
+        self.wy_for_wx.1 = self.wy_for_wx.1.saturating_sub(1);
         self.obj_size_history =
             self.obj_size_history << 1 | u8::from(self.lcdc & lcdc::OBJ_SIZE_8X16 != 0);
         let mut irq = 0;
@@ -1005,7 +1023,12 @@ impl Ppu {
     /// Whether the window may start on this line: WY matched at one of the latch points
     /// this frame, or WY equals LY right now.
     fn window_y_match(&self) -> bool {
-        self.wy_triggered || (self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wy == self.ly)
+        let wy = if self.wy_for_wx.1 == 0 {
+            self.wy
+        } else {
+            self.wy_for_wx.0
+        };
+        self.wy_triggered || (self.lcdc & lcdc::WINDOW_ENABLE != 0 && wy == self.ly)
     }
 
     /// X coordinate (in OAM terms) of sprites that start at the current position.
