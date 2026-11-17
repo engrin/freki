@@ -136,7 +136,7 @@ mod attr {
     pub const PRIORITY: u8 = 1 << 7;
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Ppu {
     /// Game Boy Color mode (colour palettes, VRAM bank 1, tile attributes).
     cgb: bool,
@@ -218,6 +218,9 @@ pub struct Ppu {
     insert_bg_pixel: bool,
     disable_insertion_glitch: bool,
     wx_just_changed: bool,
+    /// This copy only looks ahead to find when mode 3 ends (see `mode0_due`).
+    #[serde(skip)]
+    lookahead: bool,
 
     lcdc: u8,
     /// Writable STAT bits 3–6 (interrupt selects).
@@ -288,6 +291,7 @@ impl Ppu {
             insert_bg_pixel: false,
             disable_insertion_glitch: false,
             wx_just_changed: false,
+            lookahead: false,
             lcdc: 0x91,
             stat: 0,
             scy: 0,
@@ -732,6 +736,16 @@ impl Ppu {
             }
             if self.pipeline_active {
                 self.mode3_dot();
+                // STAT switches to mode 0 shortly before the pipeline finishes.
+                if self.mode == Mode::Drawing
+                    && (SCREEN_WIDTH as u8 - 4..SCREEN_WIDTH as u8).contains(&self.position)
+                    && !self.lookahead
+                    && self.mode0_due()
+                {
+                    self.mode = Mode::HBlank;
+                    self.irq_mode = Mode::HBlank;
+                    self.hblank_started = true;
+                }
             }
         }
 
@@ -862,15 +876,53 @@ impl Ppu {
 
         self.render_pixel();
         self.advance_fetcher();
-        // STAT (and its interrupt) switch to mode 0 two pixels before the last one is
-        // pushed: 252 dots into the line without stalls, as Mooneye's intr_2_* tests expect.
-        if self.position == SCREEN_WIDTH as u8 - 2 {
-            self.mode = Mode::HBlank;
-            self.irq_mode = Mode::HBlank;
-            self.hblank_started = true;
-        }
         if self.position == SCREEN_WIDTH as u8 {
             self.end_line();
+        }
+    }
+
+    /// Whether STAT (and its interrupt) switch to mode 0 on this dot: two dots before the
+    /// pipeline pushes its last pixel (252 dots into a line without stalls), or four dots
+    /// before if the line fetched sprites. Mooneye's intr_2_mode0_timing_sprites pins
+    /// this down, including sprites at X 164–167 that still stall the end of the line.
+    fn mode0_due(&self) -> bool {
+        let left = SCREEN_WIDTH as u32 - self.position as u32;
+        let match_x = self.x_for_object_match();
+        let sprite_ahead = self.lcdc & lcdc::OBJ_ENABLE != 0
+            && self.sprites[self.next_sprite.min(self.sprites.len())..]
+                .iter()
+                .any(|s| s.x >= match_x && s.x < SCREEN_WIDTH as u8 + 8);
+        let window_ahead = !self.wx_triggered
+            && self.wy_triggered
+            && self.lcdc & lcdc::WINDOW_ENABLE != 0
+            && (160..166).contains(&self.wx);
+        let fifo_ready = self.bg_fifo.len() as u32 >= left || self.fetch >= Fetch::High1;
+        if self.obj_fetch == ObjFetch::Idle
+            && !self.window_stall
+            && !sprite_ahead
+            && !window_ahead
+            && fifo_ready
+        {
+            return left <= self.mode0_lead();
+        }
+        // Stalls ahead: run a copy of the pipeline to the end of the line.
+        let mut ahead = self.clone();
+        ahead.lookahead = true;
+        let mut dots = 0;
+        while ahead.pipeline_active {
+            ahead.mode3_dot();
+            dots += 1;
+        }
+        dots <= ahead.mode0_lead()
+    }
+
+    /// Dots between mode 0 in STAT and the end of the pipeline (see `mode0_due`).
+    /// Sprites fetched on the line are approximated by sprites passed with OBJ enabled.
+    fn mode0_lead(&self) -> u32 {
+        if self.lcdc & lcdc::OBJ_ENABLE != 0 && self.next_sprite > 0 {
+            4
+        } else {
+            2
         }
     }
 
@@ -1253,6 +1305,9 @@ impl Ppu {
             self.window_y = self.window_y.wrapping_add(1);
         } else {
             self.wx_triggered = false;
+        }
+        if self.mode == Mode::Drawing {
+            self.hblank_started = true;
         }
         self.mode = Mode::HBlank;
         self.irq_mode = Mode::HBlank;

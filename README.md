@@ -12,7 +12,7 @@ Named after Freki, one of Odin's two wolves.
 > MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves, save states, rewind and cheats.
 > The PPU draws pixel by pixel with DMG-accurate timing: 22 of the 24 mealybug-tearoom
 > mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels),
-> and 93 of the 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,
+> and all 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,
 > interrupt, PPU mode and VRAM/OAM access timing).
 > Original Game Boy games can also run colourised on the GBC (with its boot ROM).
 > Missing: CGB-specific PPU timing differences.
