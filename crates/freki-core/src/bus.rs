@@ -121,8 +121,8 @@ struct Dma {
     pending: Option<(u8, u8)>,
     /// The running transfer: (source address of the next byte, T-cycles into its M-cycle).
     active: Option<(u16, u8)>,
-    /// DMG: a CPU write to the bus the transfer reads from is lost, but pulls the byte
-    /// being transferred low where the written value has 0 bits (AND).
+    /// DMG: a CPU write to the bus the transfer reads from is lost, but changes the byte
+    /// being transferred: ANDed with it from work RAM, replaced by it from other sources.
     write_conflict: Option<u8>,
 }
 
@@ -433,7 +433,8 @@ impl Bus {
             }
             let mut byte = self.dma_source(src);
             if let Some(value) = self.dma.write_conflict.take() {
-                byte &= value;
+                // Work RAM's outputs fight the CPU's write (AND); other sources lose to it.
+                byte = if src >= 0xC000 { byte & value } else { value };
             }
             self.ppu.write_oam(0xFE00 | (src & 0xFF), byte);
             self.dma.active = ((src & 0xFF) < 0x9F).then_some((src + 1, 0));
