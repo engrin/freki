@@ -44,12 +44,12 @@ const PIPELINE_START_DOT: u32 = 86;
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 /// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
 const MAX_MODE0_LEAD: u32 = 5;
-/// Dots from a STAT/LYC write that raises the STAT line to the interrupt request: DMG,
-/// CGB, CGB in double speed (fitted to Gambatte's hwtests).
 /// CGB palette RAM locks one dot after STAT shows mode 3 and unlocks 4 dots after it
 /// shows mode 0 (Gambatte's hwtests, cgbpal_m3/*).
 const PALETTE_LOCK_DOT: u32 = 80;
 const PALETTE_UNLOCK_DELAY: u8 = 4;
+/// Dots from a STAT/LYC write that raises the STAT line to the interrupt request: DMG,
+/// CGB, CGB in double speed (fitted to Gambatte's hwtests).
 const WRITE_IRQ_DMG: u8 = 5;
 const WRITE_IRQ_CGB: u8 = 5;
 const WRITE_IRQ_DS: u8 = 3;
