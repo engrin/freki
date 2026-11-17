@@ -44,6 +44,11 @@ const PIPELINE_START_DOT: u32 = 86;
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 /// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
 const MAX_MODE0_LEAD: u32 = 5;
+/// The dot of line 0 at which the frame's WY latch is reset and checked.
+const WY_LINE0_DOT: u32 = 1;
+/// Dots of each line at which WY is compared with LY, and with LY + 1.
+const WY_CHECK_DOT: u32 = 451;
+const WY_CHECK_NEXT_DOT: u32 = 455;
 const MAX_SPRITES_PER_LINE: usize = 10;
 /// The pipeline's position counter starts at −16 (as an 8-bit value).
 const POSITION_START: u8 = 0u8.wrapping_sub(16);
@@ -742,7 +747,6 @@ impl Ppu {
                     // OAM interrupt fires one dot later than on other lines.
                     self.mode = Mode::HBlank;
                     self.window_y = 0xFF;
-                    self.wy_triggered = false;
                 }
                 0 | 1 if self.first_line => {
                     if self.dot == 1 {
@@ -773,10 +777,17 @@ impl Ppu {
                 PIPELINE_START_DOT => self.start_pipeline(),
                 _ => {}
             }
-            // The WY == LY comparison runs continuously (not just at line start), so
-            // enabling the window or changing WY mid-line can still trigger it.
-            if !self.wy_triggered && self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wy == self.ly {
-                self.wy_triggered = true;
+            // WY is compared with LY at fixed points: early on line 0 (resetting the
+            // latch for the frame), and near the end of each line with this and the next
+            // LY (Gambatte's hwtests, window/arg/late_wy_*). Otherwise only the WX match
+            // itself looks at WY (`window_y_match`).
+            let window_enabled = self.lcdc & lcdc::WINDOW_ENABLE != 0;
+            if self.ly == 0 && self.dot == WY_LINE0_DOT {
+                self.wy_triggered = window_enabled && self.wy == 0;
+            } else if self.dot == WY_CHECK_DOT {
+                self.wy_triggered |= window_enabled && self.wy == self.ly;
+            } else if self.dot == WY_CHECK_NEXT_DOT {
+                self.wy_triggered |= window_enabled && self.wy == self.ly + 1;
             }
             if self.pipeline_active {
                 self.mode3_dot();
@@ -952,7 +963,7 @@ impl Ppu {
                 .iter()
                 .any(|s| s.x >= match_x && s.x < SCREEN_WIDTH as u8 + 8);
         let window_ahead = !self.wx_triggered
-            && self.wy_triggered
+            && self.window_y_match()
             && self.lcdc & lcdc::WINDOW_ENABLE != 0
             && (160..166).contains(&self.wx);
         // Enough pixels queued, or the next tile arrives before the FIFO runs dry.
@@ -991,6 +1002,12 @@ impl Ppu {
         }
     }
 
+    /// Whether the window may start on this line: WY matched at one of the latch points
+    /// this frame, or WY equals LY right now.
+    fn window_y_match(&self) -> bool {
+        self.wy_triggered || (self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wy == self.ly)
+    }
+
     /// X coordinate (in OAM terms) of sprites that start at the current position.
     fn x_for_object_match(&self) -> u8 {
         let x = self.position.wrapping_add(8);
@@ -1000,7 +1017,7 @@ impl Ppu {
     /// Starts the window if WX matches the current position. Returns `true` if the rest
     /// of this dot is delayed by a pipeline stall.
     fn check_window(&mut self) -> bool {
-        if self.wx_triggered || !self.wy_triggered || self.lcdc & lcdc::WINDOW_ENABLE == 0 {
+        if self.wx_triggered || !self.window_y_match() || self.lcdc & lcdc::WINDOW_ENABLE == 0 {
             return false;
         }
         let pos = self.position;
@@ -1368,7 +1385,7 @@ impl Ppu {
             self.lcd_x += 1;
         }
         self.position = POSITION_START;
-        if self.wy_triggered && self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wx == 166 {
+        if self.window_y_match() && self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wx == 166 {
             // WX = 166 starts the window at the end of this line for the next one.
             self.wx_triggered = true;
             self.window_tile_x = 1;
