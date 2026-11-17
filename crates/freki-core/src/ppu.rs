@@ -308,6 +308,9 @@ pub struct Ppu {
     window_being_fetched: bool,
     insert_bg_pixel: bool,
     disable_insertion_glitch: bool,
+    /// Mode 0 in STAT comes one dot later on this line (see `check_window`).
+    #[serde(default)]
+    late_mode0: bool,
     /// DMG: dots until objects just enabled in LCDC can start a sprite fetch.
     #[serde(default)]
     obj_enable_delay: u8,
@@ -400,6 +403,7 @@ impl Ppu {
             insert_bg_pixel: false,
             disable_insertion_glitch: false,
             obj_enable_delay: 0,
+            late_mode0: false,
             wx_just_changed: false,
             lookahead: false,
             lcdc: 0x91,
@@ -1138,6 +1142,7 @@ impl Ppu {
 
     fn start_pipeline(&mut self) {
         self.pipeline_active = true;
+        self.late_mode0 = false;
         self.bg_fifo.clear();
         self.obj_fifo.clear();
         self.bg_fifo.extend([0; 8]); // junk pixels, dropped at negative positions
@@ -1248,13 +1253,15 @@ impl Ppu {
     /// Mooneye's test; Gambatte's double-speed tests show 2 there too).
     /// Sprites fetched on the line are approximated by sprites passed with OBJ enabled.
     fn mode0_lead(&self) -> u32 {
-        if self.lcdc & lcdc::OBJ_ENABLE == 0 || self.next_sprite == 0 || self.double_speed {
-            2
-        } else if self.dmg_hardware() {
-            4
-        } else {
-            MAX_MODE0_LEAD
-        }
+        let lead =
+            if self.lcdc & lcdc::OBJ_ENABLE == 0 || self.next_sprite == 0 || self.double_speed {
+                2
+            } else if self.dmg_hardware() {
+                4
+            } else {
+                MAX_MODE0_LEAD
+            };
+        lead - u32::from(self.late_mode0)
     }
 
     /// Whether the window may start on this line: WY matched at one of the latch points
@@ -1313,6 +1320,10 @@ impl Ppu {
                 self.window_stall = true;
                 return true;
             }
+            // DMG: started on an even dot, the window ends mode 3 in STAT one dot later
+            // (Gambatte's hwtests, window/*scx2*); the pixels are not delayed (mealybug's
+            // m3_window_timing).
+            self.late_mode0 = self.dot & 1 == 0 && self.dmg_hardware();
         }
         false
     }
