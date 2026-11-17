@@ -312,6 +312,9 @@ pub struct Ppu {
     /// requested.
     #[serde(default)]
     off_irq: u8,
+    /// Set while `check_write_irq` asks `stat_sources` for every source but LYC.
+    #[serde(skip)]
+    exclude_lyc_source: bool,
     /// Mode 0 in STAT comes one dot later on this line (see `check_window`).
     #[serde(default)]
     late_mode0: bool,
@@ -409,6 +412,7 @@ impl Ppu {
             obj_enable_delay: 0,
             late_mode0: false,
             off_irq: 0,
+            exclude_lyc_source: false,
             wx_just_changed: false,
             lookahead: false,
             lcdc: 0x91,
@@ -1076,7 +1080,9 @@ impl Ppu {
 
     /// The OR of all enabled STAT interrupt sources.
     fn stat_sources(&self) -> bool {
-        (self.irq_stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.irq_lyc)
+        (self.irq_stat & stat::LYC_INT != 0
+            && self.ly_for_lyc() == self.irq_lyc
+            && !self.exclude_lyc_source)
             || (self.irq_stat & stat::HBLANK_INT != 0
                 && self.irq_mode == Mode::HBlank
                 && (self.dot < HBLANK_SOURCE_END || self.ly as usize >= SCREEN_HEIGHT - 1))
@@ -1128,6 +1134,18 @@ impl Ppu {
             }
             self.stat_line = line;
             return;
+        }
+        // DMG: in a line's last 4 dots LY is already changing; a write that makes only the
+        // LYC source match there raises no interrupt (Gambatte's hwtests,
+        // lycEnable/late_ff45_enable_3).
+        if !self.stat_line && self.ly_changing() && self.dmg_hardware() {
+            self.exclude_lyc_source = true;
+            let others = self.stat_sources();
+            self.exclude_lyc_source = false;
+            if !others && self.stat_sources() {
+                self.stat_line = true;
+                return;
+            }
         }
         if !self.stat_line && self.stat_sources() {
             self.stat_line = true;
