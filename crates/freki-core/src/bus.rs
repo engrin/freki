@@ -307,10 +307,14 @@ impl Bus {
             0xFF00 => self.joypad.write(value),
             0xFF01..=0xFF02 => self.serial.write(addr, value),
             0xFF04 => {
-                // Resetting the counter can make the serial clock (bit 8) fall.
-                let serial_clock_high = self.timer.counter() & 0x100 != 0;
+                // Resetting the counter can make the serial clock (bit 8) and the frame
+                // sequencer's bit fall.
+                let counter = self.timer.counter();
                 self.timer.write(addr, value);
-                self.serial.clock(serial_clock_high as u32);
+                self.serial.clock(u32::from(counter & 0x100 != 0));
+                if counter >> self.frame_sequencer_bit() & 1 != 0 {
+                    self.apu.clock_frame_sequencer();
+                }
             }
             0xFF05..=0xFF07 => self.timer.write(addr, value),
             0xFF0F => self.interrupt_flag = value & 0x1F,
@@ -393,6 +397,11 @@ impl Bus {
         } else {
             self.hdma.remaining -= 1;
         }
+    }
+
+    /// The DIV counter bit whose falling edges step the APU's frame sequencer.
+    fn frame_sequencer_bit(&self) -> u32 {
+        if self.double_speed { 13 } else { 12 }
     }
 
     /// T-cycles the CPU has to pause for VRAM DMA (resets the count).
@@ -529,8 +538,14 @@ impl Bus {
                 self.tick_dma();
             }
         }
-        self.apu.tick(video_cycles);
         let counter = self.timer.counter() as u32;
+        // Falling edges of counter bit 12 (bit 13 in double speed) step the APU's frame
+        // sequencer at 512 Hz.
+        let shift = self.frame_sequencer_bit() + 1;
+        for _ in 0..((counter + cycles) >> shift) - (counter >> shift) {
+            self.apu.clock_frame_sequencer();
+        }
+        self.apu.tick(video_cycles);
         self.interrupt_flag |= self.timer.tick(cycles);
         // Falling edges of counter bit 8 clock the serial port.
         self.serial

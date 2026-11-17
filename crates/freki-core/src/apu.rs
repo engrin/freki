@@ -8,9 +8,6 @@
 use crate::CLOCK_HZ;
 use serde::{Deserialize, Serialize};
 
-/// The frame sequencer runs at 512 Hz.
-const FRAME_SEQUENCER_PERIOD: u32 = CLOCK_HZ / 512;
-
 const DUTY_TABLE: [[u8; 8]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 1], // 12.5 %
     [1, 0, 0, 0, 0, 0, 0, 1], // 25 %
@@ -364,7 +361,6 @@ pub struct Apu {
     ch2: Square,
     ch3: Wave,
     ch4: Noise,
-    frame_timer: u32,
     frame_step: u8,
 
     /// Output sample rate in Hz; `None` means no samples are produced.
@@ -395,7 +391,6 @@ impl Apu {
             ch2: Square::default(),
             ch3: Wave::default(),
             ch4: Noise::default(),
-            frame_timer: FRAME_SEQUENCER_PERIOD,
             frame_step: 0,
             sample_rate: None,
             sample_clock: 0,
@@ -543,7 +538,6 @@ impl Apu {
                 self.ch4.length.counter = lengths[3];
             } else if !self.powered && power {
                 self.frame_step = 0;
-                self.frame_timer = FRAME_SEQUENCER_PERIOD;
             }
             self.powered = power;
             return;
@@ -675,7 +669,6 @@ impl Apu {
             ch2: Square::default(),
             ch3: Wave::default(),
             ch4: Noise::default(),
-            frame_timer: FRAME_SEQUENCER_PERIOD,
             frame_step: 0,
             sample_rate: None,
             sample_clock: 0,
@@ -706,16 +699,15 @@ impl Apu {
         self.ch2.tick();
         self.ch3.tick();
         self.ch4.tick();
-
-        self.frame_timer -= 1;
-        if self.frame_timer == 0 {
-            self.frame_timer = FRAME_SEQUENCER_PERIOD;
-            self.clock_frame_sequencer();
-        }
     }
 
-    /// 512 Hz: length at steps 0/2/4/6, sweep at 2/6, envelope at 7.
-    fn clock_frame_sequencer(&mut self) {
+    /// Steps the frame sequencer (512 Hz: length at steps 0/2/4/6, sweep at 2/6, envelope
+    /// at 7). The bus calls this on each falling edge of a DIV counter bit, so writing DIV
+    /// can step it early.
+    pub fn clock_frame_sequencer(&mut self) {
+        if !self.powered {
+            return;
+        }
         let step = self.frame_step;
         if step % 2 == 0 {
             self.ch1.on &= self.ch1.length.clock();
@@ -779,7 +771,8 @@ mod tests {
         apu.write(0xFF16, 0x3F); // length 1
         apu.write(0xFF19, 0xC0); // trigger, length enabled
         assert_eq!(apu.read(0xFF26) & 0x02, 0x02);
-        apu.tick(FRAME_SEQUENCER_PERIOD * 2);
+        apu.clock_frame_sequencer();
+        apu.clock_frame_sequencer();
         assert_eq!(apu.read(0xFF26) & 0x02, 0, "length expired");
     }
 
