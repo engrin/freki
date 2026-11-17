@@ -237,6 +237,24 @@ impl Cpu {
         let pending = std::mem::take(&mut self.pending);
         match addr {
             // The write timing quirks below are measured on the DMG.
+            // CGB: scroll writes reach the PPU one T-cycle later than other writes
+            // (mealybug-tearoom-tests m3_scx_*, m3_scy_* on CPU CGB C).
+            0xFF42 | 0xFF43 if bus.cgb_hardware => {
+                self.advance(bus, pending + 1);
+                bus.write(addr, value);
+                self.pending = 3;
+            }
+            // CGB: LCDC bits 0-3, 5 and 6 reach the PPU one T-cycle after LCD enable and the
+            // tile data select (bits 7 and 4) (mealybug-tearoom-tests m3_lcdc_* on CPU CGB C).
+            0xFF40 if bus.cgb_hardware => {
+                const LATE: u8 = 0x6F;
+                let old = bus.read(addr);
+                self.advance(bus, pending);
+                bus.write(addr, (value & !LATE) | (old & LATE));
+                self.advance(bus, 1);
+                bus.write(addr, value);
+                self.pending = 3;
+            }
             _ if bus.cgb_hardware => {
                 self.advance(bus, pending);
                 bus.cpu_write(addr, value);

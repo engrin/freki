@@ -217,6 +217,8 @@ pub struct Ppu {
     /// The window is being drawn on this line.
     wx_triggered: bool,
     window_tile_x: u8,
+    /// Background tiles fetched on this line (the fetcher adds SCX's upper 5 bits to it).
+    bg_tile_x: u8,
     /// Window line counter; starts at −1 each frame and counts window activations.
     window_y: u8,
     window_being_fetched: bool,
@@ -291,6 +293,7 @@ impl Ppu {
             wy_triggered: false,
             wx_triggered: false,
             window_tile_x: 0,
+            bg_tile_x: 0,
             window_y: 0xFF,
             window_being_fetched: false,
             insert_bg_pixel: false,
@@ -848,6 +851,7 @@ impl Ppu {
         self.bg_fifo.extend([0; 8]); // junk pixels, dropped at negative positions
         self.position = POSITION_START;
         self.lcd_x = 0;
+        self.bg_tile_x = 0;
         self.fetch = Fetch::Tile1;
         self.obj_fetch = ObjFetch::Idle;
         self.during_object_fetch = false;
@@ -1032,6 +1036,22 @@ impl Ppu {
         bank + base + row as usize * 2
     }
 
+    /// VRAM offset of the tile map entry the fetcher reads next.
+    fn tile_map_address(&self) -> usize {
+        let high_map = if self.wx_triggered {
+            self.lcdc & lcdc::WINDOW_MAP_9C00 != 0
+        } else {
+            self.lcdc & lcdc::BG_MAP_9C00 != 0
+        };
+        let x = if self.wx_triggered {
+            self.window_tile_x
+        } else {
+            ((self.scx >> 3) + self.bg_tile_x) & 0x1F
+        };
+        let map = if high_map { 0x1C00 } else { 0x1800 };
+        map + x as usize + (self.fetcher_y() / 8) as usize * 32
+    }
+
     /// One step of the background/window fetcher.
     fn advance_fetcher(&mut self) {
         match self.fetch {
@@ -1039,20 +1059,7 @@ impl Ppu {
                 if self.lcdc & lcdc::WINDOW_ENABLE == 0 {
                     self.wx_triggered = false;
                 }
-                let high_map = if self.wx_triggered {
-                    self.lcdc & lcdc::WINDOW_MAP_9C00 != 0
-                } else {
-                    self.lcdc & lcdc::BG_MAP_9C00 != 0
-                };
-                let x = if self.wx_triggered {
-                    self.window_tile_x
-                } else if self.position.wrapping_add(16) < 8 {
-                    self.scx >> 3
-                } else {
-                    (self.scx.wrapping_add(self.position).wrapping_add(8) / 8) & 0x1F
-                };
-                let map = if high_map { 0x1C00 } else { 0x1800 };
-                self.tile_map_addr = map + x as usize + (self.fetcher_y() / 8) as usize * 32;
+                self.tile_map_addr = self.tile_map_address();
                 self.fetch = Fetch::Tile2;
             }
             Fetch::Tile2 => {
@@ -1080,6 +1087,8 @@ impl Ppu {
                 self.tile_data[1] = self.vram[self.tile_data_addr];
                 if self.wx_triggered {
                     self.window_tile_x = (self.window_tile_x + 1) & 0x1F;
+                } else {
+                    self.bg_tile_x = self.bg_tile_x.wrapping_add(1);
                 }
                 self.fetch = Fetch::Push;
                 self.try_push();

@@ -89,7 +89,10 @@ pub fn load_rgb_reference(path: &Path) -> Vec<[u8; 3]> {
     let channels = info.color_type.samples();
     buf[..info.buffer_size()]
         .chunks_exact(channels)
-        .map(|px| [px[0], px[1], px[2]])
+        .map(|px| match channels {
+            1 | 2 => [px[0]; 3], // greyscale (with alpha)
+            _ => [px[0], px[1], px[2]],
+        })
         .collect()
 }
 

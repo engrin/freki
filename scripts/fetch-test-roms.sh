@@ -2,7 +2,7 @@
 # Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
 #   - Blargg's cpu_instrs, dmg_sound, cgb_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
 #   - dmg-acid2 and cgb-acid2 by Matt Currie (MIT), plus their reference screenshots
-#   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG references
+#   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG and CGB C references
 #   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance, emulator-only (MBC) and misc (CGB) tests
 set -euo pipefail
 
@@ -61,8 +61,8 @@ for rom in "01-read_timing" "02-write_timing" "03-modify_timing"; do
   fetch "$BLARGG/mem_timing-2/rom_singles/$rom.gb" "$DEST/mem_timing-2/$rom.gb"
 done
 
-# Mealybug: built ROMs ship as a zip in the repo; references are DMG screenshots.
-mkdir -p "$DEST/mealybug"
+# Mealybug: built ROMs ship as a zip in the repo; references are DMG and CPU CGB C screenshots.
+mkdir -p "$DEST/mealybug/cgb"
 if [[ ! -f "$DEST/mealybug/m3_scx_low_3_bits.gb" ]]; then
   fetch "$MEALYBUG/mealybug-tearoom-tests.zip" "$DEST/mealybug.zip"
   unzip -q -o -j "$DEST/mealybug.zip" '*.gb' -d "$DEST/mealybug"
@@ -74,6 +74,13 @@ for rom in "$DEST"/mealybug/*.gb; do
   [[ -f "$ref" ]] && continue
   curl -fsS --retry 3 -o "$ref" "$MEALYBUG/expected/DMG-blob/$name.png" 2>/dev/null \
     && echo "fetch $ref" || echo "no DMG reference for $name"
+done
+for rom in "$DEST"/mealybug/*.gb; do
+  name="$(basename "$rom" .gb)"
+  ref="$DEST/mealybug/cgb/$name.png"
+  [[ -f "$ref" ]] && continue
+  curl -fsS --retry 3 -o "$ref" "$MEALYBUG/expected/CPU%20CGB%20C/$name.png" 2>/dev/null \
+    && echo "fetch $ref" || echo "no CGB reference for $name"
 done
 
 # Mooneye: prebuilt release tarball; keep the acceptance, emulator-only and misc ROMs.

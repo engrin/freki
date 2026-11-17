@@ -16,8 +16,11 @@ Named after Freki, one of Odin's two wolves.
 > interrupt, PPU mode and VRAM/OAM access timing).
 > On the Game Boy Color, the 58 Mooneye tests meant for all models or the CGB pass as well
 > (boot state, I/O registers, interrupt and PPU timing), with or without its boot ROM.
+> Mid-scanline drawing on the GBC matches real hardware (CPU CGB C) in 20 of the 27
+> mealybug-tearoom-tests that have a CGB reference; the others involve changing the tile
+> data select or sprite settings in the middle of a fetch. Gambatte's hwtests, SameSuite
+> and the AGE test ROMs cover more CGB timing and are not run yet.
 > Original Game Boy games can also run colourised on the GBC (with its boot ROM).
-> Missing: CGB-specific mid-scanline PPU timing (no public test ROMs check it).
 
 ## Layout
 
