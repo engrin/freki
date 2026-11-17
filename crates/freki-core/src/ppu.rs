@@ -1022,7 +1022,7 @@ impl Ppu {
         let window_ahead = !self.wx_triggered
             && self.window_y_match()
             && self.lcdc & lcdc::WINDOW_ENABLE != 0
-            && (160..166).contains(&self.wx);
+            && (160..=166).contains(&self.wx);
         // Enough pixels queued, or the next tile arrives before the FIFO runs dry.
         let fifo_ready = self.bg_fifo.len() as u32 >= left
             || (!self.bg_fifo.is_empty() && self.fetch >= Fetch::High1);
@@ -1088,7 +1088,9 @@ impl Ppu {
             pos == 0u8.wrapping_sub(7)
                 || (pos == POSITION_START && self.scx & 7 != 0)
                 || (POSITION_START.wrapping_add(1)..=0u8.wrapping_sub(8)).contains(&pos)
-        } else if self.wx < 166 {
+        } else if self.wx < 166 || (self.wx == 166 && !self.dmg_hardware()) {
+            // On the CGB, WX = 166 also starts the window (and its fetch stall) in the
+            // line's last pixels (Gambatte's hwtests, window/m2int_wxA6_firstline_*).
             if self.wx == pos.wrapping_add(7) {
                 true
             } else if self.wx == pos.wrapping_add(6) && !self.wx_just_changed {
