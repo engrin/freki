@@ -4,6 +4,8 @@
 #   - dmg-acid2 and cgb-acid2 by Matt Currie (MIT), plus their reference screenshots
 #   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG and CGB C references
 #   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance, emulator-only (MBC) and misc (CGB) tests
+#   - Gambatte's hwtests by Sindre Aamås (GPL-2.0, via pokemon-speedrunning/gambatte-core): assembly
+#     sources only; freki's test runner assembles them itself
 set -euo pipefail
 
 DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
@@ -14,6 +16,8 @@ CGB_ACID2="https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-ac
 CGB_ACID2_REF="https://raw.githubusercontent.com/mattcurrie/cgb-acid2/master/img/reference.png"
 MTS="mts-20240926-1737-443f6e1"
 MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS/$MTS.tar.xz"
+GAMBATTE_COMMIT="5a41a68c25402421fb1983ddadc9faf2418ddb0f"
+GAMBATTE_URL="https://codeload.github.com/pokemon-speedrunning/gambatte-core/tar.gz/$GAMBATTE_COMMIT"
 MEALYBUG="https://raw.githubusercontent.com/mattcurrie/mealybug-tearoom-tests/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4"
 
 mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound" "$DEST/mem_timing" "$DEST/mem_timing-2"
@@ -90,6 +94,17 @@ if [[ ! -d "$DEST/mooneye/misc" ]]; then
   tar -xJf "$DEST/mooneye.tar.xz" -C "$DEST/mooneye" --strip-components=1 \
     "$MTS/acceptance" "$MTS/emulator-only" "$MTS/misc" "$MTS/LICENSE"
   rm "$DEST/mooneye.tar.xz"
+fi
+
+# Gambatte: hardware test sources (no ROMs are built here; the runner assembles them).
+if [[ ! -d "$DEST/gambatte/hwtests" ]]; then
+  fetch "$GAMBATTE_URL" "$DEST/gambatte.tar.gz"
+  mkdir -p "$DEST/gambatte"
+  tar -xzf "$DEST/gambatte.tar.gz" -C "$DEST/gambatte" --strip-components=2 \
+    "gambatte-core-$GAMBATTE_COMMIT/test/hwtests"
+  tar -xzf "$DEST/gambatte.tar.gz" -C "$DEST/gambatte" --strip-components=1 \
+    "gambatte-core-$GAMBATTE_COMMIT/COPYING"
+  rm "$DEST/gambatte.tar.gz"
 fi
 
 echo "Test ROMs are in $DEST"

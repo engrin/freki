@@ -177,6 +177,12 @@ impl GameBoy {
         self.cpu.step(&mut self.bus)
     }
 
+    /// Advances everything but the CPU by `cycles` T-cycles, as a real Game Boy does once
+    /// an illegal opcode has locked up its CPU (see [`CpuError::IllegalOpcode`]).
+    pub fn run_without_cpu(&mut self, cycles: u32) {
+        self.bus.tick(cycles);
+    }
+
     /// Runs until the PPU has produced a complete frame, then applies GameShark cheats.
     /// Ignores breakpoints; see [`GameBoy::run_frame_checked`].
     pub fn run_frame(&mut self) -> Result<(), CpuError> {

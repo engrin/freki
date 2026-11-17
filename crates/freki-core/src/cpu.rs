@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::bus::Bus;
+use crate::bus::{Bus, interrupt};
 use crate::debugger::Access;
 
 pub mod flag {
@@ -530,9 +530,17 @@ impl Cpu {
         if requested == 0 {
             return false;
         }
-        self.halted = false;
+        let woke = std::mem::take(&mut self.halted);
         if !self.ime {
             return false;
+        }
+        // Waking from HALT for the timer interrupt takes one more M-cycle: the timer raises
+        // its request at the end of an M-cycle, and the halted CPU only sees it in the next.
+        // (The PPU's interrupt timing already includes this; Gambatte's hwtests, tima/*.)
+        let timer_only = requested & (interrupt::VBLANK | interrupt::STAT) == 0
+            && requested & interrupt::TIMER != 0;
+        if woke && timer_only {
+            self.idle(bus);
         }
         self.ime = false;
         self.fetch_read(bus, self.regs.pc);
@@ -571,7 +579,7 @@ impl Cpu {
         }
         if self.handle_interrupts(bus) {
             self.flush(bus);
-            debug_assert_eq!(self.cycles, 20, "interrupt dispatch timing");
+            debug_assert!(matches!(self.cycles, 20 | 24), "interrupt dispatch timing");
             return Ok(self.cycles);
         }
         if self.halted {

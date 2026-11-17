@@ -18,8 +18,10 @@ Named after Freki, one of Odin's two wolves.
 > (boot state, I/O registers, interrupt and PPU timing), with or without its boot ROM.
 > Mid-scanline drawing on the GBC matches real hardware (CPU CGB C) in 20 of the 27
 > mealybug-tearoom-tests that have a CGB reference; the others involve changing the tile
-> data select or sprite settings in the middle of a fetch. Gambatte's hwtests, SameSuite
-> and the AGE test ROMs cover more CGB timing and are not run yet.
+> data select or sprite settings in the middle of a fetch.
+> Of Gambatte's hardware tests (on-screen results), 1197 of 1651 pass on the DMG and 1821
+> of 3023 on the GBC; the failures are listed in `crates/freki-core/tests/gambatte_failures.txt`.
+> SameSuite and the AGE test ROMs are not run yet.
 > Original Game Boy games can also run colourised on the GBC (with its boot ROM).
 
 ## Layout
@@ -144,7 +146,7 @@ On Linux you need the X11/Wayland, ALSA and udev development headers
 ## Testing
 
 ```sh
-./scripts/fetch-test-roms.sh                        # Blargg, dmg/cgb-acid2, mealybug-tearoom, Mooneye
+./scripts/fetch-test-roms.sh                        # Blargg, dmg/cgb-acid2, mealybug-tearoom, Mooneye, Gambatte
 cargo test --workspace                              # unit tests and all test ROMs (headless)
 ```
 
@@ -160,7 +162,7 @@ ROM files are never committed; see `.gitignore`.
 
 - [Pan Docs](https://gbdev.io/pandocs/): the hardware reference
 - [Opcode table](https://gbdev.io/gb-opcodes/optables/)
-- [Blargg's test ROMs](https://github.com/retrio/gb-test-roms), [dmg-acid2](https://github.com/mattcurrie/dmg-acid2), [cgb-acid2](https://github.com/mattcurrie/cgb-acid2), [Mooneye test suite](https://github.com/Gekkio/mooneye-test-suite)
+- [Blargg's test ROMs](https://github.com/retrio/gb-test-roms), [dmg-acid2](https://github.com/mattcurrie/dmg-acid2), [cgb-acid2](https://github.com/mattcurrie/cgb-acid2), [Mooneye test suite](https://github.com/Gekkio/mooneye-test-suite), [mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests), [Gambatte hwtests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test/hwtests)
 
 ## License
 
