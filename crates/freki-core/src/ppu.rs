@@ -308,6 +308,9 @@ pub struct Ppu {
     window_being_fetched: bool,
     insert_bg_pixel: bool,
     disable_insertion_glitch: bool,
+    /// DMG: dots until objects just enabled in LCDC can start a sprite fetch.
+    #[serde(default)]
+    obj_enable_delay: u8,
     wx_just_changed: bool,
     /// This copy only looks ahead to find when mode 3 ends (see `mode0_due`).
     #[serde(skip)]
@@ -396,6 +399,7 @@ impl Ppu {
             window_being_fetched: false,
             insert_bg_pixel: false,
             disable_insertion_glitch: false,
+            obj_enable_delay: 0,
             wx_just_changed: false,
             lookahead: false,
             lcdc: 0x91,
@@ -747,6 +751,14 @@ impl Ppu {
                     }
                 }
                 let lyc_flag = self.lyc_flag();
+                // DMG: objects just enabled can only start a sprite fetch a few dots later
+                // (Gambatte's hwtests, sprites/sprite_late_enable_*).
+                if self.dmg_hardware()
+                    && self.lcdc & lcdc::OBJ_ENABLE == 0
+                    && value & lcdc::OBJ_ENABLE != 0
+                {
+                    self.obj_enable_delay = 4;
+                }
                 self.lcdc = value;
                 if was_on && !self.lcd_on() {
                     self.lyc_flag_off = lyc_flag;
@@ -884,6 +896,7 @@ impl Ppu {
         }
         self.palette_unlock_in = self.palette_unlock_in.saturating_sub(1);
         self.wy_for_wx.1 = self.wy_for_wx.1.saturating_sub(1);
+        self.obj_enable_delay = self.obj_enable_delay.saturating_sub(1);
         self.obj_size_history =
             self.obj_size_history << 1 | u8::from(self.lcdc & lcdc::OBJ_SIZE_8X16 != 0);
         let mut irq = 0;
@@ -1173,6 +1186,7 @@ impl Ppu {
             self.next_sprite += 1;
         }
         if self.lcdc & lcdc::OBJ_ENABLE != 0
+            && self.obj_enable_delay == 0
             && self
                 .sprites
                 .get(self.next_sprite)

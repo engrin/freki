@@ -707,9 +707,6 @@ dmg sprites/late_sizechange2_sp02_2_dmg08_cgb04c_out0.asm
 dmg sprites/late_sizechange_sp00_2_dmg08_cgb04c_out3.asm
 dmg sprites/late_sizechange_sp00_4_dmg08_cgb04c_out0.asm
 dmg sprites/late_sizechange_sp02_2_dmg08_cgb04c_out3.asm
-dmg sprites/sprite_late_enable_spx18_2_dmg08_out0.asm
-dmg sprites/sprite_late_enable_spx1A_2_dmg08_out0.asm
-dmg sprites/sprite_late_enable_spx1B_2_dmg08_out0.asm
 dmg sprites/sprite_late_late_disable_spx18_2_dmg08_out3.asm
 dmg sprites/sprite_late_late_disable_spx19_2_dmg08_out3.asm
 dmg vram_m3/postread_1_dmg08_cgb04c_out3.asm
