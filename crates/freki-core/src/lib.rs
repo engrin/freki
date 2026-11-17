@@ -39,9 +39,10 @@ pub const CYCLES_PER_FRAME: u32 = 70_224;
 /// Native refresh rate (~59.73 Hz).
 pub const FRAMES_PER_SECOND: f64 = CLOCK_HZ as f64 / CYCLES_PER_FRAME as f64;
 
-/// DIV counter when the CGB boot ROM hands over to a CGB game, and to a DMG game
-/// (measured with the real boot ROM; it varies a little with the cartridge header).
-const CGB_BOOT_COUNTER: u16 = 0x1E88;
+/// DIV counter when the CGB boot ROM hands over to a CGB game (from Gambatte's hwtests,
+/// div/start_inc_*_cgb04c; freki's run of the boot ROM ends 24 T-cycles earlier), and to a
+/// DMG game (measured with the real boot ROM; it varies a little with the header).
+const CGB_BOOT_COUNTER: u16 = 0x1EA0;
 const CGB_COMPAT_BOOT_COUNTER: u16 = 0x2678;
 
 /// What the CGB boot ROM leaves in B for a DMG game: the sum of the title bytes if the

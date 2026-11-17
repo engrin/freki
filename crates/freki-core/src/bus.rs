@@ -336,7 +336,18 @@ impl Bus {
             }
             0xFF05..=0xFF07 => self.timer.write(addr, value),
             0xFF0F => self.interrupt_flag = value & 0x1F,
-            0xFF10..=0xFF3F => self.apu.write(addr, value),
+            0xFF10..=0xFF3F => {
+                let was_powered = self.apu.powered();
+                self.apu.write(addr, value);
+                // Powering on keeps the frame sequencer's phase within a step pair from
+                // DIV: if its bit is set (4 T-cycles ahead), the first step is an odd one.
+                if !was_powered
+                    && self.apu.powered()
+                    && self.timer.counter().wrapping_add(4) >> self.frame_sequencer_bit() & 1 != 0
+                {
+                    self.apu.power_on_late();
+                }
+            }
             0xFF46 => self.oam_dma(value),
             0xFF50 => self.unmap_boot_rom(value),
             0xFF4C if self.cgb && self.boot_rom_mapped => self.key0_dmg = value & 0x04 != 0,
@@ -638,13 +649,13 @@ impl Bus {
             }
         }
         let counter = self.timer.counter() as u32;
+        self.apu.tick(video_cycles);
         // Falling edges of counter bit 12 (bit 13 in double speed) step the APU's frame
         // sequencer at 512 Hz.
         let shift = self.frame_sequencer_bit() + 1;
         for _ in 0..((counter + cycles) >> shift) - (counter >> shift) {
             self.apu.clock_frame_sequencer();
         }
-        self.apu.tick(video_cycles);
         self.interrupt_flag |= self.timer.tick(cycles);
         // Falling edges of counter bit 7 (bit 2 with the CGB's fast clock) clock the
         // serial port.

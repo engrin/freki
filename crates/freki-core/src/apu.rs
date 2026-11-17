@@ -128,6 +128,10 @@ struct Square {
     shadow_period: u16,
     /// A sweep calculation in decrease mode happened since the last trigger.
     sweep_negated: bool,
+    /// T-cycles until a sweep step the frame sequencer started takes effect: it lands
+    /// 4 T-cycles after the step (Gambatte's hwtests, sound/ch1_*sweep_counter_timing*).
+    #[serde(default)]
+    sweep_delay: u8,
 }
 
 impl Square {
@@ -156,6 +160,8 @@ impl Square {
 
         self.shadow_period = self.period;
         self.sweep_negated = false;
+        // A sweep step still pending when the channel is triggered is lost.
+        self.sweep_delay = 0;
         self.sweep_timer = if self.sweep_pace == 0 {
             8
         } else {
@@ -695,6 +701,12 @@ impl Apu {
     }
 
     fn tick_cycle(&mut self) {
+        if self.ch1.sweep_delay > 0 {
+            self.ch1.sweep_delay -= 1;
+            if self.ch1.sweep_delay == 0 {
+                self.ch1.clock_sweep();
+            }
+        }
         self.ch1.tick();
         self.ch2.tick();
         self.ch3.tick();
@@ -716,7 +728,7 @@ impl Apu {
             self.ch4.on &= self.ch4.length.clock();
         }
         if step == 2 || step == 6 {
-            self.ch1.clock_sweep();
+            self.ch1.sweep_delay = 4;
         }
         if step == 7 {
             self.ch1.envelope.clock();
@@ -724,6 +736,18 @@ impl Apu {
             self.ch4.envelope.clock();
         }
         self.frame_step = (step + 1) & 7;
+    }
+
+    /// Whether the APU is powered on (NR52 bit 7).
+    pub fn powered(&self) -> bool {
+        self.powered
+    }
+
+    /// Just powered on with the frame sequencer's DIV bit set: the sequencer starts in the
+    /// second half of a step pair, so its next step is 7 (envelope) instead of 0
+    /// (Gambatte's hwtests, sound/*_nr52_*).
+    pub fn power_on_late(&mut self) {
+        self.frame_step = 7;
     }
 
     /// Converts a channel's 0–15 output to −1.0…1.0, or 0 if its DAC is off.
