@@ -44,6 +44,10 @@ const PIPELINE_START_DOT: u32 = 86;
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 /// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
 const MAX_MODE0_LEAD: u32 = 5;
+/// The dot at which the next line's mode 2 interrupt is found blocked (by the LYC or
+/// HBlank source) or not; later STAT/LYC writes do not change that (Gambatte's hwtests,
+/// m2enable/*late_lycdisable*, *late_m0disable*).
+const M2_LATCH_DOT: u32 = 453;
 /// Dots until a STAT or LYC write reaches the STAT interrupt logic: DMG, CGB, CGB in
 /// double speed (Gambatte's hwtests; Gambatte has the same 2-cycle STAT lag on the CGB).
 const STAT_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
@@ -224,9 +228,10 @@ pub struct Ppu {
     /// The OAM (mode 2) interrupt was enabled when mode 2 started: the source only counts
     /// then, so enabling it later in mode 2 does not request an interrupt.
     oam_int_armed: bool,
-    /// Whether line 0's mode 2 interrupt fires (decided at `LY0_OAM_INT_LATCH`).
+    /// Whether the next line's mode 2 interrupt is not blocked (`M2_LATCH_DOT`); for line
+    /// 0 also whether it is enabled (`LY0_OAM_INT_LATCH`).
     #[serde(default)]
-    ly0_oam_int_enabled: bool,
+    m2_int_unblocked: bool,
     /// LCDC's OBJ size bit over the last dots (bit 0 = this dot): OAM scan sees a change
     /// three dots late (Gambatte's hwtests, sprites/late_sizechange*).
     obj_size_history: u8,
@@ -333,7 +338,7 @@ impl Ppu {
             stat_pending: (0, 0),
             lyc_pending: (0, 0),
             oam_int_armed: false,
-            ly0_oam_int_enabled: false,
+            m2_int_unblocked: false,
             obj_size_history: 0,
             lyc_flag_off: false,
             hblank_started: false,
@@ -851,11 +856,9 @@ impl Ppu {
                 0 | 1 if self.ly != 0 || self.dot == 1 => {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
-                    self.oam_int_armed = if self.ly != 0 {
-                        self.irq_stat & stat::OAM_INT != 0
-                    } else {
-                        self.ly0_oam_int_enabled
-                    };
+                    if self.ly == 0 {
+                        self.oam_int_armed = self.m2_int_unblocked;
+                    }
                     if self.dot == 1 {
                         self.sprites.clear();
                     }
@@ -914,8 +917,13 @@ impl Ppu {
             LY0_OAM_INT_LATCH
         };
         if self.ly == latch_ly && self.dot == latch_dot {
-            self.ly0_oam_int_enabled =
+            self.m2_int_unblocked =
                 self.irq_stat & (stat::OAM_INT | stat::VBLANK_INT) == stat::OAM_INT;
+        }
+        if (self.ly as usize) < SCREEN_HEIGHT - 1 && self.dot == M2_LATCH_DOT {
+            // Only whether it is blocked: enabling it later still counts.
+            self.m2_int_unblocked = self.irq_stat & stat::HBLANK_INT == 0
+                && !(self.irq_stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.irq_lyc);
         }
         // On the CGB the same quirk fires a few dots before LY becomes 144.
         if !self.dmg_hardware()
@@ -947,8 +955,9 @@ impl Ppu {
                 // STAT line stays high, so an LY=LYC interrupt on the previous line blocks this
                 // line's mode 2 interrupt ("STAT blocking"). Games rely on this, e.g. Pinball
                 // Fantasies. (Line 0 is handled separately: its OAM interrupt comes a dot late.)
+                // Blocking is decided a few dots early (`M2_LATCH_DOT`).
                 self.irq_mode = Mode::OamScan;
-                self.oam_int_armed = self.irq_stat & stat::OAM_INT != 0;
+                self.oam_int_armed = self.m2_int_unblocked && self.irq_stat & stat::OAM_INT != 0;
             }
         }
 
