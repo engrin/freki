@@ -46,6 +46,10 @@ const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 const MAX_MODE0_LEAD: u32 = 5;
 /// Dots from a STAT/LYC write that raises the STAT line to the interrupt request: DMG,
 /// CGB, CGB in double speed (fitted to Gambatte's hwtests).
+/// CGB palette RAM locks one dot after STAT shows mode 3 and unlocks 4 dots after it
+/// shows mode 0 (Gambatte's hwtests, cgbpal_m3/*).
+const PALETTE_LOCK_DOT: u32 = 80;
+const PALETTE_UNLOCK_DELAY: u8 = 4;
 const WRITE_IRQ_DMG: u8 = 5;
 const WRITE_IRQ_CGB: u8 = 5;
 const WRITE_IRQ_DS: u8 = 3;
@@ -196,6 +200,9 @@ pub struct Ppu {
     /// Dots until a STAT interrupt raised by a register write is requested (0: none).
     #[serde(default)]
     write_irq_in: u8,
+    /// Dots after STAT's switch to mode 0 until palette RAM unlocks.
+    #[serde(default)]
+    palette_unlock_in: u8,
     /// The OAM (mode 2) interrupt was enabled when mode 2 started: the source only counts
     /// then, so enabling it later in mode 2 does not request an interrupt.
     oam_int_armed: bool,
@@ -299,6 +306,7 @@ impl Ppu {
             irq_mode: Mode::OamScan,
             stat_line: false,
             write_irq_in: 0,
+            palette_unlock_in: 0,
             oam_int_armed: false,
             obj_size_history: 0,
             lyc_flag_off: false,
@@ -507,9 +515,20 @@ impl Ppu {
         self.cgb
     }
 
+    /// Whether palette RAM is locked: from shortly after mode 3 starts until a few dots
+    /// after STAT shows mode 0 (Gambatte's hwtests, cgbpal_m3/*).
+    fn palette_locked(&self) -> bool {
+        self.lcd_on()
+            && match self.mode {
+                Mode::Drawing => self.dot >= PALETTE_LOCK_DOT,
+                Mode::HBlank => self.palette_unlock_in > 0,
+                _ => false,
+            }
+    }
+
     /// Reads palette RAM through BCPD/OCPD (inaccessible while drawing).
     fn read_palette(&self, obj: bool) -> u8 {
-        if self.lcd_on() && self.mode == Mode::Drawing {
+        if self.palette_locked() {
             return 0xFF;
         }
         let (ram, index) = if obj {
@@ -523,7 +542,7 @@ impl Ppu {
     /// Writes palette RAM through BCPD/OCPD; the index auto-increments if enabled (even
     /// when the write is blocked during drawing).
     fn write_palette(&mut self, obj: bool, value: u8) {
-        let accessible = !(self.lcd_on() && self.mode == Mode::Drawing);
+        let accessible = !self.palette_locked();
         let (ram, index) = if obj {
             (&mut self.obj_palettes, &mut self.ocps)
         } else {
@@ -767,6 +786,7 @@ impl Ppu {
     }
 
     fn tick_dot(&mut self) -> u8 {
+        self.palette_unlock_in = self.palette_unlock_in.saturating_sub(1);
         self.wy_for_wx.1 = self.wy_for_wx.1.saturating_sub(1);
         self.obj_size_history =
             self.obj_size_history << 1 | u8::from(self.lcdc & lcdc::OBJ_SIZE_8X16 != 0);
@@ -831,6 +851,7 @@ impl Ppu {
                 {
                     self.mode = Mode::HBlank;
                     self.irq_mode = Mode::HBlank;
+                    self.palette_unlock_in = PALETTE_UNLOCK_DELAY;
                     self.hblank_started = true;
                 }
             }
