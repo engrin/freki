@@ -276,8 +276,11 @@ impl Cpu {
                 self.pending = 5;
             }
             0xFF41 => {
+                // DMG STAT write bug: for one T-cycle every interrupt source is enabled,
+                // which fires a STAT interrupt in HBlank, VBlank or when LY = LYC (not in
+                // mode 2: its source only pulses when the mode starts).
                 self.advance(bus, pending);
-                bus.write(addr, 0xFF);
+                bus.write(addr, 0xDF | (value & 0x20));
                 self.advance(bus, 1);
                 bus.write(addr, value);
                 self.pending = 3;

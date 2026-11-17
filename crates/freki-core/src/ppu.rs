@@ -177,6 +177,9 @@ pub struct Ppu {
     irq_mode: Mode,
     /// Previous level of the combined STAT interrupt line (interrupts fire on rising edges).
     stat_line: bool,
+    /// The OAM (mode 2) interrupt was enabled when mode 2 started: the source only counts
+    /// then, so enabling it later in mode 2 does not request an interrupt.
+    oam_int_armed: bool,
     /// STAT's coincidence flag as it was when the LCD was switched off (it is frozen
     /// while the LCD is off).
     lyc_flag_off: bool,
@@ -269,6 +272,7 @@ impl Ppu {
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
             stat_line: false,
+            oam_int_armed: false,
             lyc_flag_off: false,
             hblank_started: false,
             first_line: false,
@@ -645,7 +649,13 @@ impl Ppu {
                     self.first_line = true;
                 }
             }
-            0xFF41 => self.stat = value & 0x78,
+            0xFF41 => {
+                self.stat = value & 0x78;
+                // Enabling it in the first M-cycle of mode 2 still counts.
+                if self.irq_mode == Mode::OamScan && self.dot < 4 {
+                    self.oam_int_armed = self.stat & stat::OAM_INT != 0;
+                }
+            }
             0xFF42 => self.scy = value,
             0xFF43 => self.scx = value,
             0xFF44 => {} // LY is read-only
@@ -729,6 +739,7 @@ impl Ppu {
                 0 | 1 if self.ly != 0 || self.dot == 1 => {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
+                    self.oam_int_armed = self.stat & stat::OAM_INT != 0;
                     if self.dot == 1 {
                         self.sprites.clear();
                     }
@@ -801,6 +812,7 @@ impl Ppu {
                 // line's mode 2 interrupt ("STAT blocking"). Games rely on this, e.g. Pinball
                 // Fantasies. (Line 0 is handled separately: its OAM interrupt comes a dot late.)
                 self.irq_mode = Mode::OamScan;
+                self.oam_int_armed = self.stat & stat::OAM_INT != 0;
             }
         }
 
@@ -813,7 +825,9 @@ impl Ppu {
         let line = (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
             || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
             || (self.stat & stat::VBLANK_INT != 0 && self.irq_mode == Mode::VBlank)
-            || (self.stat & stat::OAM_INT != 0 && self.irq_mode == Mode::OamScan);
+            || (self.stat & stat::OAM_INT != 0
+                && self.oam_int_armed
+                && self.irq_mode == Mode::OamScan);
         if line && !self.stat_line {
             irq |= interrupt::STAT;
         }
