@@ -308,6 +308,10 @@ pub struct Ppu {
     window_being_fetched: bool,
     insert_bg_pixel: bool,
     disable_insertion_glitch: bool,
+    /// Interrupts raised in the DMG's last dot before the LCD switched off, not yet
+    /// requested.
+    #[serde(default)]
+    off_irq: u8,
     /// Mode 0 in STAT comes one dot later on this line (see `check_window`).
     #[serde(default)]
     late_mode0: bool,
@@ -404,6 +408,7 @@ impl Ppu {
             disable_insertion_glitch: false,
             obj_enable_delay: 0,
             late_mode0: false,
+            off_irq: 0,
             wx_just_changed: false,
             lookahead: false,
             lcdc: 0x91,
@@ -754,6 +759,12 @@ impl Ppu {
                         self.during_object_fetch = false;
                     }
                 }
+                // DMG: switching the LCD off takes effect a dot after the write; an interrupt
+                // raised in that dot is still requested (Gambatte's hwtests,
+                // lycEnable/ff40_disable_2).
+                if was_on && value & lcdc::LCD_ENABLE == 0 && self.dmg_hardware() {
+                    self.off_irq = self.tick_dot();
+                }
                 let lyc_flag = self.lyc_flag();
                 // DMG: objects just enabled can only start a sprite fetch a few dots later
                 // (Gambatte's hwtests, sprites/sprite_late_enable_*).
@@ -881,7 +892,7 @@ impl Ppu {
             if std::mem::take(&mut self.write_irq_in) > 0 {
                 irq |= interrupt::STAT;
             }
-            return irq;
+            return irq | std::mem::take(&mut self.off_irq);
         }
         for _ in 0..cycles {
             irq |= self.tick_dot();
