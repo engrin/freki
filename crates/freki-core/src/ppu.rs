@@ -149,6 +149,9 @@ pub struct Ppu {
     dmg_compat: bool,
     /// OPRI ($FF6C) bit 0: sprites overlap by X like on the DMG instead of by OAM index.
     opri_by_x: bool,
+    /// The CPU runs at double speed (CGB), so it sees the PPU at a finer phase.
+    #[serde(default)]
+    pub(crate) double_speed: bool,
     /// VRAM: bank 0 at 0–$1FFF, bank 1 (CGB) at $2000–$3FFF.
     #[serde(with = "BigArray")]
     vram: [u8; 0x4000],
@@ -261,6 +264,7 @@ impl Ppu {
             cgb: false,
             dmg_compat: false,
             opri_by_x: true,
+            double_speed: false,
             vram: [0; 0x4000],
             vbk: 0,
             bg_palettes: [0xFF; 64],
@@ -974,10 +978,11 @@ impl Ppu {
     }
 
     /// Dots between mode 0 in STAT and the end of the pipeline (see `mode0_due`): 2, or
-    /// with sprites 4 on the DMG and 5 on the CGB (both exact for Mooneye's test).
+    /// with sprites 4 on the DMG and 5 on the CGB at normal speed (both exact for
+    /// Mooneye's test; Gambatte's double-speed tests show 2 there too).
     /// Sprites fetched on the line are approximated by sprites passed with OBJ enabled.
     fn mode0_lead(&self) -> u32 {
-        if self.lcdc & lcdc::OBJ_ENABLE == 0 || self.next_sprite == 0 {
+        if self.lcdc & lcdc::OBJ_ENABLE == 0 || self.next_sprite == 0 || self.double_speed {
             2
         } else if self.dmg_hardware() {
             4

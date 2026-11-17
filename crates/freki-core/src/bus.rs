@@ -234,6 +234,7 @@ impl Bus {
         }
         self.speed_switch_armed = false;
         self.double_speed = !self.double_speed;
+        self.ppu.double_speed = self.double_speed;
         self.timer.write(0xFF04, 0);
         true
     }
