@@ -651,6 +651,9 @@ impl Ppu {
                     self.wx_triggered = false;
                 } else if !was_on && self.lcd_on() {
                     self.first_line = true;
+                    // STAT reads mode 0 until mode 3, but no HBlank interrupt source is
+                    // active then (the DMG's STAT write bug does not fire).
+                    self.irq_mode = Mode::Drawing;
                 }
             }
             0xFF41 => {
