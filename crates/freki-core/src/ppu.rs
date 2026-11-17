@@ -420,11 +420,11 @@ impl Ppu {
         self.irq_mode = Mode::VBlank;
     }
 
-    /// Where the CGB boot ROM leaves the PPU for a CGB game or, with `compat`, a DMG
-    /// game (measured with the real boot ROM), with the palette indexes and OBJ palettes
-    /// it wrote.
+    /// Where the CGB boot ROM leaves the PPU for a CGB game (from Gambatte's hwtests,
+    /// display_startstate/*_cgb04c) or, with `compat`, a DMG game (measured with the real
+    /// boot ROM), with the palette indexes and OBJ palettes it wrote.
     pub fn skip_to_post_boot_cgb(&mut self, compat: bool) {
-        (self.ly, self.dot) = if compat { (148, 364) } else { (144, 152) };
+        (self.ly, self.dot) = if compat { (148, 364) } else { (144, 168) };
         self.mode = Mode::VBlank;
         self.irq_mode = Mode::VBlank;
         (self.bcps, self.ocps) = if compat { (0x88, 0x90) } else { (0x80, 0x81) };

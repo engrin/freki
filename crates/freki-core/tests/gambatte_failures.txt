@@ -6,10 +6,7 @@ cgb cgbpal_m3/cgbpal_read_m3start_ds_1_cgb04c_out00.asm
 cgb cgbpal_m3/cgbpal_read_m3start_lcdoffset1_1_cgb04c_out00.asm
 cgb cgbpal_m3/cgbpal_write_m3start_ds_1_cgb04c_out01.asm
 cgb cgbpal_m3/cgbpal_write_m3start_lcdoffset1_1_cgb04c_out01.asm
-cgb display_startstate/stat_2_cgb04c_out84.asm
-cgb display_startstate/stat_scx2_2_cgb04c_out84.asm
-cgb display_startstate/stat_scx3_2_cgb04c_out84.asm
-cgb display_startstate/stat_scx5_2_cgb04c_out84.asm
+cgb display_startstate/stat_1_cgb04c_out87.asm
 cgb dma/dma_dst_wrap_2_cgb04c_out0.asm
 cgb dma/dma_hiram_read_cgb04c_out7.asm
 cgb dma/dma_hiram_read_result_cgb04c_out1.asm
