@@ -134,6 +134,10 @@ enum Fetch {
     Push,
 }
 
+/// Dots pixel output stays paused after objects are disabled while a sprite fetch waits
+/// for the background fetcher (DMG; Gambatte's hwtests allow 2–5).
+const ABORTED_OBJ_STALL: u8 = 3;
+
 /// Progress of a sprite fetch, which pauses pixel output.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ObjFetch {
@@ -146,6 +150,9 @@ enum ObjFetch {
     Low,
     Low2,
     High,
+    /// Objects were disabled during the fetch: the sprite is dropped, but the fetcher
+    /// stays stalled for this many more dots.
+    Aborted(u8),
 }
 
 /// A sprite selected during OAM scan for the current line.
@@ -724,12 +731,20 @@ impl Ppu {
                 let was_on = self.lcd_on();
                 // DMG: disabling objects while one is being fetched aborts that fetch.
                 // (Checked on every write, including the CPU's one-dot intermediate value.)
+                // While the fetch still waits for the background fetcher's tile data, pixel
+                // output stays paused a few more dots (Gambatte's hwtests,
+                // sprites/sprite_late_*disable*; mealybug's m3_lcdc_obj_en_change_variant
+                // has the aborts once the tile data is in).
                 if self.lcdc & lcdc::OBJ_ENABLE != 0
                     && value & lcdc::OBJ_ENABLE == 0
                     && self.during_object_fetch
                 {
-                    self.obj_fetch = ObjFetch::Idle;
-                    self.during_object_fetch = false;
+                    if self.obj_fetch == ObjFetch::Waiting && self.fetch < Fetch::High2 {
+                        self.obj_fetch = ObjFetch::Aborted(ABORTED_OBJ_STALL);
+                    } else {
+                        self.obj_fetch = ObjFetch::Idle;
+                        self.during_object_fetch = false;
+                    }
                 }
                 let lyc_flag = self.lyc_flag();
                 self.lcdc = value;
@@ -1420,6 +1435,7 @@ impl Ppu {
                     self.obj_fetch = ObjFetch::Attributes;
                 }
             }
+
             ObjFetch::Attributes => {
                 self.advance_fetcher();
                 let s = self.sprites[self.next_sprite];
@@ -1432,6 +1448,14 @@ impl Ppu {
                 self.obj_fetch = ObjFetch::Low2;
             }
             ObjFetch::Low2 => self.obj_fetch = ObjFetch::High,
+            ObjFetch::Aborted(n) => {
+                if n <= 1 {
+                    self.obj_fetch = ObjFetch::Idle;
+                    self.during_object_fetch = false;
+                } else {
+                    self.obj_fetch = ObjFetch::Aborted(n - 1);
+                }
+            }
             ObjFetch::High => {
                 self.during_object_fetch = false;
                 let hi = self.vram[self.object_row_addr() + 1];
