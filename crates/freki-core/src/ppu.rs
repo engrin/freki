@@ -44,6 +44,10 @@ const PIPELINE_START_DOT: u32 = 86;
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
 /// Most dots by which mode 0 in STAT can lead the end of the pipeline (`mode0_lead`).
 const MAX_MODE0_LEAD: u32 = 5;
+/// LY and dot at which line 0's mode 2 interrupt is decided (normal and double speed;
+/// Gambatte's hwtests, m2enable/*ly0*).
+const LY0_OAM_INT_LATCH: (u8, u32) = (153, 455);
+const LY0_OAM_INT_LATCH_DS: (u8, u32) = (0, 0);
 /// CGB palette RAM locks one dot after STAT shows mode 3 and unlocks 4 dots after it
 /// shows mode 0 (Gambatte's hwtests, cgbpal_m3/*).
 const PALETTE_LOCK_DOT: u32 = 80;
@@ -206,6 +210,9 @@ pub struct Ppu {
     /// The OAM (mode 2) interrupt was enabled when mode 2 started: the source only counts
     /// then, so enabling it later in mode 2 does not request an interrupt.
     oam_int_armed: bool,
+    /// Whether line 0's mode 2 interrupt fires (decided at `LY0_OAM_INT_LATCH`).
+    #[serde(default)]
+    ly0_oam_int_enabled: bool,
     /// LCDC's OBJ size bit over the last dots (bit 0 = this dot): OAM scan sees a change
     /// three dots late (Gambatte's hwtests, sprites/late_sizechange*).
     obj_size_history: u8,
@@ -308,6 +315,7 @@ impl Ppu {
             write_irq_in: 0,
             palette_unlock_in: 0,
             oam_int_armed: false,
+            ly0_oam_int_enabled: false,
             obj_size_history: 0,
             lyc_flag_off: false,
             hblank_started: false,
@@ -703,7 +711,7 @@ impl Ppu {
             0xFF41 => {
                 self.stat = value & 0x78;
                 // Enabling it in the first M-cycle of mode 2 still counts.
-                if self.irq_mode == Mode::OamScan && self.dot < 4 {
+                if self.irq_mode == Mode::OamScan && self.ly != 0 && self.dot < 4 {
                     self.oam_int_armed = self.stat & stat::OAM_INT != 0;
                 }
                 self.check_write_irq();
@@ -807,7 +815,11 @@ impl Ppu {
                 0 | 1 if self.ly != 0 || self.dot == 1 => {
                     self.mode = Mode::OamScan;
                     self.irq_mode = Mode::OamScan;
-                    self.oam_int_armed = self.stat & stat::OAM_INT != 0;
+                    self.oam_int_armed = if self.ly != 0 {
+                        self.stat & stat::OAM_INT != 0
+                    } else {
+                        self.ly0_oam_int_enabled
+                    };
                     if self.dot == 1 {
                         self.sprites.clear();
                     }
@@ -857,6 +869,18 @@ impl Ppu {
             }
         }
 
+        // Line 0's mode 2 interrupt is decided before LY wraps: it fires if the OAM source
+        // is enabled then, unless the mode 1 source is too (it blocks it, though it ends
+        // a dot before mode 2 starts). Later STAT writes do not change that.
+        let (latch_ly, latch_dot) = if self.double_speed {
+            LY0_OAM_INT_LATCH_DS
+        } else {
+            LY0_OAM_INT_LATCH
+        };
+        if self.ly == latch_ly && self.dot == latch_dot {
+            self.ly0_oam_int_enabled =
+                self.stat & (stat::OAM_INT | stat::VBLANK_INT) == stat::OAM_INT;
+        }
         // On the CGB the same quirk fires a few dots before LY becomes 144.
         if !self.dmg_hardware()
             && self.ly as usize == SCREEN_HEIGHT - 1
@@ -916,8 +940,10 @@ impl Ppu {
     fn stat_sources(&self) -> bool {
         (self.stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.lyc)
             || (self.stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
-            || (self.stat & stat::VBLANK_INT != 0 && self.irq_mode == Mode::VBlank)
-            || (self.stat & stat::OAM_INT != 0
+            || (self.stat & stat::VBLANK_INT != 0
+                && self.irq_mode == Mode::VBlank
+                && self.ly as usize >= SCREEN_HEIGHT)
+            || ((self.stat & stat::OAM_INT != 0 || self.ly == 0)
                 && self.oam_int_armed
                 && self.irq_mode == Mode::OamScan)
     }
