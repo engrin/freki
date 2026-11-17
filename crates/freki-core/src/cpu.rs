@@ -50,8 +50,10 @@ impl fmt::Display for CpuError {
 
 impl std::error::Error for CpuError {}
 
-/// M-cycles the CPU pauses for after a CGB speed switch.
-const SPEED_SWITCH_M_CYCLES: u32 = 2050;
+/// T-cycles (CPU clocks, at either speed) the CPU stays halted after a CGB speed switch,
+/// unless an interrupt wakes it earlier (Gambatte's hwtests, speedchange/*: DIV, reset by
+/// the switch, has wrapped around to 0 when the CPU resumes).
+const SPEED_SWITCH_CYCLES: u32 = 0x20000;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Registers {
@@ -117,6 +119,9 @@ pub struct Cpu {
     /// EI enables interrupts after the *following* instruction.
     ime_pending: bool,
     pub halted: bool,
+    /// T-cycles left of the halt that follows a speed switch (0: none).
+    #[serde(default)]
+    speed_switch_halt: u32,
     /// HALT with IME=0 and an interrupt already pending: the next opcode byte is read twice.
     halt_bug: bool,
     /// T-cycles spent so far in the current `step`.
@@ -167,6 +172,7 @@ impl Cpu {
             ime: false,
             ime_pending: false,
             halted: false,
+            speed_switch_halt: 0,
             halt_bug: false,
             cycles: 0,
             pending: 0,
@@ -534,6 +540,7 @@ impl Cpu {
             return false;
         }
         let woke = std::mem::take(&mut self.halted);
+        self.speed_switch_halt = 0;
         if !self.ime {
             return false;
         }
@@ -587,6 +594,10 @@ impl Cpu {
         }
         if self.halted {
             self.idle(bus);
+            if self.speed_switch_halt > 0 {
+                self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4);
+                self.halted = self.speed_switch_halt > 0;
+            }
             self.flush(bus);
             return Ok(self.cycles);
         }
@@ -627,17 +638,14 @@ impl Cpu {
                     20
                 }
                 2 => {
-                    // STOP: switches CGB speed if armed via KEY1; the CPU then pauses for
-                    // 2050 M-cycles. Otherwise treated as a 2-byte NOP (no low-power mode).
+                    // STOP: switches CGB speed if armed via KEY1; the CPU then halts for a
+                    // while. Otherwise treated as a 2-byte NOP (no low-power mode).
                     self.fetch(bus);
                     if bus.stop() {
-                        for _ in 0..SPEED_SWITCH_M_CYCLES {
-                            self.idle(bus);
-                        }
-                        8 + SPEED_SWITCH_M_CYCLES * 4
-                    } else {
-                        8
+                        self.halted = true;
+                        self.speed_switch_halt = SPEED_SWITCH_CYCLES;
                     }
+                    8
                 }
                 _ => {
                     // JR e8 / JR cc, e8

@@ -14,6 +14,8 @@ const CGB_POWER_ON_COUNTER: u16 = 0u16.wrapping_sub(4);
 /// When TIMA overflows it reads $00 for one M-cycle; then it is loaded from TMA and the
 /// interrupt is requested. Writing TIMA during that M-cycle cancels the reload; during
 /// the reload M-cycle itself TIMA writes are ignored and TMA writes go to TIMA too.
+const TIMA_LEAD: u16 = 4;
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct Timer {
     /// Internal 16-bit counter; DIV is its upper byte.
@@ -109,6 +111,16 @@ impl Timer {
             _ => 7, // 16384 Hz
         };
         self.tac & 0x04 != 0 && (self.counter >> bit) & 1 == 1
+    }
+
+    /// A CGB speed switch resets DIV. With one of the three fast TIMA clocks selected,
+    /// whether that increments TIMA is decided as if 4 T-cycles later (Gambatte's
+    /// hwtests, speedchange/*_tima*).
+    pub fn speed_switch(&mut self) {
+        if self.tac & 0x07 >= 0x05 {
+            self.counter = self.counter.wrapping_add(TIMA_LEAD);
+        }
+        self.write(0xFF04, 0);
     }
 
     /// Increments TIMA if the signal fell since `before`.

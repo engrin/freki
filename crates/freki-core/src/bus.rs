@@ -71,6 +71,10 @@ pub struct Bus {
     pub double_speed: bool,
     /// Odd T-cycle left over when halving CPU cycles for the PPU and APU.
     half_cycle: u32,
+    /// After a speed switch: CPU T-cycles the PPU, APU and cartridge clock still run at the
+    /// old rate.
+    #[serde(default)]
+    speed_switch_delay: u32,
     #[serde(with = "BigArray")]
     hram: [u8; 0x7F],
     /// Not part of save states: kept across loads.
@@ -102,6 +106,11 @@ struct Hdma {
 }
 
 /// T-cycles (at normal speed) the CPU is paused per 16-byte VRAM DMA block.
+/// CPU T-cycles after a speed switch during which the PPU, APU and cartridge clock still
+/// run at the old rate: into double speed, and back to normal speed. Fitted to Gambatte's
+/// hwtests (speedchange/*_m3stat*).
+const SPEED_SWITCH_DELAY_TO_DOUBLE: u32 = 16;
+const SPEED_SWITCH_DELAY_TO_NORMAL: u32 = 8;
 const HDMA_BLOCK_CYCLES: u32 = 32;
 
 /// The memory buses OAM DMA can collide with the CPU on.
@@ -148,6 +157,7 @@ impl Bus {
             speed_switch_armed: false,
             double_speed: false,
             half_cycle: 0,
+            speed_switch_delay: 0,
             hram: [0; 0x7F],
             boot_rom: None,
             boot_rom_mapped: false,
@@ -235,7 +245,12 @@ impl Bus {
         self.speed_switch_armed = false;
         self.double_speed = !self.double_speed;
         self.ppu.double_speed = self.double_speed;
-        self.timer.write(0xFF04, 0);
+        self.speed_switch_delay = if self.double_speed {
+            SPEED_SWITCH_DELAY_TO_DOUBLE
+        } else {
+            SPEED_SWITCH_DELAY_TO_NORMAL
+        };
+        self.timer.speed_switch();
         true
     }
 
@@ -588,12 +603,20 @@ impl Bus {
     /// Advances all non-CPU hardware by `cycles` T-cycles and collects interrupts.
     pub fn tick(&mut self, cycles: u32) {
         // In double speed the PPU, APU and cartridge clock keep running at normal speed.
-        let video_cycles = if self.double_speed {
-            let total = cycles + self.half_cycle;
-            self.half_cycle = total & 1;
-            total / 2
+        // Right after a speed switch they briefly keep the old rate.
+        let old_rate = cycles.min(self.speed_switch_delay);
+        self.speed_switch_delay -= old_rate;
+        let (halved, full) = if self.double_speed {
+            (cycles - old_rate, old_rate)
         } else {
-            cycles
+            (old_rate, cycles - old_rate)
+        };
+        let video_cycles = if halved > 0 {
+            let total = halved + self.half_cycle;
+            self.half_cycle = total & 1;
+            full + total / 2
+        } else {
+            full
         };
         self.cart.tick(video_cycles);
         if self.dma.pending.is_some() || self.dma.active.is_some() {
