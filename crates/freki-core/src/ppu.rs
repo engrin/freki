@@ -52,6 +52,12 @@ const M2_LATCH_DOT: u32 = 453;
 /// LYC source enabled later in mode 2 still raises an interrupt (Gambatte's hwtests,
 /// lycEnable/late_ff41_enable_after_m2int).
 const OAM_PULSE_DOTS: u32 = 4;
+/// The HBlank source drops this many dots into the line (before line 143's end only at
+/// the line change), so an LYC match starting with the next line raises an interrupt.
+/// The mode 2 interrupt and LYC matches under an enabled mode 2 source stay blocked
+/// explicitly (Gambatte's hwtests, lcdirq_precedence/*, miscmstatirq/*; Mooneye's
+/// stat_irq_blocking).
+const HBLANK_SOURCE_END: u32 = 454;
 /// Dots until a STAT or LYC write reaches the STAT interrupt logic: DMG, CGB, CGB in
 /// double speed (Gambatte's hwtests; Gambatte has the same 2-cycle STAT lag on the CGB).
 const STAT_IRQ_DELAY: (u8, u8, u8) = (0, 2, 1);
@@ -849,6 +855,7 @@ impl Ppu {
     }
 
     fn tick_dot(&mut self) -> u8 {
+        let mut lyc_line_start = false;
         if self.stat_pending.1 > 0 {
             self.stat_pending.1 -= 1;
             if self.stat_pending.1 == 0 {
@@ -966,6 +973,7 @@ impl Ppu {
             if std::mem::take(&mut self.lyc_edge_masked) {
                 self.stat_line = true;
             }
+            lyc_line_start = true;
             self.first_line = false;
             self.ly += 1;
             if self.ly as usize == SCREEN_HEIGHT {
@@ -1001,6 +1009,15 @@ impl Ppu {
                 irq |= interrupt::STAT;
             }
         }
+        // An LYC match starting with lines 1–144 is blocked by an enabled mode 2 source,
+        // even when that one's own interrupt is blocked.
+        if lyc_line_start
+            && (1..=SCREEN_HEIGHT as u8).contains(&self.ly)
+            && self.irq_stat & stat::OAM_INT != 0
+            && !self.oam_int_armed
+        {
+            self.stat_line = true;
+        }
         // STAT interrupt fires on a rising edge of the OR of all enabled sources.
         let line = self.stat_sources();
         if line && !self.stat_line {
@@ -1013,7 +1030,9 @@ impl Ppu {
     /// The OR of all enabled STAT interrupt sources.
     fn stat_sources(&self) -> bool {
         (self.irq_stat & stat::LYC_INT != 0 && self.ly_for_lyc() == self.irq_lyc)
-            || (self.irq_stat & stat::HBLANK_INT != 0 && self.irq_mode == Mode::HBlank)
+            || (self.irq_stat & stat::HBLANK_INT != 0
+                && self.irq_mode == Mode::HBlank
+                && (self.dot < HBLANK_SOURCE_END || self.ly as usize >= SCREEN_HEIGHT - 1))
             || (self.irq_stat & stat::VBLANK_INT != 0
                 && self.irq_mode == Mode::VBlank
                 && self.ly as usize >= SCREEN_HEIGHT)
