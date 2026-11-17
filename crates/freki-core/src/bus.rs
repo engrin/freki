@@ -282,7 +282,7 @@ impl Bus {
             0xFEA0..=0xFEFF if self.cgb_hardware => self.unusable[addr as usize - 0xFEA0],
             0xFEA0..=0xFEFF => 0x00,
             0xFF00 => self.joypad.read(),
-            0xFF01..=0xFF02 => self.serial.read(addr),
+            0xFF01..=0xFF02 => self.serial.read(addr, self.cgb),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupt_flag | 0xE0,
             0xFF10..=0xFF3F => self.apu.read(addr),
@@ -322,13 +322,14 @@ impl Bus {
             0xFEA0..=0xFEFF if self.cgb_hardware => self.unusable[addr as usize - 0xFEA0] = value,
             0xFEA0..=0xFEFF => {}
             0xFF00 => self.joypad.write(value),
-            0xFF01..=0xFF02 => self.serial.write(addr, value),
+            0xFF01..=0xFF02 => self.serial.write(addr, value, self.cgb),
             0xFF04 => {
-                // Resetting the counter can make the serial clock (bit 8) and the frame
-                // sequencer's bit fall.
+                // Resetting the counter can make the serial clock's and the frame
+                // sequencer's bits fall.
                 let counter = self.timer.counter();
                 self.timer.write(addr, value);
-                self.serial.clock(u32::from(counter & 0x100 != 0));
+                self.serial
+                    .clock(u32::from(counter >> self.serial.clock_bit() & 1 != 0));
                 if counter >> self.frame_sequencer_bit() & 1 != 0 {
                     self.apu.clock_frame_sequencer();
                 }
@@ -419,6 +420,18 @@ impl Bus {
     /// The DIV counter bit whose falling edges step the APU's frame sequencer.
     fn frame_sequencer_bit(&self) -> u32 {
         if self.double_speed { 13 } else { 12 }
+    }
+
+    /// The CPU acknowledged the serial interrupt: on the CGB this also covers a transfer
+    /// finishing in the dispatch's last 2 T-cycles (Gambatte's hwtests,
+    /// serial/start_wait_trigger_int8_*).
+    pub fn ack_serial_early(&mut self) {
+        if self.cgb_hardware {
+            let counter = u32::from(self.timer.counter());
+            let shift = self.serial.clock_bit() + 1;
+            self.serial
+                .ack_early(((counter + 2) >> shift) - (counter >> shift));
+        }
     }
 
     /// T-cycles the CPU has to pause for VRAM DMA (resets the count).
@@ -633,9 +646,11 @@ impl Bus {
         }
         self.apu.tick(video_cycles);
         self.interrupt_flag |= self.timer.tick(cycles);
-        // Falling edges of counter bit 8 clock the serial port.
+        // Falling edges of counter bit 7 (bit 2 with the CGB's fast clock) clock the
+        // serial port.
+        let shift = self.serial.clock_bit() + 1;
         self.serial
-            .clock(((counter + cycles) >> 9) - (counter >> 9));
+            .clock(((counter + cycles) >> shift) - (counter >> shift));
         self.interrupt_flag |= self.ppu.tick(video_cycles);
         if self.ppu.take_hblank_started() && self.hdma.active {
             self.hdma_hblank_block();

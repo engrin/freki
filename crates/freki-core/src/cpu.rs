@@ -572,6 +572,9 @@ impl Cpu {
         self.advance(bus, pending - 2);
         self.pending = 2;
         bus.interrupt_flag &= !(1 << bit);
+        if bit == 3 {
+            bus.ack_serial_early();
+        }
         self.regs.pc = 0x0040 + bit * 8;
         true
     }
