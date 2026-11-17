@@ -560,9 +560,19 @@ impl Cpu {
         self.regs.sp = self.regs.sp.wrapping_sub(1);
         self.mem_write(bus, self.regs.sp, hi);
         let enabled = bus.interrupt_enable;
+        let flag_before = bus.interrupt_flag;
         self.regs.sp = self.regs.sp.wrapping_sub(1);
         self.mem_write(bus, self.regs.sp, lo);
-        let queue = enabled & bus.interrupt_flag & 0x1F;
+        // Requests raised during the low byte's push still count, but the push's own write
+        // to IF comes too late to cancel the dispatch (Gambatte's hwtests,
+        // irq_precedence/if_and_ie_0_vector_4; a write to IE by the high byte does cancel
+        // it, Mooneye's ie_push).
+        let flag = if self.regs.sp == 0xFF0F {
+            flag_before | bus.interrupt_flag
+        } else {
+            bus.interrupt_flag
+        };
+        let queue = enabled & flag & 0x1F;
         if queue == 0 {
             self.regs.pc = 0x0000;
             return true;
