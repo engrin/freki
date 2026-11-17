@@ -817,13 +817,12 @@ impl Ppu {
         if obj_off && (self.position == 0 || self.during_object_fetch) {
             old &= !lcdc::OBJ_ENABLE;
         }
-        // Fetcher-facing bits (maps, tile data, OBJ size) take the new value
-        // at once; BG and OBJ enable keep their old value until the write completes.
+        // Fetcher-facing bits (maps, tile data, OBJ size) take the new value at once; BG,
+        // window and OBJ enable keep their old value until the write completes (Gambatte's
+        // hwtests, window/late_disable*).
         let early =
             lcdc::BG_MAP_9C00 | lcdc::TILE_DATA_8000 | lcdc::WINDOW_MAP_9C00 | lcdc::OBJ_SIZE_8X16;
-        // Window enable clears at once but sets only when the write completes.
-        let win = old & value & lcdc::WINDOW_ENABLE;
-        (old & !early & !lcdc::WINDOW_ENABLE) | (value & early) | win
+        (old & !early) | (value & early)
     }
 
     /// Notes an LCDC write: disabling the window while it is being fetched turns off the
