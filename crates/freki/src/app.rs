@@ -197,6 +197,8 @@ pub struct FrekiApp {
     controls_message: Option<String>,
     show_about: bool,
     new_code: String,
+    /// Values typed into the cheat manager's template rows.
+    template_values: Vec<String>,
     new_name: String,
     cheat_error: Option<String>,
     search_ui: SearchUi,
@@ -251,6 +253,7 @@ impl FrekiApp {
             controls_message: None,
             show_about: false,
             new_code: String::new(),
+            template_values: Vec::new(),
             new_name: String::new(),
             cheat_error: None,
             search_ui: SearchUi::default(),
@@ -1508,6 +1511,49 @@ impl FrekiApp {
                 }
                 if gb.cheats().list().is_empty() {
                     ui.label("No cheats yet.");
+                }
+                let templates = gb.cheats().templates();
+                if !templates.is_empty() {
+                    ui.separator();
+                    ui.label("Templates: enter a value (decimal, or hex with $) to add a cheat");
+                    self.template_values.resize(templates.len(), String::new());
+                    egui::ScrollArea::vertical()
+                        .id_salt("cheat_templates")
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("cheat_templates_grid")
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for (t, template) in templates.iter().enumerate() {
+                                        ui.monospace(&template.code);
+                                        ui.label(&template.name);
+                                        ui.add(
+                                            egui::TextEdit::singleline(
+                                                &mut self.template_values[t],
+                                            )
+                                            .hint_text(format!("0–{}", template.max()))
+                                            .desired_width(64.0),
+                                        );
+                                        if ui.button("Add").clicked() {
+                                            let value = parse_byte(&self.template_values[t])
+                                                .ok_or("not a number from 0 to 255".to_string())
+                                                .and_then(|v| {
+                                                    gb.cheats_mut()
+                                                        .fill_template(t, v)
+                                                        .map_err(|e| e.to_string())
+                                                });
+                                            match value {
+                                                Ok(_) => {
+                                                    self.template_values[t].clear();
+                                                    self.cheat_error = None;
+                                                }
+                                                Err(e) => self.cheat_error = Some(e),
+                                            }
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        });
                 }
                 ui.separator();
                 ui.horizontal(|ui| {

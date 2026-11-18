@@ -16,6 +16,7 @@ cheats:
   cheat list                   show cheats (also: cheats)
   cheat add CODE [name]        add a GameShark (01VVLLHH, GBC: 9xVVLLHH) or Game Genie (ABC-DEF[-GHI]) code
   cheat on|off|rm N            enable, disable or remove cheat N
+  cheat fill T VALUE           add a cheat from template T (cheat list shows them), e.g. 99
   cheat all on|off             master switch (also F9 in the window)
   cheat save | reload          write / re-read the .cht file next to the ROM
 memory search (find the address of lives, money, ...):
@@ -190,10 +191,19 @@ impl Console {
                 gb.cheats_mut().enabled = *state == "on";
                 Ok(format!("all cheats {state}"))
             }
+            ["fill", t, value] => {
+                let t = t.trim_start_matches(['T', 't']);
+                let (t, value) = (index(t)?, byte(value)?);
+                let i = gb
+                    .cheats_mut()
+                    .fill_template(t, value)
+                    .map_err(|e| e.to_string())?;
+                Ok(format!("added cheat {i}: {}", describe(gb, i)))
+            }
             ["save"] => save_cheat_file(&self.cheat_file, gb),
             ["reload"] => Ok(load_cheat_file(&self.cheat_file, gb)
                 .unwrap_or_else(|| format!("{} not found", self.cheat_file.display()))),
-            _ => Err("usage: cheat list|add|on|off|rm|all|save|reload (type help)".into()),
+            _ => Err("usage: cheat list|add|on|off|rm|fill|all|save|reload (type help)".into()),
         }
     }
 
@@ -485,7 +495,7 @@ fn describe(gb: &GameBoy, i: usize) -> String {
 
 fn list_cheats(gb: &GameBoy) -> String {
     let cheats = gb.cheats();
-    if cheats.list().is_empty() {
+    if cheats.list().is_empty() && cheats.templates().is_empty() {
         return "no cheats (cheat add CODE [name])".into();
     }
     let mut out = format!(
@@ -498,6 +508,18 @@ fn list_cheats(gb: &GameBoy) -> String {
     );
     for i in 0..cheats.list().len() {
         out.push_str(&format!("\n  {i:>2}  {}", describe(gb, i)));
+    }
+    let templates = cheats.templates();
+    if !templates.is_empty() {
+        out.push_str("\ntemplates (cheat fill T VALUE):");
+        for (t, template) in templates.iter().enumerate() {
+            out.push_str(&format!(
+                "\n  T{t:<2} {} {}  (0–{})",
+                template.code,
+                template.name,
+                template.max()
+            ));
+        }
     }
     out
 }

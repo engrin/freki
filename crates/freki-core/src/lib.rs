@@ -27,7 +27,7 @@ pub mod timer;
 
 pub use boot::{BootRom, BootRomError};
 pub use cartridge::{Cartridge, CartridgeError};
-pub use cheats::{Cheat, CheatError, Cheats, Code, Filter, Location, MemorySearch};
+pub use cheats::{Cheat, CheatError, Cheats, Code, Filter, Location, MemorySearch, Template};
 pub use cpu::{CpuError, Registers};
 pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};
 pub use disasm::{Instruction, disassemble};

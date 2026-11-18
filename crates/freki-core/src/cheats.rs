@@ -184,6 +184,66 @@ pub enum FileFormat {
     RetroArch,
 }
 
+/// A cheat whose code has a value left to fill in: `X` or `?` for a hex digit, `XX` or
+/// `??` for a byte (e.g. `01??B6D7`, "MP Modifier"). [`Cheats::fill_template`] makes a
+/// cheat from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Template {
+    pub name: String,
+    /// The code as written, with the placeholder.
+    pub code: String,
+    /// Hex digits to fill in: 1 (0–15) or 2 (0–255).
+    pub digits: usize,
+}
+
+impl Template {
+    /// `code` as a template: one run of 1 or 2 placeholder characters, and a valid code
+    /// once filled.
+    fn parse(code: &str, name: &str) -> Option<Self> {
+        let code = code.trim().to_uppercase();
+        let placeholder = |c: char| c == 'X' || c == '?';
+        let start = code.find(placeholder)?;
+        let digits = code[start..]
+            .chars()
+            .take_while(|&c| placeholder(c))
+            .count();
+        let rest = &code[start + digits..];
+        if !(1..=2).contains(&digits) || rest.contains(placeholder) {
+            return None;
+        }
+        let template = Self {
+            name: name.trim().to_string(),
+            code,
+            digits,
+        };
+        parse_codes(&template.filled(0)).ok()?;
+        Some(template)
+    }
+
+    /// The code with `value` in place of the placeholder.
+    pub fn filled(&self, value: u8) -> String {
+        let start = self.code.find(['X', '?']).unwrap_or(0);
+        let hex = format!("{value:0width$X}", width = self.digits);
+        format!(
+            "{}{}{}",
+            &self.code[..start],
+            &hex[hex.len() - self.digits..],
+            &self.code[start + self.digits..]
+        )
+    }
+
+    /// The largest value that fits.
+    pub fn max(&self) -> u8 {
+        if self.digits == 1 { 0x0F } else { 0xFF }
+    }
+}
+
+/// Whether a cheat file's code field holds no code at all but a note ("N/A", empty).
+fn is_note(code: &str) -> bool {
+    let code = code.trim();
+    code.is_empty() || code.eq_ignore_ascii_case("n/a")
+}
+
 /// An entry of a RetroArch file whose code freki cannot use, kept so saving keeps it.
 #[derive(Debug, Clone)]
 struct Unparsed {
@@ -253,6 +313,33 @@ impl Cheats {
 
     pub fn list(&self) -> &[Cheat] {
         &self.list
+    }
+
+    /// The cheats of the file that need a value filled in (see [`Template`]).
+    pub fn templates(&self) -> Vec<Template> {
+        self.unparsed
+            .iter()
+            .filter_map(|u| Template::parse(&u.code, &u.name))
+            .collect()
+    }
+
+    /// Adds the cheat that template `index` (of [`Cheats::templates`]) makes with
+    /// `value`, enabled and named "name = value". Returns its index in the list.
+    pub fn fill_template(&mut self, index: usize, value: u8) -> Result<usize, CheatError> {
+        let template = self
+            .templates()
+            .into_iter()
+            .nth(index)
+            .ok_or_else(|| CheatError::Format(format!("no template {index}")))?;
+        if value > template.max() {
+            return Err(CheatError::Format(format!(
+                "{value} is too big for {} (0–{})",
+                template.code,
+                template.max()
+            )));
+        }
+        let name = format!("{} = {value}", template.name);
+        self.add(&template.filled(value), &name)
     }
 
     /// Removes all cheats and forgets the file format.
@@ -386,7 +473,10 @@ impl Cheats {
             match self.add(&code, &name) {
                 Ok(i) => self.list[i].enabled = enabled,
                 Err(e) => {
-                    errors.push((line, e));
+                    // Templates and notes are kept without complaint.
+                    if Template::parse(&code, &name).is_none() && !is_note(&code) {
+                        errors.push((line, e));
+                    }
                     self.unparsed.push(Unparsed {
                         name,
                         code,
@@ -694,7 +784,7 @@ mod tests {
 
     #[test]
     fn retroarch_file_round_trip() {
-        let file = "cheats = 3\n\ncheat0_desc = \"Infinite Money\"\ncheat0_code = \"01FF4BCA 01FF4CCA\"\ncheat0_enable = false\n\ncheat1_desc = \"Mario\"\ncheat1_code = \"01XXCEC1\"\ncheat1_enable = false\n\ncheat2_desc = \"Lives\"\ncheat2_code = \"3EA-17B\"\ncheat2_enable = true\n";
+        let file = "cheats = 3\n\ncheat0_desc = \"Infinite Money\"\ncheat0_code = \"01FF4BCA 01FF4CCA\"\ncheat0_enable = false\n\ncheat1_desc = \"Mario\"\ncheat1_code = \"ZZ-NOPE\"\ncheat1_enable = false\n\ncheat2_desc = \"Lives\"\ncheat2_code = \"3EA-17B\"\ncheat2_enable = true\n";
         let mut cheats = Cheats::new();
         let errors = cheats.load_text(file);
         assert_eq!(errors.len(), 1);
@@ -709,11 +799,51 @@ mod tests {
         // Saved back in RetroArch's format, keeping the code freki cannot use.
         let saved = cheats.to_text();
         assert!(saved.starts_with("cheats = 3\n"), "{saved}");
-        assert!(saved.contains("cheat2_code = \"01XXCEC1\""), "{saved}");
+        assert!(saved.contains("cheat2_code = \"ZZ-NOPE\""), "{saved}");
         let mut again = Cheats::new();
         assert_eq!(again.load_text(&saved).len(), 1);
         assert_eq!(again.list()[0].text, "01FF4BCA+01FF4CCA");
         assert_eq!(again.list()[1].name, "Lives");
+    }
+
+    #[test]
+    fn templates_and_notes_are_kept_quietly() {
+        let file = "cheats = 4\ncheat0_desc = \"MP Modifier\"\ncheat0_code = \"01??B6D7\"\n\
+                    cheat1_desc = \"Items\"\ncheat1_code = \"0X0-64B-219\"\n\
+                    cheat2_desc = \"Effects list\"\ncheat2_code = \"N/A\"\n\
+                    cheat3_desc = \"Stage\"\ncheat3_code = \"3E4-F3D-081+XX4-F4D-4CE\"\n";
+        let mut cheats = Cheats::new();
+        assert!(
+            cheats.load_text(file).is_empty(),
+            "no errors for templates and notes"
+        );
+        let templates = cheats.templates();
+        assert_eq!(templates.len(), 3);
+        assert_eq!((templates[0].digits, templates[0].max()), (2, 255));
+        assert_eq!((templates[1].digits, templates[1].max()), (1, 15));
+        assert_eq!(templates[0].filled(99), "0163B6D7");
+        assert_eq!(templates[1].filled(10), "0A0-64B-219");
+        assert_eq!(templates[2].filled(0x21), "3E4-F3D-081+214-F4D-4CE");
+
+        let i = cheats.fill_template(0, 99).unwrap();
+        let cheat = &cheats.list()[i];
+        assert_eq!(cheat.name, "MP Modifier = 99");
+        assert!(cheat.enabled);
+        assert_eq!(
+            cheat.codes,
+            [Code::GameShark {
+                location: Location::new(0xD7B6),
+                value: 99
+            }]
+        );
+        assert!(cheats.fill_template(1, 16).is_err(), "one digit holds 0–15");
+        // The templates stay in the file, the filled cheat is added.
+        let saved = cheats.to_text();
+        assert!(
+            saved.contains("01??B6D7") && saved.contains("0163B6D7"),
+            "{saved}"
+        );
+        assert!(saved.contains("N/A"), "{saved}");
     }
 
     #[test]
