@@ -658,6 +658,8 @@ impl Bus {
                 self.tick_dma();
             }
         }
+        // The OAM scan sees 0xFF once the transfer is two bytes in.
+        self.ppu.oam_blocked = self.dma.active.is_some_and(|(src, _)| src & 0xFF >= 2);
         let counter = self.timer.counter() as u32;
         self.apu.tick(video_cycles);
         // Falling edges of counter bit 12 (bit 13 in double speed) step the APU's frame

@@ -204,6 +204,10 @@ pub struct Ppu {
     /// The CPU runs at double speed (CGB), so it sees the PPU at a finer phase.
     #[serde(default)]
     pub(crate) double_speed: bool,
+    /// An OAM DMA has OAM: the OAM scan reads 0xFF and finds no sprites (Gambatte's
+    /// hwtests, oamdma/late_sp*).
+    #[serde(default)]
+    pub(crate) oam_blocked: bool,
     /// VRAM: bank 0 at 0–$1FFF, bank 1 (CGB) at $2000–$3FFF.
     #[serde(with = "BigArray")]
     vram: [u8; 0x4000],
@@ -356,6 +360,7 @@ impl Ppu {
             dmg_compat: false,
             opri_by_x: true,
             double_speed: false,
+            oam_blocked: false,
             vram: [0; 0x4000],
             vbk: 0,
             bg_palettes: [0xFF; 64],
@@ -1189,9 +1194,15 @@ impl Ppu {
         }
     }
 
+    /// Whether mode 3 fetches the sprites found by the OAM scan: on the CGB even with
+    /// objects disabled (Gambatte's PPU; hwtests oamdma/late_sp* run with LCDC = $91).
+    fn objs_fetched(&self) -> bool {
+        self.lcdc & lcdc::OBJ_ENABLE != 0 || !self.dmg_hardware()
+    }
+
     /// OAM scan step: selects entry `index` if it covers this line (max 10 per line).
     fn scan_oam_entry(&mut self, index: usize) {
-        if index >= 40 || self.sprites.len() == MAX_SPRITES_PER_LINE {
+        if index >= 40 || self.sprites.len() == MAX_SPRITES_PER_LINE || self.oam_blocked {
             return;
         }
         let height: i16 = if self.obj_size_history & 0b1000 != 0 {
@@ -1262,7 +1273,7 @@ impl Ppu {
         {
             self.next_sprite += 1;
         }
-        if self.lcdc & lcdc::OBJ_ENABLE != 0
+        if self.objs_fetched()
             && self.obj_enable_delay == 0
             && self
                 .sprites
@@ -1290,7 +1301,7 @@ impl Ppu {
     fn mode0_due(&self) -> bool {
         let left = SCREEN_WIDTH as u32 - self.position as u32;
         let match_x = self.x_for_object_match();
-        let sprite_ahead = self.lcdc & lcdc::OBJ_ENABLE != 0
+        let sprite_ahead = self.objs_fetched()
             && self.sprites[self.next_sprite.min(self.sprites.len())..]
                 .iter()
                 .any(|s| s.x >= match_x && s.x < SCREEN_WIDTH as u8 + 8);
@@ -1323,16 +1334,15 @@ impl Ppu {
     /// Dots between mode 0 in STAT and the end of the pipeline (see `mode0_due`): 2, or
     /// with sprites 4 on the DMG and 5 on the CGB at normal speed (both exact for
     /// Mooneye's test; Gambatte's double-speed tests show 2 there too).
-    /// Sprites fetched on the line are approximated by sprites passed with OBJ enabled.
+    /// Sprites fetched on the line are approximated by sprites passed while fetching them.
     fn mode0_lead(&self) -> u32 {
-        let lead =
-            if self.lcdc & lcdc::OBJ_ENABLE == 0 || self.next_sprite == 0 || self.double_speed {
-                2
-            } else if self.dmg_hardware() {
-                4
-            } else {
-                MAX_MODE0_LEAD
-            };
+        let lead = if !self.objs_fetched() || self.next_sprite == 0 || self.double_speed {
+            2
+        } else if self.dmg_hardware() {
+            4
+        } else {
+            MAX_MODE0_LEAD
+        };
         lead - u32::from(self.late_mode0)
     }
 
@@ -1611,9 +1621,7 @@ impl Ppu {
     /// Shifts one pixel out of the FIFOs; draws it if its position is on screen.
     fn render_pixel(&mut self) {
         // Output stalls while a sprite at X = 0 is still to be fetched.
-        if self.lcdc & lcdc::OBJ_ENABLE != 0
-            && self.sprites.get(self.next_sprite).is_some_and(|s| s.x == 0)
-        {
+        if self.objs_fetched() && self.sprites.get(self.next_sprite).is_some_and(|s| s.x == 0) {
             return;
         }
         if self.bg_fifo.is_empty() {
