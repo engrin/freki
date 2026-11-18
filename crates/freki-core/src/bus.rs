@@ -407,7 +407,10 @@ impl Bus {
     fn start_hdma(&mut self, value: u8) {
         let blocks = value & 0x7F;
         if self.hdma.active && value & 0x80 == 0 {
+            // Stopping an HBlank transfer also loads the written length, which FF55 then
+            // reads back (SameSuite, dma/hdma_lcd_off and dma/hdma_mode0).
             self.hdma.active = false;
+            self.hdma.remaining = blocks;
             return;
         }
         self.hdma.remaining = blocks;

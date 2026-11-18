@@ -70,8 +70,6 @@ cgb same-suite/apu/channel_4/channel_4_frequency_alignment.gb
 cgb same-suite/apu/channel_4/channel_4_lfsr_7_15.gb
 cgb same-suite/apu/channel_4/channel_4_lfsr_restart.gb
 cgb same-suite/apu/channel_4/channel_4_lfsr_restart_fast.gb
-cgb same-suite/dma/hdma_lcd_off.gb
-cgb same-suite/dma/hdma_mode0.gb
 dmg age-test-roms/halt/halt-m0-interrupt-dmgC-cgbBCE.gb
 dmg age-test-roms/m3-bg-bgp/m3-bg-bgp-dmgC.png
 dmg age-test-roms/m3-bg-scx/m3-bg-scx-dmgC.png
