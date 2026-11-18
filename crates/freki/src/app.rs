@@ -26,6 +26,7 @@ use crate::states::SLOTS;
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const RESET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
+const FULLSCREEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::ALT, Key::Enter);
 
 /// Audio kept queued ahead of playback. Video runs at the Game Boy's own frame rate;
 /// audio stays in sync by nudging the output sample rate towards this buffer level.
@@ -346,6 +347,12 @@ impl FrekiApp {
         if ctx.input_mut(|i| i.consume_shortcut(&RESET)) {
             self.with_session(|s| s.reset().map(|()| "reset".to_string()));
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&FULLSCREEN)) {
+            set_fullscreen(ctx, !is_fullscreen(ctx));
+        }
+        if is_fullscreen(ctx) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            set_fullscreen(ctx, false);
+        }
         // Single-key hotkeys don't fire while typing into a text field.
         if ctx.text_edit_focused() {
             return;
@@ -516,7 +523,9 @@ impl FrekiApp {
         let bindings = &self.settings.bindings;
         for _ in 0..frames {
             for button in input::BUTTONS {
-                let down = !typing && ctx.input(|i| i.key_down(bindings.key(button)));
+                // Alt+Enter toggles fullscreen; it must not press the button on Enter.
+                let down =
+                    !typing && ctx.input(|i| !i.modifiers.alt && i.key_down(bindings.key(button)));
                 let pad = self.gamepads.is_pressed(button, bindings.pad(button));
                 session.gb.set_button(button, down || pad);
             }
@@ -778,7 +787,21 @@ impl FrekiApp {
             });
 
             ui.menu_button("View", |ui| {
-                ui.label("Scale");
+                let fullscreen = is_fullscreen(&ctx);
+                if ui
+                    .add(
+                        egui::Button::selectable(fullscreen, "Fullscreen")
+                            .shortcut_text(ctx.format_shortcut(&FULLSCREEN)),
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                    set_fullscreen(&ctx, !fullscreen);
+                }
+                ui.checkbox(&mut self.settings.integer_scaling, "Integer scaling")
+                    .on_hover_text("Whole-number scale only: sharp, even pixels");
+                ui.separator();
+                ui.label("Window scale");
                 for scale in 2..=6 {
                     if ui
                         .radio(self.settings.scale == scale, format!("{scale}×"))
@@ -928,10 +951,15 @@ impl FrekiApp {
             });
             return;
         }
-        // Largest integer scale that fits keeps pixels sharp; fall back to fitting.
+        // The largest scale that fits; with integer scaling, the largest whole one (pixels
+        // stay sharp and even), unless the window is smaller than the screen.
         let fit = (available.width() / SCREEN_WIDTH as f32)
             .min(available.height() / SCREEN_HEIGHT as f32);
-        let scale = if fit >= 1.0 { fit.floor() } else { fit };
+        let scale = if self.settings.integer_scaling && fit >= 1.0 {
+            fit.floor()
+        } else {
+            fit
+        };
         let size = vec2(SCREEN_WIDTH as f32 * scale, SCREEN_HEIGHT as f32 * scale);
         let rect = Rect::from_center_size(available.center(), size);
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -1255,8 +1283,11 @@ impl eframe::App for FrekiApp {
         self.update_rumble();
         self.update_texture(&ctx);
 
-        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        // Fullscreen shows just the game (Esc or Alt+Enter leaves it).
+        if !is_fullscreen(&ctx) {
+            egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+            egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ui, |ui| self.screen(ui));
@@ -1339,6 +1370,14 @@ impl eframe::App for FrekiApp {
     fn on_exit(&mut self) {
         self.close_rom();
     }
+}
+
+fn is_fullscreen(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
+}
+
+fn set_fullscreen(ctx: &egui::Context, on: bool) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
 }
 
 #[cfg(test)]

@@ -39,6 +39,8 @@ pub struct Settings {
     pub bindings: Bindings,
     /// Rumble cartridges shake the gamepad.
     pub rumble: bool,
+    /// Scale the screen by whole numbers only (sharp, even pixels; black borders).
+    pub integer_scaling: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +57,7 @@ impl Default for Settings {
             color_correction: true,
             bindings: Bindings::default(),
             rumble: true,
+            integer_scaling: true,
         }
     }
 }
