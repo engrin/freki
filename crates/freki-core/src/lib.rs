@@ -13,6 +13,7 @@ pub mod cpu;
 pub mod debugger;
 pub mod disasm;
 pub mod joypad;
+pub mod mbc7;
 pub mod ppu;
 pub mod serial;
 pub mod state;
@@ -444,6 +445,18 @@ impl GameBoy {
     /// Restores cartridge RAM from a save file.
     pub fn load_save_data(&mut self, data: &[u8]) {
         self.bus.cart.load_ram(data);
+    }
+
+    /// Whether the cartridge has a tilt sensor (MBC7: Kirby Tilt 'n' Tumble, Command
+    /// Master); see [`GameBoy::set_tilt`].
+    pub fn has_tilt_sensor(&self) -> bool {
+        self.bus.cart.has_tilt_sensor()
+    }
+
+    /// How far the Game Boy is tilted, in g: `x` to the right, `y` with the top towards
+    /// the player (about ±1 at most). Only MBC7 cartridges notice.
+    pub fn set_tilt(&mut self, x: f32, y: f32) {
+        self.bus.cart.set_tilt(x, y);
     }
 
     /// Rumble strength since the last call, 0 to 1; `None` without a rumble cartridge or

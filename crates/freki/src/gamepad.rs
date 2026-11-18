@@ -111,6 +111,19 @@ impl Gamepads {
             .ok()
     }
 
+    /// The left stick's position (x right, y up, each −1 to 1), from whichever connected
+    /// controller has it pushed furthest.
+    pub fn left_stick(&self) -> (f32, f32) {
+        let Some(gilrs) = &self.gilrs else {
+            return (0.0, 0.0);
+        };
+        gilrs
+            .gamepads()
+            .map(|(_, pad)| (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)))
+            .max_by(|a, b| (a.0.hypot(a.1)).total_cmp(&b.0.hypot(b.1)))
+            .unwrap_or((0.0, 0.0))
+    }
+
     /// The first connected controller: its name, kind and whether it can rumble.
     pub fn connected(&self) -> Option<(String, ControllerKind, bool)> {
         let gilrs = self.gilrs.as_ref()?;

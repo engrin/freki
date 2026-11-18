@@ -27,6 +27,8 @@ use crate::states::SLOTS;
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const RESET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
+/// How much of the way to the D-pad's or stick's tilt MBC7 games get each frame.
+const TILT_EASE: f32 = 0.2;
 const FULLSCREEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::ALT, Key::Enter);
 
 /// Audio kept queued ahead of playback. Video runs at the Game Boy's own frame rate;
@@ -166,6 +168,8 @@ pub struct FrekiApp {
     /// The Game Boy button whose key or gamepad button is being chosen.
     capture: Option<(Button, Capture)>,
     controls_tab: ControlsTab,
+    /// Tilt passed to MBC7 cartridges, eased towards the input (see `emulate`).
+    tilt: (f32, f32),
     controls_message: Option<String>,
     show_about: bool,
     new_code: String,
@@ -207,6 +211,7 @@ impl FrekiApp {
             show_controls: false,
             capture: None,
             controls_tab: ControlsTab::Keyboard,
+            tilt: (0.0, 0.0),
             controls_message: None,
             show_about: false,
             new_code: String::new(),
@@ -543,12 +548,32 @@ impl FrekiApp {
         self.gamepads.update();
         let bindings = &self.settings.bindings;
         for _ in 0..frames {
-            for button in input::BUTTONS {
+            let mut held = [false; input::BUTTONS.len()];
+            for (i, button) in input::BUTTONS.into_iter().enumerate() {
                 // Alt+Enter toggles fullscreen; it must not press the button on Enter.
                 let down =
                     !typing && ctx.input(|i| !i.modifiers.alt && i.key_down(bindings.key(button)));
                 let pad = self.gamepads.is_pressed(button, bindings.pad(button));
-                session.gb.set_button(button, down || pad);
+                held[i] = down || pad;
+                session.gb.set_button(button, held[i]);
+            }
+            if session.gb.has_tilt_sensor() {
+                // MBC7 tilt: the left stick tilts as far as it is pushed; the D-pad (and
+                // arrow keys) tilt all the way, eased in and out.
+                let pressed =
+                    |b: Button| held[input::BUTTONS.iter().position(|&x| x == b).unwrap()];
+                let axis = |neg: Button, pos: Button| {
+                    f32::from(u8::from(pressed(pos))) - f32::from(u8::from(pressed(neg)))
+                };
+                let (sx, sy) = self.gamepads.left_stick();
+                let target = (
+                    (axis(Button::Left, Button::Right) + sx).clamp(-1.0, 1.0),
+                    // Up tilts the top of the Game Boy away from the player.
+                    (axis(Button::Up, Button::Down) - sy).clamp(-1.0, 1.0),
+                );
+                self.tilt.0 += (target.0 - self.tilt.0) * TILT_EASE;
+                self.tilt.1 += (target.1 - self.tilt.1) * TILT_EASE;
+                session.gb.set_tilt(self.tilt.0, self.tilt.1);
             }
             match session.run_frame() {
                 Ok(None) => {}

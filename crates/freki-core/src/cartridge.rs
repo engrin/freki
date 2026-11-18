@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::CLOCK_HZ;
+use crate::mbc7::{self, Mbc7};
 
 const ROM_BANK: usize = 0x4000;
 const RAM_BANK: usize = 0x2000;
@@ -60,6 +61,14 @@ pub enum Mbc {
         ir_mode: bool,
         rom_bank: u8,
         ram_bank: u8,
+    },
+    /// MBC7: accelerometer and serial EEPROM (see [`crate::mbc7`]); the EEPROM is the RAM.
+    Mbc7 {
+        /// Both enables are needed: $0A to $0000–$1FFF and $40 to $4000–$5FFF.
+        ram_enable1: bool,
+        ram_enable2: bool,
+        rom_bank: u8,
+        chip: Mbc7,
     },
 }
 
@@ -175,6 +184,9 @@ pub struct Cartridge {
     /// asked (see [`Cartridge::take_rumble`]).
     #[serde(skip)]
     motor_cycles: (u32, u32),
+    /// MBC7: how far the Game Boy is tilted, in g (x right, y towards the player).
+    #[serde(skip)]
+    tilt: (f32, f32),
 }
 
 /// Detects an MBC1M multicart (several games on one 8 Mbit MBC1 cartridge): a second
@@ -216,6 +228,12 @@ impl Cartridge {
                 rumble: kind >= 0x1C,
                 motor: false,
             },
+            0x22 => Mbc::Mbc7 {
+                ram_enable1: false,
+                ram_enable2: false,
+                rom_bank: 1,
+                chip: Mbc7::default(),
+            },
             0xFF => Mbc::HuC1 {
                 ir_mode: false,
                 rom_bank: 1,
@@ -225,23 +243,31 @@ impl Cartridge {
         };
         let battery = matches!(
             kind,
-            0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0xFF
+            0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFF
         );
         let ram_size = match (&mbc, rom[0x149]) {
             (Mbc::Mbc2 { .. }, _) => MBC2_RAM,
+            (Mbc::Mbc7 { .. }, _) => mbc7::EEPROM_BYTES,
             (_, 0x02) => 8 * 1024,
             (_, 0x03) => 32 * 1024,
             (_, 0x04) => 128 * 1024,
             (_, 0x05) => 64 * 1024,
             _ => 0,
         };
+        // An unused EEPROM reads as all ones.
+        let blank = if matches!(mbc, Mbc::Mbc7 { .. }) {
+            0xFF
+        } else {
+            0
+        };
         Ok(Self {
             rom,
-            ram: vec![0; ram_size],
+            ram: vec![blank; ram_size],
             mbc,
             battery,
             ram_dirty: false,
             motor_cycles: (0, 0),
+            tilt: (0.0, 0.0),
         })
     }
 
@@ -322,6 +348,17 @@ impl Cartridge {
         (all > 0).then_some(on as f32 / all as f32)
     }
 
+    /// Whether the cartridge has a tilt sensor (MBC7).
+    pub fn has_tilt_sensor(&self) -> bool {
+        matches!(self.mbc, Mbc::Mbc7 { .. })
+    }
+
+    /// Sets how far the Game Boy is tilted, in g: `x` to the right, `y` with the top
+    /// towards the player (about ±1 at most for normal play).
+    pub fn set_tilt(&mut self, x: f32, y: f32) {
+        self.tilt = (x, y);
+    }
+
     fn rom_byte(&self, bank: usize, addr: u16) -> u8 {
         let banks = (self.rom.len() / ROM_BANK).max(1);
         let offset = (bank % banks) * ROM_BANK + (addr as usize & (ROM_BANK - 1));
@@ -382,6 +419,8 @@ impl Cartridge {
                 }
                 ram_bank as usize * RAM_BANK + local
             }
+            // The EEPROM is reached through registers only.
+            Mbc::Mbc7 { .. } => return None,
         };
         Some(offset % self.ram.len())
     }
@@ -430,7 +469,7 @@ impl Cartridge {
                     rom_bank as usize
                 }
             }
-            Mbc::HuC1 { rom_bank, .. } => {
+            Mbc::HuC1 { rom_bank, .. } | Mbc::Mbc7 { rom_bank, .. } => {
                 if low {
                     0
                 } else {
@@ -512,6 +551,17 @@ impl Cartridge {
                 0x4000..=0x5FFF => *ram_bank = value & 0x03,
                 _ => {}
             },
+            Mbc::Mbc7 {
+                ram_enable1,
+                ram_enable2,
+                rom_bank,
+                ..
+            } => match addr {
+                0x0000..=0x1FFF => *ram_enable1 = value == 0x0A,
+                0x2000..=0x3FFF => *rom_bank = value & 0x7F,
+                0x4000..=0x5FFF => *ram_enable2 = value == 0x40,
+                _ => {}
+            },
         }
     }
 
@@ -539,8 +589,16 @@ impl Cartridge {
         {
             return rtc.read(*reg);
         }
-        if let Mbc::HuC1 { ir_mode: true, .. } = self.mbc {
-            return IR_DARK;
+        match &self.mbc {
+            Mbc::HuC1 { ir_mode: true, .. } => return IR_DARK,
+            Mbc::Mbc7 {
+                ram_enable1: true,
+                ram_enable2: true,
+                chip,
+                ..
+            } if addr < 0xB000 => return chip.read((addr >> 4) as u8 & 0x0F),
+            Mbc::Mbc7 { .. } => return 0xFF,
+            _ => {}
         }
         let Some(i) = self.ram_offset(addr) else {
             return 0xFF;
@@ -555,6 +613,20 @@ impl Cartridge {
     pub fn write_ram(&mut self, addr: u16, value: u8) {
         if let Some((rtc, reg)) = self.rtc_register() {
             rtc.write(reg, value);
+            return;
+        }
+        if let Mbc::Mbc7 {
+            ram_enable1: true,
+            ram_enable2: true,
+            chip,
+            ..
+        } = &mut self.mbc
+            && addr < 0xB000
+        {
+            let reg = (addr >> 4) as u8 & 0x0F;
+            if chip.write(reg, value, self.tilt, &mut self.ram) {
+                self.ram_dirty = true;
+            }
             return;
         }
         if let Some(i) = self.ram_offset(addr) {
@@ -663,6 +735,24 @@ mod tests {
         assert_eq!(cart.read_ram(0xA000), 0x42);
         cart.write_rom(0x4000, 0x00);
         assert_eq!(cart.read_ram(0xA000), 0x00);
+    }
+
+    #[test]
+    fn mbc7_registers_need_both_enables_and_save_to_ram() {
+        let mut cart = Cartridge::from_rom(banked_rom(16, 0x22, 0x00)).unwrap();
+        assert!(cart.has_battery() && cart.has_tilt_sensor());
+        assert_eq!(cart.ram().len(), mbc7::EEPROM_BYTES);
+        cart.write_rom(0x2000, 0x05);
+        assert_eq!(cart.read_rom(0x4000), 0x05);
+        cart.write_rom(0x0000, 0x0A);
+        assert_eq!(cart.read_ram(0xA070), 0xFF, "one enable is not enough");
+        cart.write_rom(0x4000, 0x40);
+        assert_eq!(cart.read_ram(0xA060), 0x00);
+        cart.set_tilt(0.0, 1.0);
+        cart.write_ram(0xA000, 0x55);
+        cart.write_ram(0xA010, 0xAA);
+        assert_eq!(cart.read_ram(0xA050), 0x82, "Y high byte: $81D0 + $70");
+        assert_eq!(cart.read_ram(0xA040), 0x40);
     }
 
     #[test]
