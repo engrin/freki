@@ -1739,8 +1739,12 @@ impl Ppu {
             self.lcd_x += 1;
         }
         self.position = POSITION_START;
-        if self.window_y_match() && self.lcdc & lcdc::WINDOW_ENABLE != 0 && self.wx == 166 {
-            // WX = 166 starts the window at the end of this line for the next one.
+        if self.window_y_match()
+            && self.lcdc & lcdc::WINDOW_ENABLE != 0
+            && self.wx == 166
+            && self.dmg_hardware()
+        {
+            // DMG: WX = 166 starts the window at the end of this line for the next one.
             self.wx_triggered = true;
             self.window_tile_x = 1;
             self.window_y = self.window_y.wrapping_add(1);

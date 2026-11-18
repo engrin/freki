@@ -621,7 +621,11 @@ mod tests {
         assert_eq!(gb.peek(0x881F), 0x20);
         assert_eq!(gb.peek(0x8820), 0, "only 2 blocks");
         assert_eq!(gb.peek(0xFF55), 0xFF, "finished");
-        assert_eq!(gb.step().unwrap(), 72, "CPU paused 32 T-cycles per block plus 8");
+        assert_eq!(
+            gb.step().unwrap(),
+            72,
+            "CPU paused 32 T-cycles per block plus 8"
+        );
     }
 
     #[test]
