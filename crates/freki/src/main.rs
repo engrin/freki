@@ -1,7 +1,7 @@
 //! freki desktop frontend (egui): menu bar, screen, keyboard and gamepad input, sound,
 //! save files, save states, rewind, cheats and a memory search.
 //!
-//! Usage: `freki [rom.gb]` — or open a ROM from the File menu or by dropping it on the
+//! Usage: `freki [rom.gb|rom.zip]` — or open a ROM from the File menu or by dropping it on the
 //! window. `freki --headless rom.gb [options]` runs without a window (see [`headless`]).
 //!
 //! Files next to the ROM: `<rom>.sav` (battery save), `<rom>.ss0` … `<rom>.ss9` (save
@@ -17,6 +17,7 @@ mod debug;
 mod gamepad;
 mod headless;
 mod input;
+mod rom_file;
 mod session;
 mod settings;
 mod states;

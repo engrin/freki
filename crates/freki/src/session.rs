@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use freki_core::{BootRom, CartridgeError, FRAMES_PER_SECOND, GameBoy, Model, Rewind, Stop};
 
+use crate::rom_file;
 use crate::states::{StateSlots, write_atomic};
 
 /// How often to write the save file while the game keeps changing it.
@@ -59,11 +60,10 @@ impl Session {
     /// Loads a ROM and its battery save, if any, starting it as `start` says. Returns the
     /// session and a status message.
     pub fn open(rom_path: &Path, start: Start) -> Result<(Self, String), Box<dyn Error>> {
-        let rom =
-            fs::read(rom_path).map_err(|e| format!("cannot read {}: {e}", rom_path.display()))?;
-        let mut gb = power_on(rom, &start)?;
+        let rom = rom_file::load(rom_path, None)?;
+        let mut message = format!("loaded {}{}", file_name(rom_path), rom.describe());
+        let mut gb = power_on(rom.data, &start)?;
         let save_path = rom_path.with_extension("sav");
-        let mut message = format!("loaded {}", file_name(rom_path));
         if gb.save_data().is_some()
             && let Ok(data) = fs::read(&save_path)
         {
@@ -147,8 +147,8 @@ impl Session {
     /// Resets the machine (like power cycling), keeping battery RAM and cheats.
     pub fn reset(&mut self) -> Result<(), Box<dyn Error>> {
         self.write_save()?;
-        let rom = fs::read(&self.rom_path)?;
-        let mut gb = power_on(rom, &self.start)?;
+        let rom = rom_file::load(&self.rom_path, None)?;
+        let mut gb = power_on(rom.data, &self.start)?;
         if let Some(data) = self.gb.save_data() {
             gb.load_save_data(data);
         }

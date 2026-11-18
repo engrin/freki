@@ -303,7 +303,7 @@ impl FrekiApp {
     fn pick_rom(&mut self, ctx: &egui::Context) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open Game Boy ROM")
-            .add_filter("Game Boy ROM", &["gb", "gbc", "bin"]);
+            .add_filter("Game Boy ROM", &["gb", "gbc", "sgb", "bin", "zip"]);
         if let Some(dir) = self.session.as_ref().and_then(|s| s.rom_path.parent()) {
             dialog = dialog.set_directory(dir);
         }

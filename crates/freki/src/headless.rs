@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use freki_core::{BootRom, Button, GameBoy, Model, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 
 use crate::console::{self, Console};
+use crate::rom_file;
 use crate::session::{self, Start};
 use crate::settings::{self, Palette};
 
@@ -33,6 +34,7 @@ run:
   --until-serial TEXT     stop once the serial output contains TEXT (exit 1 if it never does)
   --model dmg|cgb         console (default: GBC for colour games, else Game Boy)
   --boot FILE             start with this boot ROM (DMG or GBC, by size)
+  --patch FILE            apply this IPS or BPS patch (default: ROM.bps or ROM.ips if present)
   --sav FILE              load this battery save (never written back)
   --load-state FILE       start from a save state (.ss0 … .ss9)
   --press FRAME:KEYS[:N]  hold KEYS (a+b+start+select+up+down+left+right) from FRAME
@@ -61,6 +63,7 @@ struct Options {
     until_serial: Option<String>,
     model: Option<Model>,
     boot: Option<PathBuf>,
+    patch: Option<PathBuf>,
     sav: Option<PathBuf>,
     load_state: Option<PathBuf>,
     presses: Vec<Press>,
@@ -139,6 +142,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
                 });
             }
             "--boot" => o.boot = Some(value(arg)?.into()),
+            "--patch" => o.patch = Some(value(arg)?.into()),
             "--sav" => o.sav = Some(value(arg)?.into()),
             "--load-state" => o.load_state = Some(value(arg)?.into()),
             "--press" => o.presses.push(parse_press(&value(arg)?)?),
@@ -202,7 +206,10 @@ fn parse_press(spec: &str) -> Result<Press, String> {
 
 fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     let rom_path = o.rom.as_deref().expect("checked by parse_args");
-    let rom = fs::read(rom_path).map_err(|e| format!("cannot read {}: {e}", rom_path.display()))?;
+    let rom = rom_file::load(rom_path, o.patch.as_deref())?;
+    if !rom.describe().is_empty() {
+        println!("loaded {}{}", session::file_name(rom_path), rom.describe());
+    }
     let mut start = Start {
         model: o.model,
         ..Default::default()
@@ -216,7 +223,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             start.dmg_boot_rom = Some(boot);
         }
     }
-    let mut gb = session::power_on(rom, &start)?;
+    let mut gb = session::power_on(rom.data, &start)?;
     if let Some(path) = &o.sav {
         gb.load_save_data(&read(path)?);
     }

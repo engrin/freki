@@ -40,7 +40,10 @@ Requires nightly Rust.
 cargo run --release -- path/to/game.gb   # or start without a ROM and use File → Open ROM…
 ```
 
-ROMs can also be dropped onto the window. The menu bar has File (open/close ROM, recent
+ROMs can also be dropped onto the window. Zipped ROMs (`.zip`) open directly. A patch
+with the ROM's name next to it (`game.bps` or `game.ips` beside `game.gb` or `game.zip`)
+is applied when the game loads, without changing the ROM file; battery saves and save
+states stay named after the ROM. The menu bar has File (open/close ROM, recent
 ROMs, quit), Emulation (pause, fast-forward, reset, console, boot ROM), States (save/load, slot), Cheats (on/off, cheat manager, memory
 search), View (scale, palette, frame timing, debug views) and Help (controls, about).
 Palettes: DMG green, greyscale, Pocket and Light (backlit). Game Boy Color games are shown
