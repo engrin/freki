@@ -27,7 +27,7 @@ pub struct Start {
 
 /// A machine with `rom` inserted: started by the console's boot ROM if there is one,
 /// otherwise in the state the boot ROM leaves behind.
-fn power_on(rom: Vec<u8>, start: &Start) -> Result<GameBoy, CartridgeError> {
+pub fn power_on(rom: Vec<u8>, start: &Start) -> Result<GameBoy, CartridgeError> {
     let colour_game = rom.get(0x143).is_some_and(|flag| flag & 0x80 != 0);
     let model = start
         .model

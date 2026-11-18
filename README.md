@@ -72,6 +72,21 @@ Gamepads can be plugged in while freki is running. The Game Boy buttons can be b
 other keys and gamepad buttons under Emulation → Controls… (click a binding, then press the
 key or button); the left stick always steers too.
 
+### Headless runs
+
+`freki --headless ROM [options]` runs a game without a window or sound, as fast as
+possible, for debugging and scripted checks: run a number of frames, press buttons at
+given frames, stop at breakpoints or watchpoints, log every instruction in
+[Gameboy Doctor](https://github.com/robert/gameboy-doctor)'s format, then run console
+commands, print the serial output, save a screenshot or a save state.
+`freki --headless --help` lists the options.
+
+```sh
+freki --headless tetris.gb --frames 1200 --press 200:start --screenshot out.png --exec regs
+freki --headless 01-special.gb --until-serial Passed --serial      # exit 0 once it passes
+freki --headless game.gb --watch '$C0A0 w' --trace trace.log       # who writes $C0A0?
+```
+
 ### Console and boot ROM
 
 Emulation → Console chooses the hardware: **Auto** runs Game Boy Color games on a GBC and

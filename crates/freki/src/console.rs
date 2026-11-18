@@ -63,6 +63,11 @@ impl Console {
         Self::with_receiver(rx, PathBuf::new())
     }
 
+    /// A console that only runs commands passed to [`Console::execute`] (no stdin).
+    pub fn detached(cheat_file: PathBuf) -> Self {
+        Self::with_receiver(mpsc::channel().1, cheat_file)
+    }
+
     /// A pending `pause` (true) or `resume` (false) command.
     pub fn take_pause_request(&mut self) -> Option<bool> {
         self.pause_request.take()

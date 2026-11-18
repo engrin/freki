@@ -258,6 +258,29 @@ impl GameBoy {
         }
     }
 
+    /// Like [`GameBoy::run_frame_checked`], but calls `before` ahead of every step the CPU
+    /// takes while not halted (an instruction, or an interrupt dispatch): for tracing.
+    pub fn run_frame_traced(
+        &mut self,
+        mut before: impl FnMut(&Self),
+    ) -> Result<Option<Stop>, CpuError> {
+        let mut elapsed = 0;
+        loop {
+            if !self.cpu.halted {
+                before(self);
+            }
+            let (stop, cycles) = self.step_checked_cycles()?;
+            if let Some(stop) = stop {
+                return Ok(Some(stop));
+            }
+            elapsed += cycles;
+            if self.bus.ppu.take_frame_ready() || elapsed >= self.frame_cycles() {
+                self.apply_frame_cheats();
+                return Ok(None);
+            }
+        }
+    }
+
     /// Breakpoints and watchpoints (not part of save states).
     pub fn breakpoints(&self) -> &Breakpoints {
         &self.bus.breaks

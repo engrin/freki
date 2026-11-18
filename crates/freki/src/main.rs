@@ -2,7 +2,7 @@
 //! save files, save states, rewind, cheats and a memory search.
 //!
 //! Usage: `freki [rom.gb]` — or open a ROM from the File menu or by dropping it on the
-//! window.
+//! window. `freki --headless rom.gb [options]` runs without a window (see [`headless`]).
 //!
 //! Files next to the ROM: `<rom>.sav` (battery save), `<rom>.ss0` … `<rom>.ss9` (save
 //! states) and `<rom>.cht` (cheats). Settings such as the boot ROM are kept in the
@@ -15,6 +15,7 @@ mod console;
 mod cpu_view;
 mod debug;
 mod gamepad;
+mod headless;
 mod input;
 mod session;
 mod settings;
@@ -27,6 +28,16 @@ use eframe::egui;
 use freki_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--headless") {
+        process::exit(headless::main(&args[1..]));
+    }
+    if args.first().is_some_and(|a| a == "-h" || a == "--help") {
+        println!(
+            "usage: freki [ROM]\n       freki --headless ROM [options] (--headless --help for more)"
+        );
+        return;
+    }
     let rom = std::env::args_os().nth(1).map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
