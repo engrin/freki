@@ -67,9 +67,12 @@ Named after Freki, one of Odin's two wolves.
 | mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
 | mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
 | Gambatte hardware tests | DMG 1517 / 1651, GBC 2505 / 3023 |
+| SameSuite (GBC; mostly sound, sample-exact) | 16 / 76 |
+| AGE test ROMs (DMG, GBC and GBC in DMG mode) | 14 / 59 |
 
-The Gambatte failures are listed in `crates/freki-core/tests/gambatte_failures.txt`.
-SameSuite and the AGE test ROMs are not run yet.
+The failures are listed in `crates/freki-core/tests/gambatte_failures.txt` and
+`same_age_failures.txt`. Some AGE tests exist once per hardware revision, so not all of them
+can pass on one emulated console.
 
 ## Getting started
 
@@ -178,7 +181,7 @@ freki --headless game.gbc --cheats --cheat 3 --cheat 010A10C1   # cheat 3 of gam
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ```sh
-./scripts/fetch-test-roms.sh      # Blargg, dmg/cgb-acid2, mealybug-tearoom, Mooneye, Gambatte
+./scripts/fetch-test-roms.sh      # Blargg, acid2, mealybug-tearoom, Mooneye, Gambatte, SameSuite, AGE
 cargo test --workspace            # unit tests and all test ROMs, without a window
 ```
 

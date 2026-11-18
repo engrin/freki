@@ -6,6 +6,8 @@
 #   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance, emulator-only (MBC) and misc (CGB) tests
 #   - Gambatte's hwtests by Sindre Aamås (GPL-2.0, via pokemon-speedrunning/gambatte-core): assembly
 #     sources only; freki's test runner assembles them itself
+#   - SameSuite by Lior Halphon (X11 license) and the AGE test ROMs by Christoph Sprenger (MIT),
+#     prebuilt in c-sp/game-boy-test-roms
 set -euo pipefail
 
 DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
@@ -18,6 +20,7 @@ MTS="mts-20240926-1737-443f6e1"
 MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS/$MTS.tar.xz"
 GAMBATTE_COMMIT="5a41a68c25402421fb1983ddadc9faf2418ddb0f"
 GAMBATTE_URL="https://codeload.github.com/pokemon-speedrunning/gambatte-core/tar.gz/$GAMBATTE_COMMIT"
+GBTR="https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
 MEALYBUG="https://raw.githubusercontent.com/mattcurrie/mealybug-tearoom-tests/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4"
 
 mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound" "$DEST/mem_timing" "$DEST/mem_timing-2"
@@ -105,6 +108,13 @@ if [[ ! -d "$DEST/gambatte/hwtests" ]]; then
   tar -xzf "$DEST/gambatte.tar.gz" -C "$DEST/gambatte" --strip-components=1 \
     "gambatte-core-$GAMBATTE_COMMIT/COPYING"
   rm "$DEST/gambatte.tar.gz"
+fi
+
+# SameSuite and AGE: from the game-boy-test-roms release, which has them assembled.
+if [[ ! -d "$DEST/same-suite" || ! -d "$DEST/age-test-roms" ]]; then
+  fetch "$GBTR" "$DEST/game-boy-test-roms.zip"
+  unzip -q -o "$DEST/game-boy-test-roms.zip" 'same-suite/*' 'age-test-roms/*' -d "$DEST"
+  rm "$DEST/game-boy-test-roms.zip"
 fi
 
 echo "Test ROMs are in $DEST"
