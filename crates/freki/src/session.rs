@@ -49,6 +49,9 @@ pub struct Session {
     pub rom_path: PathBuf,
     pub title: String,
     save_path: PathBuf,
+    /// Write only this many bytes of the battery save: a clock game's `.srm` that holds
+    /// RAM only (RetroArch keeps the clock elsewhere) stays that way.
+    save_len: Option<usize>,
     pub slots: StateSlots,
     pub rewind: Rewind,
     frame: u32,
@@ -59,7 +62,7 @@ impl Session {
     /// Loads a ROM and its battery save, if any, starting it as `start` says. Returns the
     /// session and a status message.
     pub fn open(rom_path: &Path, start: Start) -> Result<(Self, String), Box<dyn Error>> {
-        Self::open_saving(rom_path, start, rom_path.with_extension("sav"))
+        Self::open_saving(rom_path, start, battery_save_path(rom_path))
     }
 
     /// [`Session::open`] with the battery save in `save_path`.
@@ -71,9 +74,16 @@ impl Session {
         let rom = rom_file::load(rom_path, None)?;
         let mut message = format!("loaded {}{}", file_name(rom_path), rom.describe());
         let mut gb = power_on(rom.data, &start)?;
+        let mut save_len = None;
         if gb.save_data(0).is_some()
             && let Ok(data) = fs::read(&save_path)
         {
+            if save_path.extension().is_some_and(|e| e == "srm")
+                && gb.has_clock()
+                && gb.save_time(&data).is_none()
+            {
+                save_len = Some(data.len());
+            }
             gb.load_save_data(&data, Some(unix_now()));
             message.push_str(&format!(" with {}", file_name(&save_path)));
         }
@@ -86,6 +96,7 @@ impl Session {
                 rom_path: rom_path.to_path_buf(),
                 title,
                 save_path,
+                save_len,
                 slots: StateSlots::new(rom_path),
                 rewind: Rewind::new(capacity),
                 frame: 0,
@@ -197,7 +208,20 @@ impl Session {
         let Some(data) = self.gb.save_data(unix_now()) else {
             return Ok(());
         };
-        write_atomic(&self.save_path, &data)
+        let len = self.save_len.map_or(data.len(), |n| n.min(data.len()));
+        write_atomic(&self.save_path, &data[..len])
+    }
+}
+
+/// The battery save of `rom_path`: `game.sav`, or RetroArch's `game.srm` if only that
+/// exists (it has the same contents and is then saved to as well).
+pub fn battery_save_path(rom_path: &Path) -> PathBuf {
+    let sav = rom_path.with_extension("sav");
+    let srm = rom_path.with_extension("srm");
+    if !sav.exists() && srm.exists() {
+        srm
+    } else {
+        sav
     }
 }
 
@@ -209,7 +233,11 @@ pub fn linked_save_path(rom_path: &Path, first_rom: &Path) -> PathBuf {
         (Ok(a), Ok(b)) => a == b,
         _ => rom_path == first_rom,
     };
-    rom_path.with_extension(if same { "2.sav" } else { "sav" })
+    if same {
+        rom_path.with_extension("2.sav")
+    } else {
+        battery_save_path(rom_path)
+    }
 }
 
 /// Seconds since the Unix epoch, for the cartridge clock's timestamp in save files.
@@ -229,6 +257,45 @@ pub fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uses_a_retroarch_srm_when_there_is_no_sav() {
+        let dir = std::env::temp_dir().join(format!("freki-srm-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let rom = dir.join("game.gb");
+        assert_eq!(
+            battery_save_path(&rom),
+            dir.join("game.sav"),
+            "neither exists"
+        );
+        fs::write(dir.join("game.srm"), [0]).unwrap();
+        assert_eq!(battery_save_path(&rom), dir.join("game.srm"));
+        fs::write(dir.join("game.sav"), [0]).unwrap();
+        assert_eq!(battery_save_path(&rom), dir.join("game.sav"), "a .sav wins");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An MBC3 game with a clock and 8 KiB of RAM: its RAM-only `.srm` is written back
+    /// without freki's clock block.
+    #[test]
+    fn a_ram_only_srm_stays_ram_only() {
+        let dir = std::env::temp_dir().join(format!("freki-srm-rtc-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x100..0x102].copy_from_slice(&[0x18, 0xFE]);
+        rom[0x147] = 0x10;
+        rom[0x149] = 0x02;
+        let rom_path = dir.join("clock.gb");
+        fs::write(&rom_path, rom).unwrap();
+        let srm = dir.join("clock.srm");
+        fs::write(&srm, vec![0x42; 8192]).unwrap();
+        let (mut session, message) = Session::open(&rom_path, Start::default()).unwrap();
+        assert!(message.ends_with("with clock.srm"), "{message}");
+        session.write_save(true).unwrap();
+        let written = fs::read(&srm).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(written, vec![0x42; 8192]);
+    }
 
     #[test]
     fn the_second_copy_of_a_linked_game_keeps_its_own_save() {

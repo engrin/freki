@@ -116,6 +116,7 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 |---|---|
 | `game.sav` | Battery save, written about once a second while the game saves, and on exit. A cartridge clock is stored at the end in the format VBA-M, BGB and mGBA use for MBC3 |
 | `game.ss0` … `game.ss9` | Save states (about 150 KB each; they load only into the same game and freki state format) |
+| `game.srm` | RetroArch's battery save, used (and saved to) when there is no `game.sav` |
 | `game.2.sav` | Battery save of the second copy when a game is linked with itself |
 | `game.cht` | Cheats, saved whenever one is added, removed or switched on or off |
 | `game.bps`, `game.ips` | Patch applied when the game loads |
