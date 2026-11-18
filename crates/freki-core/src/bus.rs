@@ -90,6 +90,11 @@ pub struct Bus {
     hdma: Hdma,
     /// T-cycles the CPU must pause for a VRAM DMA (taken by the CPU before its next step).
     dma_stall: u32,
+    /// The CPU is in HALT: HBlank DMA waits for it to wake (Gambatte's model).
+    cpu_halted: bool,
+    /// The CPU halted during an HBlank that had its block already, so waking in an HBlank
+    /// copies none.
+    halted_in_hdma_period: bool,
 }
 
 /// CGB VRAM DMA ($FF51–$FF55): copies 16-byte blocks into VRAM, either all at once
@@ -174,6 +179,8 @@ impl Bus {
                 ..Hdma::default()
             },
             dma_stall: 0,
+            cpu_halted: false,
+            halted_in_hdma_period: false,
         }
     }
 
@@ -404,11 +411,42 @@ impl Bus {
             self.hdma.remaining = 0x7F;
         } else {
             self.hdma.active = true;
-            // With the LCD off (or already in HBlank) no HBlank start will come soon;
-            // hardware copies the first block straight away in that case.
-            if !self.ppu.lcd_enabled() {
+            // With the LCD off, or with HBlank under way, hardware copies the first
+            // block straight away (Gambatte's hwtests dma/hdma_late_enable*). Net de Get
+            // relies on it: it starts one-block transfers in HBlank and switches the
+            // source ROM bank away right after.
+            if !self.ppu.lcd_enabled() || self.in_hdma_period(12) {
                 self.hdma_hblank_block();
             }
+        }
+    }
+
+    /// Whether a visible line's HBlank has at least `min` dots to go (half in double
+    /// speed). Starting a transfer needs 12 for a block straight away, waking 8; a HALT
+    /// with 4 left still counts as halting in this HBlank. Measured with Gambatte's
+    /// hwtests (dma/hdma_late_*), which follow its model: no HBlank blocks while the CPU
+    /// is halted, and one on waking if it halted outside an HBlank and wakes in one.
+    fn in_hdma_period(&self, min: u32) -> bool {
+        self.ppu
+            .hblank_dots_left()
+            .is_some_and(|left| left >= min >> u32::from(self.double_speed))
+    }
+
+    /// The CPU executed HALT.
+    pub fn cpu_halt(&mut self) {
+        self.cpu_halted = true;
+        self.halted_in_hdma_period = self.hdma.active && self.in_hdma_period(4);
+    }
+
+    /// The CPU woke from HALT (or did not halt after all): an HBlank transfer copies the
+    /// block it skipped while halted if an HBlank is under way, unless it halted in one.
+    pub fn cpu_woke(&mut self) {
+        if std::mem::take(&mut self.cpu_halted)
+            && !self.halted_in_hdma_period
+            && self.hdma.active
+            && self.in_hdma_period(8)
+        {
+            self.hdma_hblank_block();
         }
     }
 
@@ -675,7 +713,7 @@ impl Bus {
         self.serial
             .clock(((counter + cycles) >> shift) - (counter >> shift));
         self.interrupt_flag |= self.ppu.tick(video_cycles);
-        if self.ppu.take_hblank_started() && self.hdma.active {
+        if self.ppu.take_hblank_started() && self.hdma.active && !self.cpu_halted {
             self.hdma_hblank_block();
         }
         self.interrupt_flag |= self.joypad.take_interrupt();

@@ -540,6 +540,9 @@ impl Cpu {
             return false;
         }
         let woke = std::mem::take(&mut self.halted);
+        if woke {
+            bus.cpu_woke();
+        }
         self.speed_switch_halt = 0;
         if !self.ime {
             return false;
@@ -631,6 +634,7 @@ impl Cpu {
             && bus.interrupt_enable & bus.interrupt_flag & 0x1F != 0
         {
             self.halted = false;
+            bus.cpu_woke();
             self.regs.pc = pc;
         }
         self.flush(bus);
@@ -788,6 +792,7 @@ impl Cpu {
                         self.halt_bug = true;
                     } else {
                         self.halted = true;
+                        bus.cpu_halt();
                     }
                     4
                 } else {

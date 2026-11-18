@@ -1,13 +1,14 @@
 //! Cartridge loading, header parsing and memory bank controllers (MBCs).
 //!
-//! Supported: no MBC, MBC1, MBC2, MBC3 (including the real-time clock) and MBC5.
-//! Together these cover the vast majority of DMG games.
+//! Supported: no MBC, MBC1, MBC2, MBC3 (with real-time clock), MBC5, MBC6, MBC7, MMM01,
+//! HuC1, HuC3 and TAMA5.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::CLOCK_HZ;
 use crate::huc3::HuC3Clock;
+use crate::mbc6::Mbc6;
 use crate::mbc7::{self, Mbc7};
 use crate::mmm01::Mmm01;
 use crate::tama5::{self, Tama5};
@@ -88,6 +89,9 @@ pub enum Mbc {
     /// Bandai TAMA5 (Tamagotchi 3): banking, save memory and clock all behind a register
     /// window at $A000/$A001 (see [`crate::tama5`]).
     Tama5(Box<Tama5>),
+    /// MBC6 (Net de Get): ROM and RAM banked in halves, and 1 MiB of flash (see
+    /// [`crate::mbc6`]).
+    Mbc6(Box<Mbc6>),
 }
 
 /// MBC3 real-time clock. It runs on emulated time: one second per [`CLOCK_HZ`] T-cycles.
@@ -336,6 +340,7 @@ impl Cartridge {
                 rumble: kind >= 0x1C,
                 motor: false,
             },
+            0x20 => Mbc::Mbc6(Box::default()),
             0x22 => Mbc::Mbc7 {
                 ram_enable1: false,
                 ram_enable2: false,
@@ -366,6 +371,7 @@ impl Cartridge {
                 | 0x13
                 | 0x1B
                 | 0x1E
+                | 0x20
                 | 0x22
                 | 0xFD
                 | 0xFE
@@ -439,7 +445,8 @@ impl Cartridge {
     /// Whether the cartridge keeps its RAM or clock when switched off, i.e. needs a save
     /// file.
     pub fn has_battery(&self) -> bool {
-        self.battery && (!self.ram.is_empty() || self.has_clock())
+        self.battery
+            && (!self.ram.is_empty() || self.has_clock() || matches!(self.mbc, Mbc::Mbc6(_)))
     }
 
     /// Whether the cartridge has a real-time clock (MBC3 with timer, HuC3).
@@ -463,6 +470,7 @@ impl Cartridge {
             Mbc::Mbc3 { rtc: Some(rtc), .. } => data.extend(rtc.to_save(now)),
             Mbc::HuC3 { clock, .. } => data.extend(clock.to_save(now)),
             Mbc::Tama5(chip) => data.extend(chip.to_save(now)),
+            Mbc::Mbc6(chip) => data.extend(chip.to_save()),
             _ => {}
         }
         data
@@ -505,6 +513,7 @@ impl Cartridge {
                 clock.load_save(footer, now);
             }
             Mbc::Tama5(chip) => chip.load_save(footer, now),
+            Mbc::Mbc6(chip) => chip.load_save(footer),
             _ => {}
         }
     }
@@ -585,6 +594,7 @@ impl Cartridge {
                 }
                 m.ram_bank() * RAM_BANK + local
             }
+            Mbc::Mbc6(ref chip) => chip.ram_offset(addr)?,
             Mbc::Mbc2 { ram_enabled, .. } => {
                 if !ram_enabled {
                     return None;
@@ -665,6 +675,14 @@ impl Cartridge {
                 let (bank0, bank) = m.rom_banks(self.rom.len() / ROM_BANK);
                 if low { bank0 } else { bank }
             }
+            Mbc::Mbc6(ref chip) if !low => {
+                if let Some(value) = chip.read_flash(addr) {
+                    return value;
+                }
+                let offset = chip.rom_offset(addr) % self.rom.len().next_power_of_two();
+                return self.rom.get(offset).copied().unwrap_or(0xFF);
+            }
+            Mbc::Mbc6(_) => 0,
             Mbc::Mbc2 { rom_bank, .. } => {
                 if low {
                     0
@@ -705,6 +723,11 @@ impl Cartridge {
             // TAMA5 is driven through $A000/$A001 only.
             Mbc::RomOnly | Mbc::Tama5(_) => {}
             Mbc::Mmm01(m) => m.write(addr, value),
+            Mbc::Mbc6(chip) => {
+                if chip.write(addr, value) {
+                    self.ram_dirty = true;
+                }
+            }
             Mbc::Mbc1 {
                 ram_enabled,
                 bank1,

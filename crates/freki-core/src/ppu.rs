@@ -530,6 +530,12 @@ impl Ppu {
         self.mode
     }
 
+    /// Dots left in the current line during a visible line's HBlank, else `None`.
+    pub fn hblank_dots_left(&self) -> Option<u32> {
+        (self.mode == Mode::HBlank && self.irq_mode == Mode::HBlank && self.lcd_on())
+            .then(|| DOTS_PER_LINE.saturating_sub(self.dot))
+    }
+
     /// Switches to Game Boy Color mode.
     pub fn set_cgb(&mut self) {
         self.cgb = true;

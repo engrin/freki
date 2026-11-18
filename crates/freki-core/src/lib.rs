@@ -14,6 +14,7 @@ pub mod debugger;
 pub mod disasm;
 pub mod huc3;
 pub mod joypad;
+pub mod mbc6;
 pub mod mbc7;
 pub mod mmm01;
 pub mod ppu;
@@ -695,23 +696,27 @@ mod tests {
     #[test]
     fn hblank_hdma_copies_one_block_per_line() {
         let mut gb = cgb_with_source_data();
-        // Start right after an HBlank began, so the next block comes on the next line.
-        while gb.peek(0xFF41) & 3 != 0 {
-            gb.step().unwrap();
-        }
-        gb.poke(0xFF55, 0x82); // 3 blocks, HBlank
-        assert_eq!(gb.peek(0xFF55), 0x02, "active, 3 blocks left");
-        // Next line: through mode 3 into its HBlank.
+        // Started in HBlank, the first block is copied at once (Net de Get relies on it).
         for mode in [3, 0] {
             while gb.peek(0xFF41) & 3 != mode {
                 gb.step().unwrap();
             }
         }
+        gb.poke(0xFF55, 0x82); // 3 blocks, HBlank
         assert_eq!(gb.peek(0x8800), 1);
-        assert_eq!(gb.peek(0x8810), 0, "one block per HBlank");
-        assert_eq!(gb.peek(0xFF55), 0x01);
+        assert_eq!(gb.peek(0x8810), 0);
+        assert_eq!(gb.peek(0xFF55), 0x01, "active, 2 blocks left");
+        // The next one waits for the next line's HBlank.
+        for mode in [3, 0] {
+            while gb.peek(0xFF41) & 3 != mode {
+                gb.step().unwrap();
+            }
+        }
+        assert_eq!(gb.peek(0x8810), 17);
+        assert_eq!(gb.peek(0x8820), 0, "one block per HBlank");
+        assert_eq!(gb.peek(0xFF55), 0x00);
         gb.poke(0xFF55, 0x00); // stop
-        assert_eq!(gb.peek(0xFF55), 0x81, "stopped, 2 blocks were left");
+        assert_eq!(gb.peek(0xFF55), 0x80, "stopped, 1 block was left");
     }
 
     #[test]
