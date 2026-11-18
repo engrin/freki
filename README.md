@@ -161,7 +161,9 @@ switched off, `+` joins several codes into one cheat):
 ! 00A-17B-C49 Start with all items
 ```
 
-RetroArch's cheat files are read too, and saved back in their format. A file named as in
+RetroArch's cheat files are read too, and saved back in their format. Game Genie codes made
+for another version of the game (their compare byte is not in your ROM, so they do
+nothing) are marked with ⚠ in the cheat manager and in `cheat list`. A file named as in
 cheat databases, such as `metal-gear-solid-usa.cht` next to `Metal Gear Solid (USA).gbc`,
 is imported when the game has no `game.cht` yet.
 

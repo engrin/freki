@@ -1262,6 +1262,16 @@ impl FrekiApp {
                                 }
                                 let cheat = &gb.cheats().list()[i];
                                 ui.monospace(&cheat.text);
+                                if gb.cheat_fits(cheat) {
+                                    ui.label("");
+                                } else {
+                                    ui.colored_label(ui.visuals().warn_fg_color, "⚠")
+                                        .on_hover_text(
+                                            "Made for another version of the game: this \
+                                             ROM does not have the bytes its Game Genie \
+                                             code expects, so it does nothing",
+                                        );
+                                }
                                 ui.label(&cheat.name);
                                 if ui.small_button("✖").on_hover_text("Remove").clicked() {
                                     remove = Some(i);

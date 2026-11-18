@@ -27,7 +27,7 @@ pub mod timer;
 
 pub use boot::{BootRom, BootRomError};
 pub use cartridge::{Cartridge, CartridgeError};
-pub use cheats::{CheatError, Cheats, Code, Filter, Location, MemorySearch};
+pub use cheats::{Cheat, CheatError, Cheats, Code, Filter, Location, MemorySearch};
 pub use cpu::{CpuError, Registers};
 pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};
 pub use disasm::{Instruction, disassemble};
@@ -559,6 +559,20 @@ impl GameBoy {
         &self.bus.cart
     }
 
+    /// Whether `cheat` fits this ROM: each of its Game Genie codes with a compare byte
+    /// finds that byte at its address in some bank. A code that does not was made for
+    /// another version of the game and never changes anything.
+    pub fn cheat_fits(&self, cheat: &Cheat) -> bool {
+        cheat.codes.iter().all(|code| match *code {
+            Code::GameGenie {
+                address,
+                compare: Some(compare),
+                ..
+            } => self.bus.cart.rom_has(address, compare),
+            _ => true,
+        })
+    }
+
     /// Title plus header and global checksums: identifies the game a state belongs to.
     fn cartridge_identity(&self) -> (String, [u8; 3]) {
         let cart = &self.bus.cart;
@@ -608,6 +622,40 @@ mod tests {
         rom[0x149] = 0x00; // no RAM
         rom[0x150..0x152].copy_from_slice(&[0x18, 0xFE]); // JR -2
         rom
+    }
+
+    #[test]
+    fn game_genie_codes_for_another_rom_version_do_not_fit() {
+        let mut rom = test_rom();
+        rom[0x4123] = 0xAB;
+        let gb = GameBoy::with_model(rom, Model::Dmg).unwrap();
+        let cheat = |compare| Cheat {
+            codes: vec![Code::GameGenie {
+                address: 0x4123,
+                value: 0,
+                compare,
+            }],
+            text: String::new(),
+            name: String::new(),
+            enabled: true,
+        };
+        assert!(gb.cheat_fits(&cheat(Some(0xAB))));
+        assert!(!gb.cheat_fits(&cheat(Some(0xCD))));
+        assert!(
+            gb.cheat_fits(&cheat(None)),
+            "no compare byte: always applies"
+        );
+        // $0000–$3FFF is bank 0 here: the byte at the same offset in bank 1 does not count.
+        let mut rom = test_rom();
+        rom[0x4010] = 0xAB;
+        let gb = GameBoy::with_model(rom, Model::Dmg).unwrap();
+        let mut low = cheat(Some(0xAB));
+        low.codes[0] = Code::GameGenie {
+            address: 0x0010,
+            value: 0,
+            compare: Some(0xAB),
+        };
+        assert!(!gb.cheat_fits(&low));
     }
 
     #[test]

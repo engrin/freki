@@ -403,6 +403,17 @@ pub fn load_cheat_file(path: &Path, gb: &mut GameBoy) -> Option<String> {
         gb.cheats().list().len(),
         source.display()
     );
+    let other = gb
+        .cheats()
+        .list()
+        .iter()
+        .filter(|c| !gb.cheat_fits(c))
+        .count();
+    if other > 0 {
+        msg.push_str(&format!(
+            "; {other} made for another version of the game (they will do nothing)"
+        ));
+    }
     for (line, e) in errors {
         msg.push_str(&format!("\n  line {line}: {e}"));
     }
@@ -461,9 +472,15 @@ pub fn save_cheat_file(path: &Path, gb: &GameBoy) -> Result<String, String> {
 fn describe(gb: &GameBoy, i: usize) -> String {
     let c = &gb.cheats().list()[i];
     let state = if c.enabled { "on " } else { "off" };
+    let other = if gb.cheat_fits(c) {
+        ""
+    } else {
+        "  [made for another version of the game]"
+    };
     format!("{state} {} {}", c.text, c.name)
         .trim_end()
         .to_string()
+        + other
 }
 
 fn list_cheats(gb: &GameBoy) -> String {
