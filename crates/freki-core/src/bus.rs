@@ -105,12 +105,13 @@ struct Hdma {
     active: bool,
 }
 
+/// CPU T-cycles from the start of STOP's operand fetch during which the PPU, APU and
+/// cartridge clock still run at the old rate: into double speed, and back to normal speed.
+/// A round trip then shifts the PPU's phase like hardware does (Gambatte's hwtests,
+/// speedchange/* and lcd_offset/*).
+const SPEED_SWITCH_DELAY_TO_DOUBLE: u32 = 12;
+const SPEED_SWITCH_DELAY_TO_NORMAL: u32 = 2;
 /// T-cycles (at normal speed) the CPU is paused per 16-byte VRAM DMA block.
-/// CPU T-cycles after a speed switch during which the PPU, APU and cartridge clock still
-/// run at the old rate: into double speed, and back to normal speed. Fitted to Gambatte's
-/// hwtests (speedchange/*_m3stat*).
-const SPEED_SWITCH_DELAY_TO_DOUBLE: u32 = 16;
-const SPEED_SWITCH_DELAY_TO_NORMAL: u32 = 8;
 const HDMA_BLOCK_CYCLES: u32 = 32;
 
 /// The memory buses OAM DMA can collide with the CPU on.
