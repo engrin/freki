@@ -372,6 +372,8 @@ pub struct Apu {
     ch3: Wave,
     ch4: Noise,
     frame_step: u8,
+    /// The next step 7 leaves the envelopes alone (see [`Apu::power_on_late`]).
+    skip_envelope: bool,
 
     /// Output sample rate in Hz; `None` means no samples are produced.
     sample_rate: Option<u32>,
@@ -402,6 +404,7 @@ impl Apu {
             ch3: Wave::default(),
             ch4: Noise::default(),
             frame_step: 0,
+            skip_envelope: false,
             sample_rate: None,
             sample_clock: 0,
             samples: Vec::new(),
@@ -680,6 +683,7 @@ impl Apu {
             ch3: Wave::default(),
             ch4: Noise::default(),
             frame_step: 0,
+            skip_envelope: false,
             sample_rate: None,
             sample_clock: 0,
             samples: Vec::new(),
@@ -734,7 +738,7 @@ impl Apu {
         if step == 2 || step == 6 {
             self.ch1.sweep_delay = 4;
         }
-        if step == 7 {
+        if step == 7 && !std::mem::take(&mut self.skip_envelope) {
             self.ch1.envelope.clock();
             self.ch2.envelope.clock();
             self.ch4.envelope.clock();
@@ -748,10 +752,12 @@ impl Apu {
     }
 
     /// Just powered on with the frame sequencer's DIV bit set: the sequencer starts in the
-    /// second half of a step pair, so its next step is 7 (envelope) instead of 0
-    /// (Gambatte's hwtests, sound/*_nr52_*).
+    /// second half of a step pair, so its next step is 7 instead of 0 (Gambatte's hwtests,
+    /// sound/*_nr52_*). That first step does not clock the envelopes (SameSuite,
+    /// div_write_trigger_volume_10; SameBoy skips the whole step).
     pub fn power_on_late(&mut self) {
         self.frame_step = 7;
+        self.skip_envelope = true;
     }
 
     /// Converts a channel's 0–15 output to −1.0…1.0, or 0 if its DAC is off.

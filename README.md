@@ -67,7 +67,7 @@ Named after Freki, one of Odin's two wolves.
 | mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
 | mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
 | Gambatte hardware tests | DMG 1517 / 1651, GBC 2510 / 3023 |
-| SameSuite (GBC; mostly sound, sample-exact) | 25 / 76 |
+| SameSuite (GBC; mostly sound, sample-exact) | 27 / 76 |
 | AGE test ROMs (DMG, GBC and GBC in DMG mode) | 14 / 59 |
 
 The failures are listed in `crates/freki-core/tests/gambatte_failures.txt` and
