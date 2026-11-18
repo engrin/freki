@@ -17,7 +17,10 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use freki_core::{BootRom, Button, GameBoy, Model, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
+use freki_core::{
+    BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
+    Screen,
+};
 
 use crate::console::{self, Console};
 use crate::rom_file;
@@ -35,7 +38,9 @@ run:
   --model dmg|cgb         console (default: GBC for colour games, else Game Boy)
   --boot FILE             start with this boot ROM (DMG or GBC, by size)
   --patch FILE            apply this IPS or BPS patch (default: ROM.bps or ROM.ips if present)
-  --sav FILE              load this battery save (never written back)
+  --sav FILE              load this battery save (never written back; see --write-sav)
+  --off DURATION          with --sav: the Game Boy was off this long, so a cartridge
+                          clock catches up (90, 90s, 30m, 2h, 3d)
   --load-state FILE       start from a save state (.ss0 … .ss9)
   --press FRAME:KEYS[:N]  hold KEYS (a+b+start+select+up+down+left+right) from FRAME
                           for N frames (default 6); repeatable
@@ -55,6 +60,11 @@ at the end (in this order):
   --palette NAME          DMG shades for the screenshot: green, grey (default), pocket, light
   --color-correction      GBC colours as the GBC screen shows them (default: raw)
   --save-state FILE       save the machine state
+  --write-sav FILE        write the battery save (RAM, then the clock, if any)
+
+clock time: a run starts at the time the --sav file's clock was written (plus --off),
+or at 0, and moves on with the emulated time; --write-sav stamps the clock with it.
+So a save written by one run and loaded with --off 1h in the next is one hour behind.
 
 numbers: decimal, or hex with $ or 0x (e.g. $C0A0)
 exit status: 0 finished, 2 stopped at a breakpoint or watchpoint, 1 error";
@@ -68,6 +78,7 @@ struct Options {
     boot: Option<PathBuf>,
     patch: Option<PathBuf>,
     sav: Option<PathBuf>,
+    off: Option<u64>,
     load_state: Option<PathBuf>,
     presses: Vec<Press>,
     tilts: Vec<Tilt>,
@@ -80,6 +91,7 @@ struct Options {
     palette: Option<Palette>,
     color_correction: bool,
     save_state: Option<PathBuf>,
+    write_sav: Option<PathBuf>,
 }
 
 /// Buttons held from frame `from` for `frames` frames.
@@ -156,6 +168,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--boot" => o.boot = Some(value(arg)?.into()),
             "--patch" => o.patch = Some(value(arg)?.into()),
             "--sav" => o.sav = Some(value(arg)?.into()),
+            "--off" => o.off = Some(parse_duration(&value(arg)?)?),
             "--load-state" => o.load_state = Some(value(arg)?.into()),
             "--press" => o.presses.push(parse_press(&value(arg)?)?),
             "--tilt" => o.tilts.push(parse_tilt(&value(arg)?)?),
@@ -176,6 +189,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             }
             "--color-correction" | "--colour-correction" => o.color_correction = true,
             "--save-state" => o.save_state = Some(value(arg)?.into()),
+            "--write-sav" => o.write_sav = Some(value(arg)?.into()),
             a if a.starts_with('-') => return Err(format!("unknown option {a}")),
             _ if o.rom.is_none() => o.rom = Some(arg.into()),
             a => return Err(format!("unexpected argument {a:?}")),
@@ -184,7 +198,28 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
     if o.rom.is_none() {
         return Err("no ROM given".into());
     }
+    if o.off.is_some() && o.sav.is_none() {
+        return Err("--off needs --sav".into());
+    }
     Ok(Some(o))
+}
+
+/// Seconds, with an optional unit: `90`, `90s`, `30m`, `2h`, `3d`.
+fn parse_duration(spec: &str) -> Result<u64, String> {
+    let bad = || format!("bad duration {spec:?} (e.g. 90, 90s, 30m, 2h, 3d)");
+    let (number, unit) = match spec.find(|c: char| !c.is_ascii_digit()) {
+        Some(i) => spec.split_at(i),
+        None => (spec, "s"),
+    };
+    let scale = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        _ => return Err(bad()),
+    };
+    let n: u64 = number.parse().map_err(|_| bad())?;
+    n.checked_mul(scale).ok_or_else(bad)
 }
 
 /// `FRAME:KEYS[:N]`, e.g. `120:start` or `300:a+right:30`.
@@ -255,9 +290,25 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         }
     }
     let mut gb = session::power_on(rom.data, &start)?;
+    // Unix time at the start of the run; see USAGE.
+    let mut start_time = 0;
     if let Some(path) = &o.sav {
-        // The clock carries on from the saved time, so runs are repeatable.
-        gb.load_save_data(&read(path)?, None);
+        let data = read(path)?;
+        let saved = gb.save_time(&data);
+        match (saved, o.off) {
+            (Some(saved), Some(off)) => {
+                start_time = saved.saturating_add(off);
+                gb.load_save_data(&data, Some(start_time));
+                println!("clock caught up on {off} s off");
+            }
+            (saved, off) => {
+                if off.is_some() {
+                    println!("--off ignored: the save has no clock");
+                }
+                start_time = saved.unwrap_or(0);
+                gb.load_save_data(&data, None);
+            }
+        }
     }
     if let Some(path) = &o.load_state {
         gb.load_state(&read(path)?)?;
@@ -375,6 +426,18 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         println!("state saved to {}", path.display());
     }
+    if let Some(path) = &o.write_sav {
+        let now = start_time + frame * u64::from(CYCLES_PER_FRAME) / u64::from(CLOCK_HZ);
+        let data = gb
+            .save_data(now)
+            .ok_or("--write-sav: the cartridge has no battery")?;
+        fs::write(path, &data).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        println!(
+            "battery save written to {} ({} bytes)",
+            path.display(),
+            data.len()
+        );
+    }
     Ok(status)
 }
 
@@ -475,6 +538,13 @@ mod tests {
             .unwrap();
         let t = &o.tilts[0];
         assert_eq!((t.from, t.x, t.y, t.frames), (5, -0.5, 1.0, 9));
+        let o = parse_args(&args("game.gb --sav in.sav --off 2h --write-sav out.sav"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.off, Some(7200));
+        assert_eq!(o.write_sav, Some(PathBuf::from("out.sav")));
+        assert_eq!(parse_duration("90"), Ok(90));
+        assert_eq!(parse_duration("3d"), Ok(3 * 86_400));
     }
 
     #[test]
@@ -483,7 +553,49 @@ mod tests {
         assert!(parse_args(&args("a.gb --press 10")).is_err());
         assert!(parse_args(&args("a.gb --tilt 10:1")).is_err());
         assert!(parse_args(&args("a.gb --bogus")).is_err());
+        assert!(
+            parse_args(&args("a.gb --off 1h")).is_err(),
+            "--off without --sav"
+        );
+        assert!(parse_args(&args("a.gb --sav a.sav --off 1y")).is_err());
         assert!(parse_args(&args("a.gb --help")).unwrap().is_none());
+    }
+
+    /// An MBC3 game with a clock and 8 KiB of battery RAM that loops at $0100: one run
+    /// writes its save, the next loads it an hour later and finds the clock moved on.
+    #[test]
+    fn battery_save_round_trip_catches_the_clock_up() {
+        let dir = std::env::temp_dir().join(format!("freki-headless-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut rom = vec![0; 0x8000];
+        rom[0x100..0x102].copy_from_slice(&[0x18, 0xFE]); // jr -2
+        rom[0x147] = 0x10;
+        rom[0x149] = 0x02;
+        let rom_path = dir.join("clock.gb");
+        fs::write(&rom_path, &rom).unwrap();
+        let (first, second) = (dir.join("first.sav"), dir.join("second.sav"));
+        let run_with = |extra: String| {
+            let mut o = parse_args(&args(&format!("x --frames 60 {extra}")))
+                .unwrap()
+                .unwrap();
+            o.rom = Some(rom_path.clone());
+            assert_eq!(run(&o).unwrap(), 0);
+        };
+        // 60 frames are just over a second.
+        run_with(format!("--write-sav {}", first.display()));
+        run_with(format!(
+            "--sav {} --off 1h --write-sav {}",
+            first.display(),
+            second.display()
+        ));
+        let (a, b) = (fs::read(&first).unwrap(), fs::read(&second).unwrap());
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(a.len(), 8192 + 48);
+        // Seconds, minutes and hours are the first three 32-bit words after RAM.
+        let hms = |d: &[u8]| [d[8192], d[8196], d[8200]];
+        assert_eq!(hms(&a), [1, 0, 0]);
+        assert_eq!(hms(&b), [2, 0, 1], "an hour off, then another second");
+        assert_eq!(&b[8232..], &(1u64 + 3600 + 1).to_le_bytes());
     }
 
     /// Runs Blargg's first cpu_instrs test (if fetched) until it reports on serial.

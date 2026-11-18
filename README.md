@@ -153,12 +153,14 @@ cheat save            # writes game.cht
 `freki --headless ROM [options]` runs a game as fast as possible without a window or
 sound. It can press buttons at given frames, stop at breakpoints or watchpoints, and log
 every instruction. At the end it can run console commands, print the serial output, and
-save a screenshot or a save state. `freki --headless --help` lists the options.
+save a screenshot, a save state or the battery save. A battery save can be loaded as if
+the Game Boy had been off for a while, so the cartridge clock catches up. `freki --headless --help` lists the options.
 
 ```sh
 freki --headless tetris.gb --frames 1200 --press 200:start --screenshot out.png --exec regs
 freki --headless 01-special.gb --until-serial Passed --serial      # exit 0 once it passes
 freki --headless game.gb --watch '$C0A0 w' --trace trace.log       # who writes $C0A0?
+freki --headless rtc.gbc --write-sav a.sav && freki --headless rtc.gbc --sav a.sav --off 2h
 ```
 
 ## Development

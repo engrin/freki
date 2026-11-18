@@ -456,6 +456,12 @@ impl GameBoy {
         self.bus.cart.load_ram(data, now);
     }
 
+    /// The Unix time the clock in save file `data` was written at, or `None` if the
+    /// cartridge has no clock or the file has no clock block.
+    pub fn save_time(&self, data: &[u8]) -> Option<u64> {
+        self.bus.cart.save_time(data)
+    }
+
     /// Whether the cartridge has a real-time clock. Its save file then changes with time
     /// alone, so it is worth writing when the game closes even if RAM did not change.
     pub fn has_clock(&self) -> bool {

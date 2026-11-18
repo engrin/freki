@@ -468,6 +468,24 @@ impl Cartridge {
         data
     }
 
+    /// The Unix time the clock block of save file `data` was written at, or `None` if the
+    /// cartridge has no clock or the block is missing.
+    pub fn save_time(&self, data: &[u8]) -> Option<u64> {
+        let footer = data.get(self.ram.len()..)?;
+        let word = |at: usize| -> Option<u64> {
+            Some(u64::from_le_bytes(footer.get(at..at + 8)?.try_into().ok()?))
+        };
+        match &self.mbc {
+            Mbc::Mbc3 { rtc: Some(_), .. } => word(40).or_else(|| {
+                let old = footer.get(40..44)?;
+                Some(u64::from(u32::from_le_bytes(old.try_into().ok()?)))
+            }),
+            Mbc::HuC3 { .. } if footer.len() >= 12 => word(0),
+            Mbc::Tama5(_) => word(32),
+            _ => None,
+        }
+    }
+
     /// Restores external RAM and the clock from a save file. Extra bytes are ignored,
     /// missing ones stay 0. The clock catches up on the time since the save, from its
     /// timestamp to `now` (Unix seconds); with `now` = `None` it carries on from where it
@@ -1069,6 +1087,8 @@ mod tests {
         assert_eq!(data.len(), 8 * 1024 + Rtc::SAVE_BYTES);
         assert_eq!(&data[8192..8196], &[50, 0, 0, 0]);
         assert_eq!(&data[8232..8240], &5_000u64.to_le_bytes());
+        assert_eq!(cart.save_time(&data), Some(5_000));
+        assert_eq!(cart.save_time(&data[..8192]), None, "RAM only");
 
         // 15 seconds later the day counter has wrapped and set the carry.
         let mut fresh = Cartridge::from_rom(banked_rom(4, 0x10, 0x02)).unwrap();
