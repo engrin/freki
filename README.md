@@ -1,6 +1,7 @@
 # freki
 
-A Game Boy and Game Boy Color emulator written in Rust, for Windows, Linux and macOS.
+A Game Boy, Game Boy Color and Super Game Boy emulator written in Rust, for Windows, Linux
+and macOS.
 
 Named after Freki, one of Odin's two wolves.
 
@@ -33,8 +34,8 @@ Named after Freki, one of Odin's two wolves.
   command line or by dropping them on the window
 - **Soft patching:** a `.bps` or `.ips` patch next to the ROM is applied when the game
   loads (translations, romhacks); the ROM file is never changed
-- **Battery saves** written automatically, **10 save-state slots**, **rewind** (up to 20
-  seconds) and **fast-forward** (2×–8×)
+- **Battery saves** written automatically (RetroArch's `.srm` saves work too), **10
+  save-state slots**, **rewind** (up to 20 seconds) and **fast-forward** (2×–8×)
 - **Fullscreen** and window scales from 2× to 6×, with sharp integer scaling (can be
   switched off)
 - **Four Game Boy palettes** (DMG green, greyscale, Pocket, Light), and **GBC colour
@@ -46,7 +47,8 @@ Named after Freki, one of Odin's two wolves.
   Menu, …)
 - **Rumble:** rumble cartridges shake your gamepad
 - **Cheats:** GameShark and Game Genie codes, a cheat manager, and a memory search that
-  finds values such as lives or money and turns them into cheats
+  finds values such as lives or money and turns them into cheats. RetroArch cheat files
+  are read and written, and codes made for another version of the game are marked
 - **Screenshots** of the screen as shown
 
 ### Debugging
@@ -58,8 +60,8 @@ Named after Freki, one of Odin's two wolves.
 - **Terminal console:** the same debugger, cheat and memory commands, typed while the game
   runs
 - **Headless mode:** run a game without a window for scripts and regression checks,
-  with scripted button presses, cheats, instruction traces in Gameboy Doctor's format, screenshots
-  and save states
+  with scripted button presses, cheats, linked games, instruction traces in Gameboy
+  Doctor's format, screenshots and save states
 
 ## Accuracy
 
@@ -187,7 +189,8 @@ cheat save            # writes game.cht
 sound. It can press buttons at given frames, stop at breakpoints or watchpoints, and log
 every instruction. At the end it can run console commands, print the serial output, and
 save a screenshot, a save state or the battery save. A battery save can be loaded as if
-the Game Boy had been off for a while, so the cartridge clock catches up. `freki --headless --help` lists the options.
+the Game Boy had been off for a while, so the cartridge clock catches up, and a second game
+can run on a link cable. `freki --headless --help` lists the options.
 
 ```sh
 freki --headless tetris.gb --frames 1200 --press 200:start --screenshot out.png --exec regs
@@ -228,7 +231,12 @@ Tests whose ROMs have not been fetched are skipped. ROM files are never committe
   [cgb-acid2](https://github.com/mattcurrie/cgb-acid2),
   [Mooneye test suite](https://github.com/Gekkio/mooneye-test-suite),
   [mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests),
-  [Gambatte hwtests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test/hwtests)
+  [Gambatte hwtests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test/hwtests),
+  [SameSuite](https://github.com/LIJI32/SameSuite),
+  [AGE test ROMs](https://github.com/c-sp/age-test-roms)
+- Hardware behaviour not covered by the documentation was checked against the sources of
+  [SameBoy](https://github.com/LIJI32/SameBoy) and
+  [Gambatte](https://github.com/pokemon-speedrunning/gambatte-core)
 
 ## License
 
