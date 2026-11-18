@@ -18,6 +18,7 @@ use crate::cpu_view::{self, CpuView};
 use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
 use crate::input;
+use crate::record::{self, Recorder};
 use crate::rom_file;
 use crate::session::Start;
 use crate::session::{self, Session, file_name};
@@ -163,6 +164,10 @@ pub struct FrekiApp {
     /// While the loaded game uses its own settings: your general settings, put back when
     /// it closes.
     general_settings: Option<GameSettings>,
+    /// The video being recorded (File → Record video, Shift+F12).
+    recorder: Option<Recorder>,
+    /// Recordings whose encoder is still finishing the file.
+    finishing: Vec<std::thread::JoinHandle<Result<record::Summary, String>>>,
     /// With frame blending: the picture of the emulated frame before the current one.
     previous_frame: Option<(Vec<u8>, [usize; 2])>,
     samples: Vec<f32>,
@@ -221,6 +226,8 @@ impl FrekiApp {
             texture: None,
             fitted_size: [SCREEN_WIDTH, SCREEN_HEIGHT],
             previous_frame: None,
+            recorder: None,
+            finishing: Vec::new(),
             game_key: None,
             general_settings: None,
             samples: Vec::new(),
@@ -499,7 +506,67 @@ impl FrekiApp {
         }
     }
 
+    /// Starts or stops recording a video of the screen as shown, with sound.
+    fn toggle_recording(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            self.set_status(format!(
+                "finishing {} ({:.0} s)…",
+                file_name(&recorder.path),
+                recorder.seconds()
+            ));
+            self.finishing.push(recorder.stop());
+            return;
+        }
+        let Some(session) = self.session.as_mut() else {
+            self.set_status("no game loaded");
+            return;
+        };
+        let Some(path) = session.next_file("webm") else {
+            self.set_status("too many videos");
+            return;
+        };
+        // Without a sound device the game makes no sound; record it anyway.
+        if self.audio.is_none() {
+            session.gb.set_audio_sample_rate(48_000);
+            if let Some(linked) = self.link.as_mut() {
+                linked.session.gb.set_audio_sample_rate(48_000);
+            }
+        }
+        let size = self.screen_size();
+        match Recorder::start(&path, size) {
+            Ok(recorder) => {
+                self.recorder = Some(recorder);
+                self.set_status(format!("recording {} (Shift+F12 stops)", file_name(&path)));
+            }
+            Err(e) => self.set_status(format!("cannot record: {e}")),
+        }
+    }
+
+    /// Reports recordings whose file is finished. With `wait`, waits for all of them.
+    fn poll_recordings(&mut self, wait: bool) {
+        let (done, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.finishing)
+            .into_iter()
+            .partition(|h| wait || h.is_finished());
+        self.finishing = running;
+        for handle in done {
+            let message = match handle.join() {
+                Ok(Ok(summary)) => format!(
+                    "saved {} ({:.0} s, {:.1} MB)",
+                    file_name(&summary.path),
+                    summary.frames as f64 / FRAMES_PER_SECOND,
+                    summary.bytes as f64 / 1e6
+                ),
+                Ok(Err(e)) => format!("video failed: {e}"),
+                Err(_) => "video failed: the encoder crashed".to_string(),
+            };
+            self.set_status(message);
+        }
+    }
+
     fn close_rom(&mut self) {
+        if self.recorder.is_some() {
+            self.toggle_recording();
+        }
         self.disconnect_link();
         self.restore_general_settings();
         self.game_key = None;
@@ -597,7 +664,10 @@ impl FrekiApp {
         if pressed(Key::F9) {
             self.toggle_cheats();
         }
-        if pressed(Key::F12) {
+        // Shift+F12 records video; F12 alone takes a screenshot.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F12)) {
+            self.toggle_recording();
+        } else if pressed(Key::F12) {
             self.screenshot();
         }
         if pressed(Key::P) {
@@ -839,6 +909,24 @@ impl FrekiApp {
                     self.samples.truncate(first);
                 }
             }
+            if let Some(recorder) = self.recorder.as_mut() {
+                let (mut rgba, size) = picture(
+                    session,
+                    self.link.as_ref(),
+                    self.settings.palette,
+                    self.settings.color_correction,
+                );
+                if let Some((previous, previous_size)) = &self.previous_frame
+                    && *previous_size == size
+                {
+                    settings::blend(previous, &mut rgba);
+                }
+                if let Err(e) = recorder.frame(&rgba, size, &self.samples) {
+                    let recorder = self.recorder.take().expect("recording");
+                    self.finishing.push(recorder.stop());
+                    self.status = Some((format!("recording stopped: {e}"), Instant::now()));
+                }
+            }
             if let Some(audio) = &self.audio
                 && speed == 1
             {
@@ -984,6 +1072,23 @@ impl FrekiApp {
                 {
                     ui.close();
                     self.screenshot();
+                }
+                let recording = self.recorder.is_some();
+                let label = if recording {
+                    "Stop recording"
+                } else {
+                    "Record video"
+                };
+                if ui
+                    .add_enabled(
+                        loaded || recording,
+                        egui::Button::new(label).shortcut_text("Shift+F12"),
+                    )
+                    .on_hover_text("WebM video with sound, saved next to the ROM")
+                    .clicked()
+                {
+                    ui.close();
+                    self.toggle_recording();
                 }
                 ui.separator();
                 if ui
@@ -1289,6 +1394,14 @@ impl FrekiApp {
             self.status = None;
         }
         ui.horizontal(|ui| {
+            if let Some(recorder) = &self.recorder {
+                let seconds = recorder.seconds() as u64;
+                ui.colored_label(
+                    Color32::from_rgb(0xE0, 0x30, 0x30),
+                    format!("● REC {}:{:02}", seconds / 60, seconds % 60),
+                );
+                ui.separator();
+            }
             if let Some(session) = &self.session {
                 let cheats = session.gb.cheats();
                 ui.label(format!("slot {}", session.slots.slot()));
@@ -1875,6 +1988,7 @@ impl eframe::App for FrekiApp {
             self.set_paused(paused);
         }
         self.emulate(&ctx);
+        self.poll_recordings(false);
         // Changes while a game uses its own settings are its own.
         if let (Some(key), Some(_)) = (&self.game_key, &self.general_settings) {
             let now = GameSettings::of(&self.settings);
@@ -1978,6 +2092,8 @@ impl eframe::App for FrekiApp {
 
     fn on_exit(&mut self) {
         self.close_rom();
+        // Let videos being written finish their files.
+        self.poll_recordings(true);
     }
 }
 

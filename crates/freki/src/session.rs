@@ -118,12 +118,7 @@ impl Session {
         rgba: &[u8],
         [width, height]: [usize; 2],
     ) -> Result<PathBuf, Box<dyn Error>> {
-        let stem = self.rom_path.with_extension("");
-        let stem = stem.to_string_lossy();
-        let path = (1..10_000)
-            .map(|n| PathBuf::from(format!("{stem}-{n:03}.png")))
-            .find(|p| !p.exists())
-            .ok_or("too many screenshots")?;
+        let path = self.next_file("png").ok_or("too many screenshots")?;
         let file = fs::File::create(&path)?;
         let mut encoder =
             png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
@@ -131,6 +126,16 @@ impl Session {
         encoder.set_depth(png::BitDepth::Eight);
         encoder.write_header()?.write_image_data(rgba)?;
         Ok(path)
+    }
+
+    /// `<rom>-NNN.<extension>` next to the ROM, with the first free number (screenshots,
+    /// videos).
+    pub fn next_file(&self, extension: &str) -> Option<PathBuf> {
+        let stem = self.rom_path.with_extension("");
+        let stem = stem.to_string_lossy();
+        (1..10_000)
+            .map(|n| PathBuf::from(format!("{stem}-{n:03}.{extension}")))
+            .find(|p| !p.exists())
     }
 
     pub fn cheat_file(&self) -> PathBuf {

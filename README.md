@@ -53,7 +53,8 @@ Named after Freki, one of Odin's two wolves.
 - **Cheats:** GameShark and Game Genie codes, a cheat manager, and a memory search that
   finds values such as lives or money and turns them into cheats. RetroArch cheat files
   are read and written, and codes made for another version of the game are marked
-- **Screenshots** of the screen as shown
+- **Screenshots** of the screen as shown, and **video recording** with sound (WebM: AV1
+  picture, Opus sound), encoded inside freki without external tools
 
 ### Debugging
 
@@ -110,6 +111,7 @@ cargo run --release -- path/to/game.gb    # or start without a ROM: File → Ope
 | Cheats on / off | F9 | |
 | Keyboard to the other linked Game Boy | F4 | |
 | Screenshot | F12 | |
+| Record video (start / stop) | Shift+F12 | |
 | Fullscreen | Alt+Enter (Esc leaves) | |
 | Open ROM / reset / quit | Ctrl+O / Ctrl+R / Ctrl+Q | |
 
@@ -127,6 +129,7 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 | `game.cht` | Cheats, saved whenever one is added, removed or switched on or off |
 | `game.bps`, `game.ips` | Patch applied when the game loads |
 | `game-001.png`, … | Screenshots |
+| `game-001.webm`, … | Videos (File → Record video) |
 
 ## Consoles and boot ROMs
 
@@ -149,6 +152,16 @@ sound, choose your own boot ROM dumps under **Emulation → Boot ROM → Choose 
 256-byte Game Boy and the 2304-byte Game Boy Color boot ROM. They are Nintendo's code and
 not included. The GBC boot ROM also picks the colours for original Game Boy games; without
 it they are shown in grey.
+
+## Recording video
+
+**File → Record video** (Shift+F12) records the screen as shown (Super Game Boy border,
+linked games and frame blending included) with its sound, until you stop it; the video is
+saved next to the ROM as `game-001.webm`. The picture is doubled in size without
+smoothing, so pixels stay sharp, and encoded as AV1; the sound as Opus. Both encoders are
+pure Rust and part of freki. Encoding runs on all CPU cores in the background, so the game
+does not slow down. The files play in Chrome, Firefox, VLC and mpv; Safari plays AV1 only
+on recent Apple hardware.
 
 ## Link cable
 
@@ -210,6 +223,7 @@ freki --headless rtc.gbc --write-sav a.sav && freki --headless rtc.gbc --sav a.s
 freki --headless game.gbc --cheats --cheat 3 --cheat 010A10C1   # cheat 3 of game.cht, and a code
 freki --headless tetris.gb --link tetris.gb --press 300:start --press2 300:start --screenshot both.png
 freki --headless game.gbc --frames 400 --frame-blend --screenshot blended.png
+freki --headless game.gbc --frames 1200 --record clip.webm          # 20 seconds of video
 ```
 
 ## Development
@@ -217,7 +231,7 @@ freki --headless game.gbc --frames 400 --frame-blend --screenshot blended.png
 | Path | What |
 |---|---|
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
-| `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound |
+| `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ```sh

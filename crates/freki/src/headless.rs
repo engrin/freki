@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use freki_core::{BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Link, Model};
 
 use crate::console::{self, Console};
+use crate::record::Recorder;
 use crate::rom_file;
 use crate::session::{self, Start};
 use crate::settings::{self, Palette};
@@ -85,6 +86,7 @@ at the end (in this order):
   --palette NAME          DMG shades for the screenshot: green, grey (default), pocket, light
   --color-correction      GBC colours as the GBC screen shows them (default: raw)
   --frame-blend           mix the screenshot with the frame before, like the real LCD
+  --record FILE.webm      record a video (AV1 picture, Opus sound) of the whole run
   --save-state FILE       save the machine state
   --write-sav FILE        write the battery save (RAM, then the clock, if any)
 
@@ -122,6 +124,7 @@ struct Options {
     palette: Option<Palette>,
     color_correction: bool,
     frame_blend: bool,
+    record: Option<PathBuf>,
     save_state: Option<PathBuf>,
     write_sav: Option<PathBuf>,
 }
@@ -246,6 +249,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             }
             "--color-correction" | "--colour-correction" => o.color_correction = true,
             "--frame-blend" => o.frame_blend = true,
+            "--record" => o.record = Some(value(arg)?.into()),
             "--save-state" => o.save_state = Some(value(arg)?.into()),
             "--write-sav" => o.write_sav = Some(value(arg)?.into()),
             a if a.starts_with('-') => return Err(format!("unknown option {a}")),
@@ -436,6 +440,17 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     let mut frame = 0;
     // With --frame-blend: the picture before the last frame.
     let mut previous = None;
+    let mut recorder = match &o.record {
+        Some(path) => {
+            gb.set_audio_sample_rate(48_000);
+            let (_, size) = picture(o, &gb, partner.as_ref().map(|(gb2, _)| gb2));
+            Some(Recorder::start(path, size)?)
+        }
+        None => None,
+    };
+    // The picture of the frame before, for --record with --frame-blend.
+    let mut recorded: Option<Vec<u8>> = None;
+    let mut sound = Vec::new();
     while frame < o.frames {
         if o.frame_blend && frame + 1 == o.frames {
             previous = Some(picture(o, &gb, partner.as_ref().map(|(gb2, _)| gb2)));
@@ -458,6 +473,9 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
                 break;
             }
             frame += 1;
+            if let Some(recorder) = recorder.as_mut() {
+                record_frame(o, recorder, &mut gb, Some(gb2), &mut recorded, &mut sound)?;
+            }
             continue;
         }
         let result = match trace.as_mut() {
@@ -490,6 +508,9 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             }
         }
         frame += 1;
+        if let Some(recorder) = recorder.as_mut() {
+            record_frame(o, recorder, &mut gb, None, &mut recorded, &mut sound)?;
+        }
         if let Some(text) = &o.until_serial
             && String::from_utf8_lossy(gb.serial_output()).contains(text.as_str())
         {
@@ -506,6 +527,19 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     }
     if let Some(out) = trace.as_mut() {
         out.flush()?;
+    }
+    if let Some(recorder) = recorder {
+        let seconds = recorder.seconds();
+        let summary = recorder
+            .stop()
+            .join()
+            .map_err(|_| "the video encoder crashed")??;
+        out!(
+            "video saved to {} ({seconds:.1} s, {} frames, {} KB)",
+            summary.path.display(),
+            summary.frames,
+            summary.bytes / 1024
+        );
     }
 
     for line in &o.exec {
@@ -546,6 +580,29 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         );
     }
     Ok(status)
+}
+
+/// Hands the frame just run (and its sound) to the recorder.
+fn record_frame(
+    o: &Options,
+    recorder: &mut Recorder,
+    gb: &mut GameBoy,
+    partner: Option<&GameBoy>,
+    previous: &mut Option<Vec<u8>>,
+    sound: &mut Vec<f32>,
+) -> Result<(), String> {
+    let (rgba, size) = picture(o, gb, partner);
+    let mut shown = rgba.clone();
+    if o.frame_blend
+        && let Some(before) = previous.as_ref()
+        && before.len() == shown.len()
+    {
+        settings::blend(before, &mut shown);
+    }
+    *previous = Some(rgba);
+    sound.clear();
+    gb.drain_audio(sound);
+    recorder.frame(&shown, size, sound)
 }
 
 /// The screen as a screenshot shows it (RGBA, with its size); with a linked game, both.
