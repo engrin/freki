@@ -72,9 +72,11 @@ same tools: `regs`, `dis`, `step`, `break`, `watch`, `breaks`.
 | Pause | P | |
 | Fullscreen | Alt+Enter (Esc leaves) | |
 
-Gamepads can be plugged in while freki is running. The Game Boy buttons can be bound to
-other keys and gamepad buttons under Emulation → Controls… (click a binding, then press the
-key or button); the left stick always steers too.
+Gamepads can be plugged in while freki is running. Emulation → Controls… shows a Game Boy
+(or Game Boy Color, matching the game) with each button's key or gamepad button beside it;
+click one, then press the new key or button. Xbox (360, One, Series), PlayStation 4 and 5,
+Steam and Switch Pro controllers are recognised and shown with their own button labels
+(Ⓐ, ✕, Options, Menu, …); others by position. The left stick always steers too.
 
 ### Headless runs
 

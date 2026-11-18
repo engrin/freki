@@ -4,6 +4,8 @@
 //! the left stick always steers as well.
 
 use freki_core::Button;
+
+use crate::controls::ControllerKind;
 use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Replay};
 use gilrs::{Axis, Button as Pad, Gilrs};
 
@@ -107,6 +109,14 @@ impl Gamepads {
             .gamepads(&ids)
             .finish(gilrs)
             .ok()
+    }
+
+    /// The first connected controller: its name, kind and whether it can rumble.
+    pub fn connected(&self) -> Option<(String, ControllerKind, bool)> {
+        let gilrs = self.gilrs.as_ref()?;
+        let (_, pad) = gilrs.gamepads().next()?;
+        let kind = ControllerKind::detect(pad.name(), pad.vendor_id(), pad.product_id());
+        Some((pad.name().to_string(), kind, pad.is_ff_supported()))
     }
 
     /// The button pressed since the last call, if any (call `update` first).

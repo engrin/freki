@@ -174,10 +174,20 @@ impl Bindings {
             .insert(button_name(button).into(), pad_name(pad).into());
     }
 
-    pub fn is_default(&self) -> bool {
-        BUTTONS
-            .iter()
-            .all(|&b| self.key(b) == default_key(b) && self.pad(b) == default_pad(b))
+    pub fn keys_default(&self) -> bool {
+        BUTTONS.iter().all(|&b| self.key(b) == default_key(b))
+    }
+
+    pub fn pads_default(&self) -> bool {
+        BUTTONS.iter().all(|&b| self.pad(b) == default_pad(b))
+    }
+
+    pub fn reset_keys(&mut self) {
+        self.keys.clear();
+    }
+
+    pub fn reset_pads(&mut self) {
+        self.pad.clear();
     }
 }
 
@@ -189,12 +199,12 @@ mod tests {
     fn defaults_and_swapping() {
         let mut b = Bindings::default();
         assert_eq!(b.key(Button::A), Key::X);
-        assert!(b.is_default());
+        assert!(b.keys_default() && b.pads_default());
         b.set_key(Button::A, Key::Z); // Z was B: B gets X
         assert_eq!((b.key(Button::A), b.key(Button::B)), (Key::Z, Key::X));
         b.set_pad(Button::Start, Pad::North);
         assert_eq!(b.pad(Button::Start), Pad::North);
-        assert!(!b.is_default());
+        assert!(!(b.keys_default() && b.pads_default()));
     }
 
     #[test]

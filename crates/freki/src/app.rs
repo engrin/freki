@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Color32, ColorImage, Key, KeyboardShortcut, Modifiers, Rect, TextureHandle,
-    TextureOptions, pos2, vec2,
+    self, Align2, Color32, ColorImage, Key, KeyboardShortcut, Modifiers, Pos2, Rect, Sense, Stroke,
+    StrokeKind, TextureHandle, TextureOptions, pos2, vec2,
 };
 use freki_core::{
     Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
@@ -14,6 +14,7 @@ use freki_core::{
 
 use crate::audio::Audio;
 use crate::console::{self, Console};
+use crate::controls;
 use crate::cpu_view::{self, CpuView};
 use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
@@ -43,6 +44,24 @@ const STATUS_DURATION: Duration = Duration::from_secs(3);
 enum Capture {
     Key,
     Pad,
+}
+
+/// Which bindings the Controls window shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControlsTab {
+    Keyboard,
+    Gamepad,
+}
+
+/// A key's name as shown on its keycap: arrows get an arrow.
+fn key_label(key: Key) -> String {
+    match key {
+        Key::ArrowUp => "↑ Up arrow".into(),
+        Key::ArrowDown => "↓ Down arrow".into(),
+        Key::ArrowLeft => "← Left arrow".into(),
+        Key::ArrowRight => "→ Right arrow".into(),
+        other => other.name().into(),
+    }
 }
 
 /// Frame pacing statistics, shown in the status bar by View → Show frame timing.
@@ -146,6 +165,7 @@ pub struct FrekiApp {
     show_controls: bool,
     /// The Game Boy button whose key or gamepad button is being chosen.
     capture: Option<(Button, Capture)>,
+    controls_tab: ControlsTab,
     controls_message: Option<String>,
     show_about: bool,
     new_code: String,
@@ -186,6 +206,7 @@ impl FrekiApp {
             show_search: false,
             show_controls: false,
             capture: None,
+            controls_tab: ControlsTab::Keyboard,
             controls_message: None,
             show_about: false,
             new_code: String::new(),
@@ -1162,79 +1183,278 @@ impl FrekiApp {
         egui::Window::new("Controls")
             .open(&mut open)
             .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(
-                    "Click a binding, then press the key or gamepad button to use (Esc cancels).",
-                );
-                egui::Grid::new("bindings").striped(true).show(ui, |ui| {
-                    ui.strong("Game Boy");
-                    ui.strong("Keyboard");
-                    ui.strong("Gamepad");
-                    ui.end_row();
-                    for button in input::BUTTONS {
-                        ui.label(input::button_name(button));
-                        for kind in [Capture::Key, Capture::Pad] {
-                            let waiting = self.capture == Some((button, kind));
-                            let text = match (waiting, kind) {
-                                (true, Capture::Key) => "press a key…".to_string(),
-                                (true, Capture::Pad) => "press a button…".to_string(),
-                                (false, Capture::Key) => {
-                                    self.settings.bindings.key(button).name().to_string()
-                                }
-                                (false, Capture::Pad) => {
-                                    input::pad_name(self.settings.bindings.pad(button)).to_string()
-                                }
-                            };
-                            if ui.add(egui::Button::new(text).selected(waiting)).clicked() {
-                                self.capture = if waiting { None } else { Some((button, kind)) };
-                                self.controls_message = None;
-                                // Forget presses made before the capture started.
-                                self.gamepads.update();
-                                self.gamepads.take_pressed();
-                            }
-                        }
-                        ui.end_row();
-                    }
-                });
-                if let Some(message) = &self.controls_message {
-                    ui.colored_label(egui::Color32::LIGHT_RED, message);
-                }
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.settings.bindings.is_default(),
-                            egui::Button::new("Reset to defaults"),
-                        )
-                        .clicked()
-                    {
-                        self.settings.bindings = Default::default();
-                        self.capture = None;
-                    }
-                    ui.weak("The left stick also steers.");
-                });
-                ui.separator();
-                egui::Grid::new("controls").striped(true).show(ui, |ui| {
-                    for (what, keys) in [
-                        ("Save / load state", "F5 / F8"),
-                        ("Previous / next slot", "F6 / F7"),
-                        ("Rewind", "hold R"),
-                        ("Fast-forward", "hold Tab"),
-                        ("Pause", "P"),
-                        ("Cheats on/off", "F9"),
-                        ("Screenshot", "F12"),
-                        ("Open ROM / reset / quit", "Ctrl+O / Ctrl+R / Ctrl+Q"),
-                    ] {
-                        ui.label(what);
-                        ui.label(keys);
-                        ui.end_row();
-                    }
-                });
-                ui.label("The terminal freki was started from also accepts commands (type help).");
-            });
+            .show(ctx, |ui| self.controls_contents(ui));
         if !open {
             self.capture = None;
         }
         self.show_controls = open;
+    }
+
+    /// The Controls window: a console with each button's binding beside it, for the
+    /// keyboard or the gamepad, and the emulator's own shortcuts.
+    fn controls_contents(&mut self, ui: &mut egui::Ui) {
+        let kind = match self.controls_tab {
+            ControlsTab::Keyboard => Capture::Key,
+            ControlsTab::Gamepad => Capture::Pad,
+        };
+        let connected = self.gamepads.connected();
+        ui.horizontal(|ui| {
+            for (tab, name) in [
+                (ControlsTab::Keyboard, "Keyboard"),
+                (ControlsTab::Gamepad, "Gamepad"),
+            ] {
+                if ui
+                    .selectable_label(self.controls_tab == tab, name)
+                    .clicked()
+                    && self.controls_tab != tab
+                {
+                    self.controls_tab = tab;
+                    self.capture = None;
+                    self.controls_message = None;
+                }
+            }
+            ui.separator();
+            match (self.capture, &self.controls_message) {
+                (Some((button, _)), _) => {
+                    let what = if kind == Capture::Key {
+                        "key"
+                    } else {
+                        "button"
+                    };
+                    ui.colored_label(
+                        controls::AMBER,
+                        format!(
+                            "Press the {what} for {} … (Esc cancels)",
+                            input::button_name(button)
+                        ),
+                    );
+                }
+                (None, Some(message)) => {
+                    ui.colored_label(Color32::LIGHT_RED, message);
+                }
+                (None, None) => {
+                    let what = if kind == Capture::Key {
+                        "key"
+                    } else {
+                        "button"
+                    };
+                    ui.weak(format!(
+                        "Click a binding, then press the new {what}. Esc cancels."
+                    ));
+                }
+            }
+        });
+        if kind == Capture::Pad {
+            match &connected {
+                Some((name, _, rumble)) => {
+                    let text = if *rumble {
+                        format!("{name} · rumble")
+                    } else {
+                        name.clone()
+                    };
+                    ui.colored_label(Color32::from_rgb(0xB9, 0xD9, 0xB9), format!("● {text}"));
+                }
+                None => {
+                    ui.weak("No controller connected: buttons are named by position.");
+                }
+            }
+        }
+        ui.add_space(4.0);
+
+        let pad_kind = connected.map_or(controls::ControllerKind::Generic, |(_, kind, _)| kind);
+        let dmg = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.gb.model() == freki_core::Model::Dmg);
+        // The picture is laid out at 800×500 points and shrinks to fit the window.
+        let [width, height] = controls::layout::SIZE;
+        let k = (ui.ctx().content_rect().width() - 40.0).clamp(width * 0.5, width) / width;
+        let (area, _) = ui.allocate_exact_size(vec2(width, height) * k, Sense::hover());
+        let origin = area.min;
+        let map = |p: Pos2| origin + p.to_vec2() * k;
+        let painter = ui.painter_at(area);
+        let line = Stroke::new(1.2, Color32::from_rgb(0x5C, 0x5C, 0x66));
+        let waiting_for = self.capture.filter(|(_, k)| *k == kind).map(|(b, _)| b);
+        for button in input::BUTTONS {
+            let points: Vec<Pos2> = controls::layout::leader(button)
+                .into_iter()
+                .map(map)
+                .collect();
+            let waiting = waiting_for == Some(button);
+            let stroke = if waiting {
+                Stroke::new(2.0, controls::AMBER)
+            } else {
+                line
+            };
+            painter.add(egui::Shape::line(points.clone(), stroke));
+            let dot = if waiting {
+                controls::AMBER
+            } else {
+                Color32::from_rgb(0x7B, 0x9C, 0xC9)
+            };
+            painter.circle_filled(*points.last().unwrap(), 3.0 * k, dot);
+        }
+        controls::draw_console(&painter, origin, k, dmg, waiting_for);
+
+        let font = egui::FontId::proportional(13.0 * k);
+        for button in input::BUTTONS {
+            let (chip, label_pos, label_align) = controls::layout::chip(button);
+            let chip = Rect::from_min_max(map(chip.min), map(chip.max));
+            let waiting = waiting_for == Some(button);
+            let label_color = if waiting {
+                controls::AMBER
+            } else {
+                Color32::from_gray(0xA8)
+            };
+            painter.text(
+                map(label_pos),
+                label_align,
+                input::button_name(button),
+                egui::FontId::proportional(12.0 * k),
+                label_color,
+            );
+            let response = ui.interact(
+                chip,
+                ui.scope_id().with(("binding", button as u8)),
+                Sense::click(),
+            );
+            let fill = if waiting {
+                Color32::from_rgb(0x3A, 0x32, 0x20)
+            } else if response.hovered() {
+                Color32::from_rgb(0x38, 0x38, 0x3F)
+            } else {
+                Color32::from_rgb(0x2C, 0x2C, 0x31)
+            };
+            let border = if waiting {
+                controls::AMBER
+            } else {
+                Color32::from_rgb(0x4A, 0x4A, 0x52)
+            };
+            let text_color = if waiting {
+                controls::AMBER
+            } else {
+                Color32::from_gray(0xF0)
+            };
+            let radius = |v: f32| (v * k).round() as u8;
+            if kind == Capture::Key {
+                // A keycap: a thicker bottom edge.
+                painter.rect_filled(chip, radius(5.0), border);
+                painter.rect(
+                    chip.with_max_y(chip.max.y - 3.0 * k),
+                    radius(5.0),
+                    fill,
+                    Stroke::new(1.0, border),
+                    StrokeKind::Inside,
+                );
+                let text = if waiting {
+                    "press a key…".to_string()
+                } else {
+                    key_label(self.settings.bindings.key(button))
+                };
+                painter.text(
+                    chip.center() - vec2(0.0, 1.5 * k),
+                    Align2::CENTER_CENTER,
+                    text,
+                    font.clone(),
+                    text_color,
+                );
+            } else {
+                painter.rect(
+                    chip,
+                    radius(14.0),
+                    fill,
+                    Stroke::new(1.0, border),
+                    StrokeKind::Inside,
+                );
+                if waiting {
+                    painter.text(
+                        chip.center(),
+                        Align2::CENTER_CENTER,
+                        "press a button…",
+                        font.clone(),
+                        text_color,
+                    );
+                } else {
+                    let (glyph, name) =
+                        controls::pad_label(pad_kind, self.settings.bindings.pad(button));
+                    let size = 18.0 * k;
+                    let glyph_w = controls::glyph_width(&painter, size, &glyph);
+                    let text_w = painter
+                        .layout_no_wrap(name.clone(), font.clone(), text_color)
+                        .size()
+                        .x;
+                    let gap = if glyph_w > 0.0 { 7.0 * k } else { 0.0 };
+                    let left = chip.center().x - (glyph_w + gap + text_w) / 2.0;
+                    controls::draw_glyph(
+                        &painter,
+                        pos2(left + glyph_w / 2.0, chip.center().y),
+                        size,
+                        &glyph,
+                    );
+                    painter.text(
+                        pos2(left + glyph_w + gap, chip.center().y),
+                        Align2::LEFT_CENTER,
+                        name,
+                        font.clone(),
+                        text_color,
+                    );
+                }
+            }
+            if response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                self.capture = if waiting { None } else { Some((button, kind)) };
+                self.controls_message = None;
+                // Forget presses made before the capture started.
+                self.gamepads.update();
+                self.gamepads.take_pressed();
+            }
+        }
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            let (default, label) = match kind {
+                Capture::Key => (
+                    self.settings.bindings.keys_default(),
+                    "Reset keyboard to defaults",
+                ),
+                Capture::Pad => (
+                    self.settings.bindings.pads_default(),
+                    "Reset gamepad to defaults",
+                ),
+            };
+            if ui.add_enabled(!default, egui::Button::new(label)).clicked() {
+                match kind {
+                    Capture::Key => self.settings.bindings.reset_keys(),
+                    Capture::Pad => self.settings.bindings.reset_pads(),
+                }
+                self.capture = None;
+            }
+            if kind == Capture::Pad {
+                ui.weak("The left stick also steers.");
+            }
+        });
+        egui::CollapsingHeader::new("Emulator shortcuts").show(ui, |ui| {
+            egui::Grid::new("controls").striped(true).show(ui, |ui| {
+                for (what, keys) in [
+                    ("Save / load state", "F5 / F8"),
+                    ("Previous / next slot", "F6 / F7"),
+                    ("Rewind", "hold R"),
+                    ("Fast-forward", "hold Tab"),
+                    ("Pause", "P"),
+                    ("Cheats on/off", "F9"),
+                    ("Screenshot", "F12"),
+                    ("Fullscreen", "Alt+Enter (Esc leaves)"),
+                    ("Open ROM / reset / quit", "Ctrl+O / Ctrl+R / Ctrl+Q"),
+                ] {
+                    ui.label(what);
+                    ui.label(keys);
+                    ui.end_row();
+                }
+            });
+            ui.label("The terminal freki was started from also accepts commands (type help).");
+        });
     }
 
     fn info_windows(&mut self, ctx: &egui::Context) {
