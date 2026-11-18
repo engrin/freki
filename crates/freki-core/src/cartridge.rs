@@ -10,6 +10,7 @@ use crate::CLOCK_HZ;
 use crate::huc3::HuC3Clock;
 use crate::mbc7::{self, Mbc7};
 use crate::mmm01::Mmm01;
+use crate::tama5::{self, Tama5};
 
 const ROM_BANK: usize = 0x4000;
 const RAM_BANK: usize = 0x2000;
@@ -84,6 +85,9 @@ pub enum Mbc {
     /// MMM01: multi-game collections; a menu, then one game's slice of the ROM (see
     /// [`crate::mmm01`]).
     Mmm01(Mmm01),
+    /// Bandai TAMA5 (Tamagotchi 3): banking, save memory and clock all behind a register
+    /// window at $A000/$A001 (see [`crate::tama5`]).
+    Tama5(Box<Tama5>),
 }
 
 /// MBC3 real-time clock. It runs on emulated time: one second per [`CLOCK_HZ`] T-cycles.
@@ -338,6 +342,7 @@ impl Cartridge {
                 rom_bank: 1,
                 chip: Mbc7::default(),
             },
+            0xFD => Mbc::Tama5(Box::default()),
             0xFE => Mbc::HuC3 {
                 mode: 0,
                 rom_bank: 1,
@@ -353,11 +358,23 @@ impl Cartridge {
         };
         let battery = matches!(
             rom[header + 0x147],
-            0x03 | 0x06 | 0x0D | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFE | 0xFF
+            0x03 | 0x06
+                | 0x0D
+                | 0x09
+                | 0x0F
+                | 0x10
+                | 0x13
+                | 0x1B
+                | 0x1E
+                | 0x22
+                | 0xFD
+                | 0xFE
+                | 0xFF
         );
         let ram_size = match (&mbc, rom[header + 0x149]) {
             (Mbc::Mbc2 { .. }, _) => MBC2_RAM,
             (Mbc::Mbc7 { .. }, _) => mbc7::EEPROM_BYTES,
+            (Mbc::Tama5(_), _) => tama5::RAM_BYTES,
             (_, 0x02) => 8 * 1024,
             (_, 0x03) => 32 * 1024,
             (_, 0x04) => 128 * 1024,
@@ -427,7 +444,10 @@ impl Cartridge {
 
     /// Whether the cartridge has a real-time clock (MBC3 with timer, HuC3).
     pub fn has_clock(&self) -> bool {
-        matches!(self.mbc, Mbc::Mbc3 { rtc: Some(_), .. } | Mbc::HuC3 { .. })
+        matches!(
+            self.mbc,
+            Mbc::Mbc3 { rtc: Some(_), .. } | Mbc::HuC3 { .. } | Mbc::Tama5(_)
+        )
     }
 
     /// External RAM contents.
@@ -442,6 +462,7 @@ impl Cartridge {
         match &self.mbc {
             Mbc::Mbc3 { rtc: Some(rtc), .. } => data.extend(rtc.to_save(now)),
             Mbc::HuC3 { clock, .. } => data.extend(clock.to_save(now)),
+            Mbc::Tama5(chip) => data.extend(chip.to_save(now)),
             _ => {}
         }
         data
@@ -465,6 +486,7 @@ impl Cartridge {
             Mbc::HuC3 { clock, .. } => {
                 clock.load_save(footer, now);
             }
+            Mbc::Tama5(chip) => chip.load_save(footer, now),
             _ => {}
         }
     }
@@ -479,6 +501,7 @@ impl Cartridge {
         match &mut self.mbc {
             Mbc::Mbc3 { rtc: Some(rtc), .. } => rtc.tick(cycles),
             Mbc::HuC3 { clock, .. } => clock.tick(cycles),
+            Mbc::Tama5(chip) => chip.tick(cycles),
             Mbc::Mbc5 {
                 rumble: true,
                 motor,
@@ -585,7 +608,7 @@ impl Cartridge {
                 ram_bank as usize * RAM_BANK + local
             }
             // The EEPROM is reached through registers only.
-            Mbc::Mbc7 { .. } => return None,
+            Mbc::Mbc7 { .. } | Mbc::Tama5(_) => return None,
         };
         Some(offset % self.ram.len())
     }
@@ -611,6 +634,13 @@ impl Cartridge {
                     (true, false) => 0,
                     (true, true) => (bank2 as usize) << shift,
                     (false, _) => ((bank2 as usize) << shift) | bank1 as usize,
+                }
+            }
+            Mbc::Tama5(ref chip) => {
+                if low {
+                    0
+                } else {
+                    chip.rom_bank()
                 }
             }
             Mbc::Mmm01(ref m) => {
@@ -654,7 +684,8 @@ impl Cartridge {
     /// Write to $0000–$7FFF (MBC control registers).
     pub fn write_rom(&mut self, addr: u16, value: u8) {
         match &mut self.mbc {
-            Mbc::RomOnly => {}
+            // TAMA5 is driven through $A000/$A001 only.
+            Mbc::RomOnly | Mbc::Tama5(_) => {}
             Mbc::Mmm01(m) => m.write(addr, value),
             Mbc::Mbc1 {
                 ram_enabled,
@@ -786,6 +817,7 @@ impl Cartridge {
                 ..
             } if addr < 0xB000 => return chip.read((addr >> 4) as u8 & 0x0F),
             Mbc::Mbc7 { .. } => return 0xFF,
+            Mbc::Tama5(chip) => return chip.read(addr, &self.ram),
             _ => {}
         }
         let Some(i) = self.ram_offset(addr) else {
@@ -810,6 +842,12 @@ impl Cartridge {
             // the infrared LED, the ready flag).
             if *mode == 0x0B {
                 clock.command(value);
+            }
+            return;
+        }
+        if let Mbc::Tama5(chip) = &mut self.mbc {
+            if chip.write(addr, value, &mut self.ram) {
+                self.ram_dirty = true;
             }
             return;
         }

@@ -19,6 +19,7 @@ pub mod mmm01;
 pub mod ppu;
 pub mod serial;
 pub mod state;
+pub mod tama5;
 pub mod timer;
 
 pub use boot::{BootRom, BootRomError};
