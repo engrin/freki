@@ -24,6 +24,25 @@ use crate::rom_file;
 use crate::session::{self, Start};
 use crate::settings::{self, Palette};
 
+/// Prints a line to stdout. When stdout is a closed pipe (`freki --headless … | head`),
+/// exits quietly with status 141, as a program killed by SIGPIPE would, instead of
+/// panicking like `println!`.
+macro_rules! out {
+    ($($arg:tt)*) => {
+        print_line(format_args!($($arg)*))
+    };
+}
+
+fn print_line(args: std::fmt::Arguments) {
+    let result = writeln!(std::io::stdout().lock(), "{args}");
+    if let Err(e) = result {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            std::process::exit(141);
+        }
+        panic!("failed printing to stdout: {e}");
+    }
+}
+
 pub const USAGE: &str = "\
 usage: freki --headless ROM [options]
 
@@ -151,7 +170,7 @@ pub fn main(args: &[String]) -> i32 {
     let options = match parse_args(args) {
         Ok(Some(options)) => options,
         Ok(None) => {
-            println!("{USAGE}");
+            out!("{USAGE}");
             return 0;
         }
         Err(e) => {
@@ -316,7 +335,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     let rom_path = o.rom.as_deref().expect("checked by parse_args");
     let rom = rom_file::load(rom_path, o.patch.as_deref())?;
     if !rom.describe().is_empty() {
-        println!("loaded {}{}", session::file_name(rom_path), rom.describe());
+        out!("loaded {}{}", session::file_name(rom_path), rom.describe());
     }
     let mut start = Start {
         model: o.model,
@@ -341,11 +360,11 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             (Some(saved), Some(off)) => {
                 start_time = saved.saturating_add(off);
                 gb.load_save_data(&data, Some(start_time));
-                println!("clock caught up on {off} s off");
+                out!("clock caught up on {off} s off");
             }
             (saved, off) => {
                 if off.is_some() {
-                    println!("--off ignored: the save has no clock");
+                    out!("--off ignored: the save has no clock");
                 }
                 start_time = saved.unwrap_or(0);
                 gb.load_save_data(&data, None);
@@ -373,7 +392,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         if let Some(e) = out.strip_prefix("error: ") {
             return Err(format!("{line}: {e}").into());
         }
-        println!("{out}");
+        out!("{out}");
     }
     for addr in &o.breaks {
         command(&mut console, &format!("break {addr}"), &mut gb)?;
@@ -394,7 +413,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     let mut partner = match &o.link {
         Some(path) => {
             let rom = rom_file::load(path, None)?;
-            println!("linked {}{}", session::file_name(path), rom.describe());
+            out!("linked {}{}", session::file_name(path), rom.describe());
             let partner_start = Start {
                 model: None,
                 ..start.clone()
@@ -426,7 +445,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
 
         if let Some((gb2, link)) = partner.as_mut() {
             if let Err(e) = link.run_frame(&mut gb, gb2) {
-                println!("frame {frame}: {e}");
+                out!("frame {frame}: {e}");
                 status = 1;
                 break;
             }
@@ -448,16 +467,16 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         };
         match result {
             Ok(Some(stop)) => {
-                println!("frame {frame}: {}", console::describe_stop(&stop));
-                println!("{}", console::registers(&gb));
-                println!("{}", console.execute("dis", &mut gb));
+                out!("frame {frame}: {}", console::describe_stop(&stop));
+                out!("{}", console::registers(&gb));
+                out!("{}", console.execute("dis", &mut gb));
                 status = 2;
                 break;
             }
             Ok(None) => {}
             Err(e) => {
-                println!("frame {frame}: {e}");
-                println!("{}", console::registers(&gb));
+                out!("frame {frame}: {e}");
+                out!("{}", console::registers(&gb));
                 status = 1;
                 break;
             }
@@ -466,14 +485,14 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         if let Some(text) = &o.until_serial
             && String::from_utf8_lossy(gb.serial_output()).contains(text.as_str())
         {
-            println!("frame {frame}: serial output contains {text:?}");
+            out!("frame {frame}: serial output contains {text:?}");
             break;
         }
     }
     if status == 0 && frame == o.frames {
-        println!("ran {frame} frame{}", if frame == 1 { "" } else { "s" });
+        out!("ran {frame} frame{}", if frame == 1 { "" } else { "s" });
         if let Some(text) = &o.until_serial {
-            println!("serial output never contained {text:?}");
+            out!("serial output never contained {text:?}");
             status = 1;
         }
     }
@@ -482,11 +501,11 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     }
 
     for line in &o.exec {
-        println!("> {line}");
-        println!("{}", console.execute(line, &mut gb));
+        out!("> {line}");
+        out!("{}", console.execute(line, &mut gb));
     }
     if o.serial {
-        println!(
+        out!(
             "serial output:\n{}",
             String::from_utf8_lossy(gb.serial_output())
         );
@@ -504,12 +523,12 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             None => shot(&gb),
         };
         save_png(path, &rgba, size)?;
-        println!("screenshot saved to {}", path.display());
+        out!("screenshot saved to {}", path.display());
     }
     if let Some(path) = &o.save_state {
         fs::write(path, gb.save_state())
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-        println!("state saved to {}", path.display());
+        out!("state saved to {}", path.display());
     }
     if let Some(path) = &o.write_sav {
         let now = start_time + frame * u64::from(CYCLES_PER_FRAME) / u64::from(CLOCK_HZ);
@@ -517,7 +536,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             .save_data(now)
             .ok_or("--write-sav: the cartridge has no battery")?;
         fs::write(path, &data).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-        println!(
+        out!(
             "battery save written to {} ({} bytes)",
             path.display(),
             data.len()
