@@ -225,7 +225,8 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     }
     let mut gb = session::power_on(rom.data, &start)?;
     if let Some(path) = &o.sav {
-        gb.load_save_data(&read(path)?);
+        // The clock carries on from the saved time, so runs are repeatable.
+        gb.load_save_data(&read(path)?, None);
     }
     if let Some(path) = &o.load_state {
         gb.load_state(&read(path)?)?;

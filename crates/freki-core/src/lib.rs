@@ -437,15 +437,27 @@ impl GameBoy {
         self.bus.apu.drain_samples(out);
     }
 
-    /// Battery-backed cartridge RAM to write to a save file, or `None` if the cartridge
-    /// has no battery.
-    pub fn save_data(&self) -> Option<&[u8]> {
-        self.bus.cart.has_battery().then(|| self.bus.cart.ram())
+    /// The save file for a battery-backed cartridge, or `None` without a battery: its
+    /// RAM, then the real-time clock (if any) stamped with `now`, the current Unix time in
+    /// seconds.
+    pub fn save_data(&self, now: u64) -> Option<Vec<u8>> {
+        self.bus
+            .cart
+            .has_battery()
+            .then(|| self.bus.cart.save_data(now))
     }
 
-    /// Restores cartridge RAM from a save file.
-    pub fn load_save_data(&mut self, data: &[u8]) {
-        self.bus.cart.load_ram(data);
+    /// Restores cartridge RAM and clock from a save file. The clock catches up on the real
+    /// time since the save was written, up to `now` (Unix seconds); `None` carries on from
+    /// where it was saved.
+    pub fn load_save_data(&mut self, data: &[u8], now: Option<u64>) {
+        self.bus.cart.load_ram(data, now);
+    }
+
+    /// Whether the cartridge has a real-time clock. Its save file then changes with time
+    /// alone, so it is worth writing when the game closes even if RAM did not change.
+    pub fn has_clock(&self) -> bool {
+        self.bus.cart.has_clock()
     }
 
     /// Whether the cartridge has a tilt sensor (MBC7: Kirby Tilt 'n' Tumble, Command

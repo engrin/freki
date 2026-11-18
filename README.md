@@ -14,8 +14,8 @@ Named after Freki, one of Odin's two wolves.
   M-cycle, and the PPU draws pixel by pixel, so mid-scanline effects come out right
 - **Sound** on all four channels, kept in sync with the picture without audible
   adjustments
-- **Cartridges:** no MBC, MBC1 (including multicarts), MBC2, MBC3 with real-time clock,
-  MBC5 with rumble, MBC7 with tilt sensor (tilted with the D-pad, arrow keys or left
+- **Cartridges:** no MBC, MBC1 (including multicarts), MBC2, MBC3 with real-time clock
+  (kept in the save file, so it moves on while freki is closed), MBC5 with rumble, MBC7 with tilt sensor (tilted with the D-pad, arrow keys or left
   stick), and Hudson's HuC1 and HuC3 (with real-time clock)
 - **Optional boot ROMs:** start with the real Game Boy or Game Boy Color boot animation, or
   straight into the game
@@ -103,7 +103,7 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 
 | File | What |
 |---|---|
-| `game.sav` | Battery save, written about once a second while the game saves, and on exit |
+| `game.sav` | Battery save, written about once a second while the game saves, and on exit. A cartridge clock is stored at the end in the format VBA-M, BGB and mGBA use for MBC3 |
 | `game.ss0` … `game.ss9` | Save states (about 150 KB each; they load only into the same game and freki state format) |
 | `game.cht` | Cheats |
 | `game.bps`, `game.ips` | Patch applied when the game loads |

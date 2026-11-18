@@ -321,7 +321,7 @@ impl FrekiApp {
 
     fn close_rom(&mut self) {
         if let Some(mut session) = self.session.take()
-            && let Err(e) = session.write_save()
+            && let Err(e) = session.write_save(true)
         {
             self.set_status(format!("save failed: {e}"));
         }

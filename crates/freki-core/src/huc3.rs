@@ -22,6 +22,7 @@ use serde_big_array::BigArray;
 use crate::CLOCK_HZ;
 
 const MINUTES_PER_DAY: u32 = 24 * 60;
+const SAVE_BYTES: usize = 17;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HuC3Clock {
@@ -61,6 +62,45 @@ impl HuC3Clock {
                 self.minutes = 0;
                 self.days = (self.days + 1) & 0xFFFF;
             }
+        }
+    }
+
+    /// Moves the clock on by `n` seconds at once (time that passed while the game was
+    /// not running).
+    fn advance_seconds(&mut self, n: u64) {
+        let minute = u64::from(CLOCK_HZ) * 60;
+        let cycles = self.cycles + n % 60 * u64::from(CLOCK_HZ);
+        self.cycles = cycles % minute;
+        let minutes = u64::from(self.minutes) + n / 60 + cycles / minute;
+        let per_day = u64::from(MINUTES_PER_DAY);
+        self.minutes = (minutes % per_day) as u32;
+        self.days = ((u64::from(self.days) + minutes / per_day) & 0xFFFF) as u32;
+    }
+
+    /// The clock's block at the end of the save file: the Unix time it was written at
+    /// (64-bit), then minutes and days (16-bit each), all little-endian, then five zero
+    /// bytes where an alarm would go.
+    pub fn to_save(&self, now: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(SAVE_BYTES);
+        out.extend(now.to_le_bytes());
+        out.extend((self.minutes as u16).to_le_bytes());
+        out.extend((self.days as u16).to_le_bytes());
+        out.extend([0; 5]);
+        out
+    }
+
+    /// Reads [`HuC3Clock::to_save`]'s block and runs the clock on to `now`; `None` leaves
+    /// it where it was saved. A short or missing block changes nothing.
+    pub fn load_save(&mut self, data: &[u8], now: Option<u64>) {
+        let Some(block) = data.get(..12) else {
+            return;
+        };
+        let saved = u64::from_le_bytes(block[..8].try_into().unwrap());
+        self.minutes = u32::from(u16::from_le_bytes([block[8], block[9]])) % MINUTES_PER_DAY;
+        self.days = u32::from(u16::from_le_bytes([block[10], block[11]]));
+        self.cycles = 0;
+        if let Some(now) = now {
+            self.advance_seconds(now.saturating_sub(saved));
         }
     }
 
@@ -136,5 +176,24 @@ mod tests {
         assert_eq!(nibbles, [0, 0, 0, 3, 0, 0, 0]);
         clock.command(0x62);
         assert_eq!(clock.response() & 1, 1, "ready");
+    }
+
+    #[test]
+    fn save_catches_up_on_real_time() {
+        let clock = HuC3Clock {
+            minutes: 1430,
+            days: 7,
+            ..Default::default()
+        };
+        let block = clock.to_save(1_000_000);
+        assert_eq!(block.len(), SAVE_BYTES);
+        // 20 minutes and 30 seconds later: past midnight into day 8.
+        let mut loaded = HuC3Clock::default();
+        loaded.load_save(&block, Some(1_000_000 + 20 * 60 + 30));
+        assert_eq!((loaded.minutes, loaded.days), (10, 8));
+        assert_eq!(loaded.cycles, 30 * u64::from(CLOCK_HZ));
+        // Without a time, it carries on from the saved one.
+        loaded.load_save(&block, None);
+        assert_eq!((loaded.minutes, loaded.days), (1430, 7));
     }
 }

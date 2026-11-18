@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use freki_core::{BootRom, CartridgeError, FRAMES_PER_SECOND, GameBoy, Model, Rewind, Stop};
 
@@ -64,10 +64,10 @@ impl Session {
         let mut message = format!("loaded {}{}", file_name(rom_path), rom.describe());
         let mut gb = power_on(rom.data, &start)?;
         let save_path = rom_path.with_extension("sav");
-        if gb.save_data().is_some()
+        if gb.save_data(0).is_some()
             && let Ok(data) = fs::read(&save_path)
         {
-            gb.load_save_data(&data);
+            gb.load_save_data(&data, Some(unix_now()));
             message.push_str(" with save file");
         }
         let title = gb.cartridge().title();
@@ -146,11 +146,11 @@ impl Session {
 
     /// Resets the machine (like power cycling), keeping battery RAM and cheats.
     pub fn reset(&mut self) -> Result<(), Box<dyn Error>> {
-        self.write_save()?;
+        self.write_save(true)?;
         let rom = rom_file::load(&self.rom_path, None)?;
         let mut gb = power_on(rom.data, &self.start)?;
-        if let Some(data) = self.gb.save_data() {
-            gb.load_save_data(data);
+        if let Some(data) = self.gb.save_data(unix_now()) {
+            gb.load_save_data(&data, None);
         }
         *gb.cheats_mut() = self.gb.cheats().clone();
         self.gb = gb;
@@ -173,21 +173,31 @@ impl Session {
     pub fn autosave(&mut self) -> Result<(), Box<dyn Error>> {
         if self.last_save.elapsed() >= SAVE_INTERVAL {
             self.last_save = Instant::now();
-            self.write_save()?;
+            self.write_save(false)?;
         }
         Ok(())
     }
 
-    /// Writes the battery save if the cartridge has a battery and its RAM changed.
-    pub fn write_save(&mut self) -> Result<(), Box<dyn Error>> {
-        if !self.gb.take_save_dirty() {
+    /// Writes the battery save if the cartridge has a battery and its RAM changed. With
+    /// `closing`, a cartridge with a clock is saved even if RAM did not change, so the
+    /// clock's time and timestamp are current for the next start.
+    pub fn write_save(&mut self, closing: bool) -> Result<(), Box<dyn Error>> {
+        let dirty = self.gb.take_save_dirty();
+        if !dirty && !(closing && self.gb.has_clock()) {
             return Ok(());
         }
-        let Some(data) = self.gb.save_data() else {
+        let Some(data) = self.gb.save_data(unix_now()) else {
             return Ok(());
         };
-        write_atomic(&self.save_path, data)
+        write_atomic(&self.save_path, &data)
     }
+}
+
+/// Seconds since the Unix epoch, for the cartridge clock's timestamp in save files.
+pub fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 pub fn file_name(path: &Path) -> String {

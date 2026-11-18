@@ -99,6 +99,7 @@ impl Rtc {
     const DAY_HIGH: usize = 4;
     const HALT: u8 = 0x40;
     const DAY_CARRY: u8 = 0x80;
+    const SAVE_BYTES: usize = 48;
 
     fn halted(&self) -> bool {
         self.regs[Self::DAY_HIGH] & Self::HALT != 0
@@ -139,6 +140,71 @@ impl Rtc {
         }
         *dl = day as u8;
         *dh = (*dh & !1) | (day >> 8) as u8;
+    }
+
+    /// Moves the clock on by `n` seconds at once (time that passed while the game was
+    /// not running). A halted clock stays put.
+    fn advance_seconds(&mut self, mut n: u64) {
+        if self.halted() {
+            return;
+        }
+        // A game can write out-of-range values (say 63 seconds); those count up to their
+        // wrap one second at a time, as on the cartridge.
+        while n > 0 && !(self.regs[0] < 60 && self.regs[1] < 60 && self.regs[2] < 24) {
+            self.advance_second();
+            n -= 1;
+        }
+        if n == 0 {
+            return;
+        }
+        let [s, m, h, dl, dh] = self.regs;
+        let day = u64::from(dh & 1) << 8 | u64::from(dl);
+        let total = ((day * 24 + u64::from(h)) * 60 + u64::from(m)) * 60 + u64::from(s) + n;
+        let days = total / 86_400;
+        let carry = if days >= 512 { Self::DAY_CARRY } else { 0 };
+        let day = days % 512;
+        self.regs = [
+            (total % 60) as u8,
+            (total / 60 % 60) as u8,
+            (total / 3600 % 24) as u8,
+            day as u8,
+            (dh & !1) | carry | (day >> 8) as u8,
+        ];
+    }
+
+    /// The clock as VBA-M, BGB, mGBA and SameBoy append it to the save file: the live and
+    /// the latched registers as ten little-endian 32-bit words, then the Unix time it was
+    /// written at as a 64-bit word.
+    fn to_save(&self, now: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::SAVE_BYTES);
+        for &reg in self.regs.iter().chain(&self.latched) {
+            out.extend(u32::from(reg).to_le_bytes());
+        }
+        out.extend(now.to_le_bytes());
+        out
+    }
+
+    /// Reads [`Rtc::to_save`]'s block (or the older 44-byte one with a 32-bit time) and
+    /// runs the clock on to `now`; `None` leaves it where it was saved.
+    fn from_save(data: &[u8], now: Option<u64>) -> Option<Self> {
+        let word = |i: usize| -> Option<u64> {
+            let bytes = data.get(4 * i..4 * i + 4)?;
+            Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?)))
+        };
+        let reg = |i: usize| word(i).map(|w| w as u8 & Self::MASKS[i % 5]);
+        let mut rtc = Self::default();
+        for i in 0..5 {
+            rtc.regs[i] = reg(i)?;
+            rtc.latched[i] = reg(i + 5)?;
+        }
+        let saved = match data.get(40..48) {
+            Some(bytes) => u64::from_le_bytes(bytes.try_into().ok()?),
+            None => word(10)?,
+        };
+        if let Some(now) = now {
+            rtc.advance_seconds(now.saturating_sub(saved));
+        }
+        Some(rtc)
     }
 
     fn write_latch(&mut self, value: u8) {
@@ -317,21 +383,54 @@ impl Cartridge {
         &self.mbc
     }
 
-    /// Whether the cartridge keeps its RAM when switched off, i.e. needs a save file.
+    /// Whether the cartridge keeps its RAM or clock when switched off, i.e. needs a save
+    /// file.
     pub fn has_battery(&self) -> bool {
-        self.battery && !self.ram.is_empty()
+        self.battery && (!self.ram.is_empty() || self.has_clock())
     }
 
-    /// External RAM contents, for writing a save file.
+    /// Whether the cartridge has a real-time clock (MBC3 with timer, HuC3).
+    pub fn has_clock(&self) -> bool {
+        matches!(self.mbc, Mbc::Mbc3 { rtc: Some(_), .. } | Mbc::HuC3 { .. })
+    }
+
+    /// External RAM contents.
     pub fn ram(&self) -> &[u8] {
         &self.ram
     }
 
-    /// Restores external RAM from a save file. Extra bytes are ignored, missing ones stay 0.
-    pub fn load_ram(&mut self, data: &[u8]) {
+    /// The save file: external RAM, followed by the clock (if any) stamped with `now`, the
+    /// current Unix time in seconds.
+    pub fn save_data(&self, now: u64) -> Vec<u8> {
+        let mut data = self.ram.clone();
+        match &self.mbc {
+            Mbc::Mbc3 { rtc: Some(rtc), .. } => data.extend(rtc.to_save(now)),
+            Mbc::HuC3 { clock, .. } => data.extend(clock.to_save(now)),
+            _ => {}
+        }
+        data
+    }
+
+    /// Restores external RAM and the clock from a save file. Extra bytes are ignored,
+    /// missing ones stay 0. The clock catches up on the time since the save, from its
+    /// timestamp to `now` (Unix seconds); with `now` = `None` it carries on from where it
+    /// was saved. A save without a clock block leaves the clock as it is.
+    pub fn load_ram(&mut self, data: &[u8], now: Option<u64>) {
         let n = data.len().min(self.ram.len());
         self.ram[..n].copy_from_slice(&data[..n]);
         self.ram_dirty = false;
+        let footer = data.get(self.ram.len()..).unwrap_or_default();
+        match &mut self.mbc {
+            Mbc::Mbc3 { rtc: Some(rtc), .. } => {
+                if let Some(saved) = Rtc::from_save(footer, now) {
+                    *rtc = saved;
+                }
+            }
+            Mbc::HuC3 { clock, .. } => {
+                clock.load_save(footer, now);
+            }
+            _ => {}
+        }
     }
 
     /// Returns `true` if RAM changed since the last call.
@@ -871,9 +970,63 @@ mod tests {
     }
 
     #[test]
+    fn mbc3_clock_is_saved_after_ram_and_catches_up() {
+        let mut cart = Cartridge::from_rom(banked_rom(4, 0x10, 0x02)).unwrap();
+        let Mbc::Mbc3 { rtc: Some(rtc), .. } = &mut cart.mbc else {
+            unreachable!()
+        };
+        // Day 511, 23:59:50, with the latched copy older.
+        rtc.regs = [50, 59, 23, 0xFF, 0x01];
+        rtc.latched = [1, 2, 3, 4, 0];
+        cart.ram[0] = 0x42;
+        let data = cart.save_data(5_000);
+        assert_eq!(data.len(), 8 * 1024 + Rtc::SAVE_BYTES);
+        assert_eq!(&data[8192..8196], &[50, 0, 0, 0]);
+        assert_eq!(&data[8232..8240], &5_000u64.to_le_bytes());
+
+        // 15 seconds later the day counter has wrapped and set the carry.
+        let mut fresh = Cartridge::from_rom(banked_rom(4, 0x10, 0x02)).unwrap();
+        fresh.load_ram(&data, Some(5_015));
+        assert_eq!(fresh.ram[0], 0x42);
+        let Mbc::Mbc3 { rtc: Some(rtc), .. } = &fresh.mbc else {
+            unreachable!()
+        };
+        assert_eq!(rtc.regs, [5, 0, 0, 0, Rtc::DAY_CARRY]);
+        assert_eq!(rtc.latched, [1, 2, 3, 4, 0]);
+
+        // A halted clock does not move; the old 44-byte block still loads.
+        let mut halted = rtc.clone();
+        halted.regs[4] |= Rtc::HALT;
+        let mut old = halted.to_save(100);
+        old.truncate(40);
+        old.extend(100u32.to_le_bytes());
+        let loaded = Rtc::from_save(&old, Some(1_000_000)).unwrap();
+        assert_eq!(loaded.regs, halted.regs);
+    }
+
+    #[test]
+    fn rtc_catches_up_from_out_of_range_seconds() {
+        let mut rtc = Rtc {
+            regs: [62, 0, 0, 0, 0],
+            ..Default::default()
+        };
+        // 62 → 63 → 0 (no minute), then 3600 more seconds.
+        rtc.advance_seconds(2 + 3600);
+        assert_eq!(rtc.regs, [0, 0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn clock_only_cartridge_still_gets_a_save_file() {
+        // MBC3 + timer + battery ($0F) has no RAM; the save is the clock alone.
+        let cart = Cartridge::from_rom(banked_rom(4, 0x0F, 0x00)).unwrap();
+        assert!(cart.has_battery());
+        assert_eq!(cart.save_data(0).len(), Rtc::SAVE_BYTES);
+    }
+
+    #[test]
     fn save_round_trip() {
         let mut cart = Cartridge::from_rom(banked_rom(4, 0x1B, 0x02)).unwrap();
-        cart.load_ram(&[1, 2, 3]);
+        cart.load_ram(&[1, 2, 3], None);
         assert_eq!(&cart.ram()[..4], &[1, 2, 3, 0]);
         assert!(!cart.take_ram_dirty());
     }
