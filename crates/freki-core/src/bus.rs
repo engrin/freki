@@ -71,6 +71,12 @@ pub struct Bus {
     unusable: [u8; 0x60],
     /// KEY1 ($FF4D) bit 0: a speed switch is armed and happens on the next STOP (CGB).
     speed_switch_armed: bool,
+    /// The frame sequencer sees DIV's falling edges one M-cycle late. Each switch to
+    /// double speed with the APU on toggles this; powering the APU off clears it. It only
+    /// applies in double speed (AGE's spsw-ch2-lc-delay).
+    apu_div_late: bool,
+    /// A frame sequencer step held back by `apu_div_late`, taken in the next M-cycle.
+    apu_step_due: bool,
     /// CGB double speed: the CPU, timer, serial port and OAM DMA run twice as fast.
     pub double_speed: bool,
     /// Odd T-cycle left over when halving CPU cycles for the PPU and APU.
@@ -175,6 +181,8 @@ impl Bus {
             undocumented: [0; 4],
             unusable: [0; 0x60],
             speed_switch_armed: false,
+            apu_div_late: false,
+            apu_step_due: false,
             double_speed: false,
             half_cycle: 0,
             speed_switch_delay: 0,
@@ -268,12 +276,16 @@ impl Bus {
             return false;
         }
         self.speed_switch_armed = false;
-        // The switch resets DIV, which can make the frame sequencer's bit fall.
-        if self.timer.counter() >> self.frame_sequencer_bit() & 1 != 0 {
-            self.apu.clock_frame_sequencer();
+        if !self.double_speed && self.apu.powered() {
+            self.apu_div_late = !self.apu_div_late;
         }
+        // The switch resets DIV, which can make the frame sequencer's bit fall.
+        let fell = self.timer.counter() >> self.frame_sequencer_bit() & 1 != 0;
         self.double_speed = !self.double_speed;
         self.ppu.double_speed = self.double_speed;
+        if fell {
+            self.step_frame_sequencer();
+        }
         self.speed_switch_delay = if self.double_speed {
             SPEED_SWITCH_DELAY_TO_DOUBLE
         } else {
@@ -366,7 +378,7 @@ impl Bus {
                 self.serial
                     .clock(u32::from(counter >> self.serial.clock_bit() & 1 != 0));
                 if counter >> self.frame_sequencer_bit() & 1 != 0 {
-                    self.apu.clock_frame_sequencer();
+                    self.step_frame_sequencer();
                 }
             }
             0xFF05..=0xFF07 => self.timer.write(addr, value),
@@ -374,6 +386,10 @@ impl Bus {
             0xFF10..=0xFF3F => {
                 let was_powered = self.apu.powered();
                 self.apu.write(addr, value);
+                if !self.apu.powered() {
+                    self.apu_div_late = false;
+                    self.apu_step_due = false;
+                }
                 // Powering on keeps the frame sequencer's phase within a step pair from
                 // DIV: if its bit is set (4 T-cycles ahead), the first step is an odd one.
                 if !was_powered
@@ -544,6 +560,16 @@ impl Bus {
             self.hdma.remaining = 0x7F;
         } else {
             self.hdma.remaining -= 1;
+        }
+    }
+
+    /// A falling edge of the frame sequencer's DIV bit: steps it now, or in the next
+    /// M-cycle while `apu_div_late` holds.
+    fn step_frame_sequencer(&mut self) {
+        if self.apu_div_late && self.double_speed {
+            self.apu_step_due = true;
+        } else {
+            self.apu.clock_frame_sequencer();
         }
     }
 
@@ -773,9 +799,12 @@ impl Bus {
         self.apu.tick(video_cycles);
         // Falling edges of counter bit 12 (bit 13 in double speed) step the APU's frame
         // sequencer at 512 Hz.
+        if std::mem::take(&mut self.apu_step_due) {
+            self.apu.clock_frame_sequencer();
+        }
         let shift = self.frame_sequencer_bit() + 1;
         for _ in 0..((counter + cycles) >> shift) - (counter >> shift) {
-            self.apu.clock_frame_sequencer();
+            self.step_frame_sequencer();
         }
         self.interrupt_flag |= self.timer.tick(cycles);
         // Falling edges of counter bit 7 (bit 2 with the CGB's fast clock) clock the

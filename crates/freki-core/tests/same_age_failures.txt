@@ -11,7 +11,6 @@ cgb age-test-roms/oam/oam-read-dmgC-cgbBC.gb
 cgb age-test-roms/oam/oam-write-cgbBCE.gb
 cgb age-test-roms/speed-switch/caution/spsw-interrupts-cgbBC.gb
 cgb age-test-roms/speed-switch/caution/spsw-interrupts-cgbE.gb
-cgb age-test-roms/speed-switch/spsw-ch2-lc-delay-cgbBCE.gb
 cgb age-test-roms/speed-switch/spsw-mode0-cgbBCE.gb
 cgb age-test-roms/speed-switch/spsw-tima-cgbE.gb
 cgb age-test-roms/stat-interrupt/stat-int-dmgC-cgbBCE.gb
