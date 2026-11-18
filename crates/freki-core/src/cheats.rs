@@ -6,6 +6,11 @@
 //! - **Game Genie** codes (`ABC-DEF` or `ABC-DEF-GHI`) patch what the CPU reads from ROM.
 //!   The 9-digit form only applies when the original byte equals the compare value, which
 //!   keeps a patch from hitting other ROM banks mapped at the same address.
+//!
+//! One cheat can hold several codes joined with `+` (or, as in RetroArch's files, 8-digit
+//! GameShark codes separated by spaces). Cheat files are read in freki's own format or in
+//! RetroArch's (`cheats = N`, `cheatN_desc`, `cheatN_code`, `cheatN_enable`), and saved
+//! back in the format they were read in.
 
 use std::fmt;
 
@@ -134,11 +139,57 @@ impl Code {
 /// A cheat as entered by the user.
 #[derive(Debug, Clone)]
 pub struct Cheat {
-    pub code: Code,
-    /// The code as typed, for display and saving.
+    /// One or more codes, applied together.
+    pub codes: Vec<Code>,
+    /// The codes as typed (joined with `+`), for display and saving.
     pub text: String,
     pub name: String,
     pub enabled: bool,
+}
+
+/// Parses a cheat's codes: `+`-separated, and within each part either one code or several
+/// 8-digit GameShark codes separated by spaces. Returns the codes and normalised text.
+pub fn parse_codes(text: &str) -> Result<(Vec<Code>, String), CheatError> {
+    let mut codes = Vec::new();
+    let mut parts = Vec::new();
+    for part in text.split('+').map(str::trim) {
+        let part = part.to_uppercase();
+        match Code::parse(&part) {
+            Ok(code) => {
+                codes.push(code);
+                parts.push(part);
+            }
+            Err(e) => {
+                let words: Vec<&str> = part.split_whitespace().collect();
+                if words.len() < 2 {
+                    return Err(e);
+                }
+                for word in words {
+                    codes.push(Code::parse(word).map_err(|_| e.clone())?);
+                    parts.push(word.to_string());
+                }
+            }
+        }
+    }
+    Ok((codes, parts.join("+")))
+}
+
+/// The file format the cheat list was read from, and is saved in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileFormat {
+    /// One cheat per line: `[!]CODE [name]`.
+    #[default]
+    Freki,
+    /// RetroArch's `.cht`: `cheats = N` and `cheatN_desc/code/enable = ...`.
+    RetroArch,
+}
+
+/// An entry of a RetroArch file whose code freki cannot use, kept so saving keeps it.
+#[derive(Debug, Clone)]
+struct Unparsed {
+    name: String,
+    code: String,
+    enabled: bool,
 }
 
 /// The active cheat list. Not part of save states.
@@ -147,6 +198,10 @@ pub struct Cheats {
     list: Vec<Cheat>,
     /// Master switch for all cheats.
     pub enabled: bool,
+    format: FileFormat,
+    unparsed: Vec<Unparsed>,
+    /// Set when a cheat is added, removed or switched; see [`Cheats::take_changed`].
+    changed: bool,
 }
 
 impl Default for Cheats {
@@ -160,28 +215,35 @@ impl Cheats {
         Self {
             list: Vec::new(),
             enabled: true,
+            format: FileFormat::Freki,
+            unparsed: Vec::new(),
+            changed: false,
         }
     }
 
     /// Parses and adds a cheat (enabled). Returns its index.
     pub fn add(&mut self, text: &str, name: &str) -> Result<usize, CheatError> {
-        let code = Code::parse(text)?;
+        let (codes, text) = parse_codes(text)?;
         self.list.push(Cheat {
-            code,
-            text: text.trim().to_uppercase(),
+            codes,
+            text,
             name: name.trim().to_string(),
             enabled: true,
         });
+        self.changed = true;
         Ok(self.list.len() - 1)
     }
 
     pub fn remove(&mut self, index: usize) -> Option<Cheat> {
-        (index < self.list.len()).then(|| self.list.remove(index))
+        let removed = (index < self.list.len()).then(|| self.list.remove(index));
+        self.changed |= removed.is_some();
+        removed
     }
 
     pub fn set_enabled(&mut self, index: usize, enabled: bool) -> bool {
         match self.list.get_mut(index) {
             Some(cheat) => {
+                self.changed |= cheat.enabled != enabled;
                 cheat.enabled = enabled;
                 true
             }
@@ -193,15 +255,29 @@ impl Cheats {
         &self.list
     }
 
+    /// Removes all cheats and forgets the file format.
     pub fn clear(&mut self) {
         self.list.clear();
+        self.unparsed.clear();
+        self.format = FileFormat::Freki;
+        self.changed = false;
+    }
+
+    /// Whether the list changed since the last call (or since it was loaded), so the
+    /// frontend can write the cheat file.
+    pub fn take_changed(&mut self) -> bool {
+        std::mem::take(&mut self.changed)
+    }
+
+    pub fn format(&self) -> FileFormat {
+        self.format
     }
 
     fn active(&self) -> impl Iterator<Item = &Code> {
         self.list
             .iter()
             .filter(move |c| self.enabled && c.enabled)
-            .map(|c| &c.code)
+            .flat_map(|c| &c.codes)
     }
 
     /// GameShark writes to apply this frame.
@@ -234,10 +310,23 @@ impl Cheats {
         self.active().any(|c| matches!(c, Code::GameGenie { .. }))
     }
 
-    /// Loads cheats from text: one code per line, optionally followed by a name;
-    /// lines starting with `#` are comments, a leading `!` adds the cheat disabled.
+    /// Loads cheats from text in freki's or RetroArch's format (see the module docs).
+    /// In freki's: one code per line, optionally followed by a name; lines starting with
+    /// `#` are comments, a leading `!` adds the cheat disabled.
     /// Returns the lines that could not be parsed.
     pub fn load_text(&mut self, text: &str) -> Vec<(usize, CheatError)> {
+        let errors = self.load_any(text);
+        self.changed = false;
+        errors
+    }
+
+    fn load_any(&mut self, text: &str) -> Vec<(usize, CheatError)> {
+        if text
+            .lines()
+            .any(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == "cheats"))
+        {
+            return self.load_retroarch(text);
+        }
         let mut errors = Vec::new();
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
@@ -259,8 +348,87 @@ impl Cheats {
         errors
     }
 
-    /// The cheat list in the text format read by [`Cheats::load_text`].
+    /// Loads RetroArch's format. Entries are numbered from 0; each needs a `code`.
+    fn load_retroarch(&mut self, text: &str) -> Vec<(usize, CheatError)> {
+        use std::collections::BTreeMap;
+        self.format = FileFormat::RetroArch;
+        // index -> (desc, (line, code), enable)
+        type Entry = (String, Option<(usize, String)>, bool);
+        let mut entries: BTreeMap<usize, Entry> = BTreeMap::new();
+        for (n, line) in text.lines().enumerate() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            let Some((index, field)) = key
+                .trim()
+                .strip_prefix("cheat")
+                .and_then(|k| k.split_once('_'))
+                .and_then(|(i, f)| Some((i.parse::<usize>().ok()?, f)))
+            else {
+                continue;
+            };
+            let entry = entries.entry(index).or_default();
+            match field {
+                "desc" => entry.0 = value.to_string(),
+                "code" => entry.1 = Some((n + 1, value.to_string())),
+                "enable" => entry.2 = value == "true",
+                _ => {}
+            }
+        }
+        let mut errors = Vec::new();
+        for (name, code, enabled) in entries.into_values() {
+            let Some((line, code)) = code else { continue };
+            match self.add(&code, &name) {
+                Ok(i) => self.list[i].enabled = enabled,
+                Err(e) => {
+                    errors.push((line, e));
+                    self.unparsed.push(Unparsed {
+                        name,
+                        code,
+                        enabled,
+                    });
+                }
+            }
+        }
+        errors
+    }
+
+    /// The cheat list as text, in the format it was loaded from (see [`Cheats::load_text`]).
     pub fn to_text(&self) -> String {
+        match self.format {
+            FileFormat::Freki => self.to_freki_text(),
+            FileFormat::RetroArch => self.to_retroarch_text(),
+        }
+    }
+
+    fn to_retroarch_text(&self) -> String {
+        let entries = self
+            .list
+            .iter()
+            .map(|c| (c.name.as_str(), c.text.as_str(), c.enabled))
+            .chain(
+                self.unparsed
+                    .iter()
+                    .map(|u| (u.name.as_str(), u.code.as_str(), u.enabled)),
+            );
+        let mut out = format!("cheats = {}\n", self.list.len() + self.unparsed.len());
+        for (i, (name, code, enabled)) in entries.enumerate() {
+            let quote = |s: &str| s.replace('"', "'");
+            out.push_str(&format!(
+                "\ncheat{i}_desc = \"{}\"\ncheat{i}_code = \"{}\"\ncheat{i}_enable = {enabled}\n",
+                quote(name),
+                quote(code)
+            ));
+        }
+        out
+    }
+
+    fn to_freki_text(&self) -> String {
         let mut out = String::from("# freki cheats: CODE [name]; '!' = disabled\n");
         for c in &self.list {
             let flag = if c.enabled { "" } else { "! " };
@@ -503,6 +671,49 @@ mod tests {
         assert!(again.load_text(&cheats.to_text()).is_empty());
         assert_eq!(again.list()[0].name, "Infinite lives");
         assert!(!again.list()[1].enabled);
+    }
+
+    #[test]
+    fn several_codes_in_one_cheat() {
+        let (codes, text) = parse_codes("01ff4bca 01FF4CCA+00A-17B-C49").unwrap();
+        assert_eq!(codes.len(), 3);
+        assert_eq!(text, "01FF4BCA+01FF4CCA+00A-17B-C49");
+        assert!(parse_codes("01FF4BCA 0XFF4CCA").is_err());
+        let mut cheats = Cheats::new();
+        cheats.add("014200C0+014301C0", "two").unwrap();
+        assert_eq!(cheats.frame_writes().count(), 2);
+        assert!(cheats.take_changed());
+        assert!(!cheats.take_changed());
+        cheats.set_enabled(0, true);
+        assert!(!cheats.take_changed(), "already enabled");
+        cheats.set_enabled(0, false);
+        assert!(cheats.take_changed());
+        cheats.load_text("010A10C1");
+        assert!(!cheats.take_changed(), "loading is not a change");
+    }
+
+    #[test]
+    fn retroarch_file_round_trip() {
+        let file = "cheats = 3\n\ncheat0_desc = \"Infinite Money\"\ncheat0_code = \"01FF4BCA 01FF4CCA\"\ncheat0_enable = false\n\ncheat1_desc = \"Mario\"\ncheat1_code = \"01XXCEC1\"\ncheat1_enable = false\n\ncheat2_desc = \"Lives\"\ncheat2_code = \"3EA-17B\"\ncheat2_enable = true\n";
+        let mut cheats = Cheats::new();
+        let errors = cheats.load_text(file);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, 8, "line of the bad code");
+        assert_eq!(cheats.format(), FileFormat::RetroArch);
+        let list = cheats.list();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "Infinite Money");
+        assert_eq!(list[0].codes.len(), 2);
+        assert!(!list[0].enabled);
+        assert!(list[1].enabled);
+        // Saved back in RetroArch's format, keeping the code freki cannot use.
+        let saved = cheats.to_text();
+        assert!(saved.starts_with("cheats = 3\n"), "{saved}");
+        assert!(saved.contains("cheat2_code = \"01XXCEC1\""), "{saved}");
+        let mut again = Cheats::new();
+        assert_eq!(again.load_text(&saved).len(), 1);
+        assert_eq!(again.list()[0].text, "01FF4BCA+01FF4CCA");
+        assert_eq!(again.list()[1].name, "Lives");
     }
 
     #[test]

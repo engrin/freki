@@ -319,6 +319,19 @@ impl FrekiApp {
         }
     }
 
+    /// Writes `game.cht` when cheats were added, removed or switched (from the cheat
+    /// manager, the memory search or the terminal console).
+    fn write_changed_cheats(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if session.gb.cheats_mut().take_changed()
+            && let Err(e) = console::save_cheat_file(&session.cheat_file(), &session.gb)
+        {
+            self.set_status(e);
+        }
+    }
+
     fn close_rom(&mut self) {
         if let Some(mut session) = self.session.take()
             && let Err(e) = session.write_save(true)
@@ -1078,10 +1091,14 @@ impl FrekiApp {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut gb.cheats_mut().enabled, "All cheats enabled (F9)");
                     let path = session_cheat_path(&session.rom_path);
-                    if ui.button("Save .cht").clicked() {
-                        status = Some(console::save_cheat_file(&path, gb).unwrap_or_else(|e| e));
-                    }
-                    if ui.button("Reload .cht").clicked() {
+                    if ui
+                        .button("Reload .cht")
+                        .on_hover_text(format!(
+                            "Changes are saved to {} automatically",
+                            file_name(&path)
+                        ))
+                        .clicked()
+                    {
                         status = Some(
                             console::load_cheat_file(&path, gb)
                                 .unwrap_or_else(|| format!("{} not found", file_name(&path))),
@@ -1525,6 +1542,7 @@ impl eframe::App for FrekiApp {
             self.set_paused(paused);
         }
         self.emulate(&ctx);
+        self.write_changed_cheats();
         self.update_rumble();
         self.update_texture(&ctx);
 

@@ -107,7 +107,7 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 |---|---|
 | `game.sav` | Battery save, written about once a second while the game saves, and on exit. A cartridge clock is stored at the end in the format VBA-M, BGB and mGBA use for MBC3 |
 | `game.ss0` … `game.ss9` | Save states (about 150 KB each; they load only into the same game and freki state format) |
-| `game.cht` | Cheats |
+| `game.cht` | Cheats, saved whenever one is added, removed or switched on or off |
 | `game.bps`, `game.ips` | Patch applied when the game loads |
 | `game-001.png`, … | Screenshots |
 
@@ -126,13 +126,18 @@ it they are shown in grey.
 ## Cheats
 
 **Cheats → Cheat manager…** adds, toggles and removes codes, and **Cheats → Memory
-search…** finds the address of a value. Codes are kept in `game.cht`, one per line with an
-optional name (`#` starts a comment, `!` adds a code switched off):
+search…** finds the address of a value. Codes are kept in `game.cht` and saved as soon as
+the list changes, one per line with an optional name (`#` starts a comment, `!` adds a code
+switched off, `+` joins several codes into one cheat):
 
 ```text
 010A10C1 Infinite lives
 ! 00A-17B-C49 Start with all items
 ```
+
+RetroArch's cheat files are read too, and saved back in their format. A file named as in
+cheat databases, such as `metal-gear-solid-usa.cht` next to `Metal Gear Solid (USA).gbc`,
+is imported when the game has no `game.cht` yet.
 
 GameShark (`01VVLLHH`; on the GBC also `9xVVLLHH` for work RAM bank `x`) and Game Genie
 (`ABC-DEF` or `ABC-DEF-GHI`) codes are supported. The same tools work from the terminal

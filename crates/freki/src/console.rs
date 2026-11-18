@@ -388,20 +388,67 @@ fn list_breaks(gb: &GameBoy) -> String {
     out.join("\n")
 }
 
-/// Loads a `.cht` file into the cheat list, if it exists. Returns a message to show.
+/// Loads the cheats for `path` (`game.cht`). If that file does not exist, a cheat file
+/// named the way cheat databases name it (`game-title-usa.cht` for
+/// `Game Title (USA) (Rev 1).gbc`) is imported instead; changes are still saved to
+/// `path`. Returns a message to show, or `None` if there is no cheat file.
 pub fn load_cheat_file(path: &Path, gb: &mut GameBoy) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+    let source = find_cheat_file(path)?;
+    let text = fs::read_to_string(&source).ok()?;
     gb.cheats_mut().clear();
     let errors = gb.cheats_mut().load_text(&text);
+    let verb = if source == path { "loaded" } else { "imported" };
     let mut msg = format!(
-        "loaded {} cheat(s) from {}",
+        "{verb} {} cheat(s) from {}",
         gb.cheats().list().len(),
-        path.display()
+        source.display()
     );
     for (line, e) in errors {
         msg.push_str(&format!("\n  line {line}: {e}"));
     }
     Some(msg)
+}
+
+/// `path` if it exists, otherwise a `.cht` file in the same directory whose name matches
+/// the ROM's as a lowercase, dashed slug: of the whole name, of the title and first
+/// bracket (`metal-gear-solid-usa`), or of the title alone.
+pub fn find_cheat_file(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+    let stem = path.file_stem()?.to_str()?;
+    let first_bracket = stem.find(')').map_or(stem, |i| &stem[..=i]);
+    let title = stem.split('(').next().unwrap_or(stem);
+    let wanted = [slug(stem), slug(first_bracket), slug(title)];
+    let dir = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    let candidates: Vec<(String, PathBuf)> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cht")))
+        .filter_map(|p| Some((slug(p.file_stem()?.to_str()?), p)))
+        .collect();
+    wanted
+        .iter()
+        .filter(|w| !w.is_empty())
+        .find_map(|w| candidates.iter().find(|(s, _)| s == w))
+        .map(|(_, p)| p.clone())
+}
+
+/// Lowercase letters and digits, every other run of characters becomes one dash.
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
 }
 
 /// Writes the cheat list to a `.cht` file.
@@ -541,6 +588,30 @@ mod tests {
         assert!(c.execute("cheat reload", &mut gb).contains("loaded 1"));
         assert!(!gb.cheats().list()[0].enabled);
         fs::remove_file(&c.cheat_file).unwrap();
+    }
+
+    #[test]
+    fn imports_cheat_file_named_like_a_cheat_database() {
+        assert_eq!(
+            slug("Super Mario Bros. Deluxe (USA, Europe)"),
+            "super-mario-bros-deluxe-usa-europe"
+        );
+        let dir = std::env::temp_dir().join(format!("freki-cht-import-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let own = dir.join("Super Mario Bros. Deluxe (USA, Europe) (Rev 2).cht");
+        assert_eq!(find_cheat_file(&own), None);
+        let db = dir.join("super-mario-bros-deluxe-usa-europe.cht");
+        fs::write(&db, "cheats = 1\ncheat0_desc = \"Lives\"\ncheat0_code = \"010A10C1\"\ncheat0_enable = true\n").unwrap();
+        fs::write(dir.join("super-mario-bros.cht"), "").unwrap();
+        assert_eq!(find_cheat_file(&own), Some(db.clone()));
+        let mut gb = counting_gb();
+        let msg = load_cheat_file(&own, &mut gb).unwrap();
+        assert!(msg.starts_with("imported 1"), "{msg}");
+        // Saving goes to the ROM's own file, which is preferred from then on.
+        save_cheat_file(&own, &gb).unwrap();
+        assert_eq!(find_cheat_file(&own), Some(own.clone()));
+        assert!(fs::read_to_string(&own).unwrap().starts_with("cheats = 1"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
