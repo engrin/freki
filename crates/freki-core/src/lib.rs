@@ -480,7 +480,8 @@ impl GameBoy {
         &mut self.bus.cheats
     }
 
-    /// Every byte the game has sent over the serial port (test ROMs print results here).
+    /// The bytes the game has sent over the serial port (test ROMs print results here): the
+    /// latest 64 KiB, since the machine started or a state was loaded.
     pub fn serial_output(&self) -> &[u8] {
         self.bus.serial.output()
     }

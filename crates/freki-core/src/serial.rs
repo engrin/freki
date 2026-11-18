@@ -7,16 +7,22 @@
 //! clock never finish. With a link cable (see [`crate::link`]) the partner's byte comes in,
 //! and an external-clock transfer finishes when the partner's clock has sent 8 bits.
 //!
-//! Every byte the game sends is recorded in [`Serial::output`]. Test ROMs such as
-//! Blargg's print their results this way, so tests can run without a screen.
+//! The bytes the game sends are recorded in [`Serial::output`] (the latest
+//! [`OUTPUT_LIMIT`] of them; not kept in save states). Test ROMs such as Blargg's print
+//! their results this way, so tests can run without a screen.
 
 use crate::bus::interrupt;
 use serde::{Deserialize, Serialize};
+
+/// Most bytes [`Serial::output`] keeps.
+pub const OUTPUT_LIMIT: usize = 64 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub struct Serial {
     data: u8,
     control: u8,
+    /// Not saved: a long link-cable session would make every state bigger.
+    #[serde(skip)]
     output: Vec<u8>,
     irq: bool,
     /// Half-steps left in the running internal-clock transfer (0 = none).
@@ -84,7 +90,7 @@ impl Serial {
                     self.external_in = None;
                 }
                 if value & 0x81 == 0x81 {
-                    self.output.push(self.data);
+                    self.record(self.data);
                     self.half_steps_left = 16;
                     self.fast = cgb && value & 0x02 != 0;
                     self.acked = false;
@@ -156,7 +162,7 @@ impl Serial {
     /// goes out.
     pub(crate) fn start_external(&mut self, byte: u8) -> u8 {
         self.external_in = Some(byte);
-        self.output.push(self.data);
+        self.record(self.data);
         self.data
     }
 
@@ -169,7 +175,16 @@ impl Serial {
         }
     }
 
-    /// Every byte sent over the serial port so far.
+    /// Adds a sent byte to [`Serial::output`], dropping the older half once it is full.
+    fn record(&mut self, byte: u8) {
+        if self.output.len() >= OUTPUT_LIMIT {
+            self.output.drain(..OUTPUT_LIMIT / 2);
+        }
+        self.output.push(byte);
+    }
+
+    /// The bytes sent over the serial port: all of them, or the latest ones once more
+    /// than [`OUTPUT_LIMIT`] were sent.
     pub fn output(&self) -> &[u8] {
         &self.output
     }
@@ -180,5 +195,21 @@ impl Serial {
         } else {
             0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_keeps_the_latest_bytes() {
+        let mut serial = Serial::new();
+        for i in 0..OUTPUT_LIMIT + 10 {
+            serial.record(i as u8);
+        }
+        let out = serial.output();
+        assert!(out.len() <= OUTPUT_LIMIT);
+        assert_eq!(out.last(), Some(&((OUTPUT_LIMIT + 9) as u8)));
     }
 }
