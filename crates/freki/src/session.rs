@@ -59,15 +59,23 @@ impl Session {
     /// Loads a ROM and its battery save, if any, starting it as `start` says. Returns the
     /// session and a status message.
     pub fn open(rom_path: &Path, start: Start) -> Result<(Self, String), Box<dyn Error>> {
+        Self::open_saving(rom_path, start, rom_path.with_extension("sav"))
+    }
+
+    /// [`Session::open`] with the battery save in `save_path`.
+    pub fn open_saving(
+        rom_path: &Path,
+        start: Start,
+        save_path: PathBuf,
+    ) -> Result<(Self, String), Box<dyn Error>> {
         let rom = rom_file::load(rom_path, None)?;
         let mut message = format!("loaded {}{}", file_name(rom_path), rom.describe());
         let mut gb = power_on(rom.data, &start)?;
-        let save_path = rom_path.with_extension("sav");
         if gb.save_data(0).is_some()
             && let Ok(data) = fs::read(&save_path)
         {
             gb.load_save_data(&data, Some(unix_now()));
-            message.push_str(" with save file");
+            message.push_str(&format!(" with {}", file_name(&save_path)));
         }
         let title = gb.cartridge().title();
         let capacity = (REWIND_SECONDS * FRAMES_PER_SECOND / REWIND_INTERVAL as f64) as usize;
@@ -193,6 +201,17 @@ impl Session {
     }
 }
 
+/// The battery save of the second Game Boy on a link cable, playing `rom_path` while the
+/// first one plays `first_rom`: the game's own save, or `game.2.sav` when both play the
+/// same ROM file (so each keeps its own save, as two cartridges would).
+pub fn linked_save_path(rom_path: &Path, first_rom: &Path) -> PathBuf {
+    let same = match (fs::canonicalize(rom_path), fs::canonicalize(first_rom)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => rom_path == first_rom,
+    };
+    rom_path.with_extension(if same { "2.sav" } else { "sav" })
+}
+
 /// Seconds since the Unix epoch, for the cartridge clock's timestamp in save files.
 pub fn unix_now() -> u64 {
     SystemTime::now()
@@ -210,6 +229,13 @@ pub fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_second_copy_of_a_linked_game_keeps_its_own_save() {
+        let (red, blue) = (Path::new("/g/red.gb"), Path::new("/g/blue.gb"));
+        assert_eq!(linked_save_path(red, red), Path::new("/g/red.2.sav"));
+        assert_eq!(linked_save_path(blue, red), Path::new("/g/blue.sav"));
+    }
 
     #[test]
     fn screenshots_are_numbered_pngs_next_to_the_rom() {

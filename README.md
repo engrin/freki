@@ -22,6 +22,8 @@ Named after Freki, one of Odin's two wolves.
 - **Super Game Boy:** the borders and colours SGB games bring along (Pokémon, Donkey Kong,
   Dragon Warrior Monsters, …), with palettes, colour attributes, screen masking and the
   multiplayer request games use to detect an SGB
+- **Link cable:** a second game runs next to the first, connected by cable, for trading
+  and two-player games (Tetris, Pokémon, …)
 - **Optional boot ROMs:** start with the real Game Boy or Game Boy Color boot animation, or
   straight into the game
 
@@ -100,6 +102,7 @@ cargo run --release -- path/to/game.gb    # or start without a ROM: File → Ope
 | Fast-forward | hold Tab | |
 | Pause | P | |
 | Cheats on / off | F9 | |
+| Keyboard to the other linked Game Boy | F4 | |
 | Screenshot | F12 | |
 | Fullscreen | Alt+Enter (Esc leaves) | |
 | Open ROM / reset / quit | Ctrl+O / Ctrl+R / Ctrl+Q | |
@@ -113,6 +116,7 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 |---|---|
 | `game.sav` | Battery save, written about once a second while the game saves, and on exit. A cartridge clock is stored at the end in the format VBA-M, BGB and mGBA use for MBC3 |
 | `game.ss0` … `game.ss9` | Save states (about 150 KB each; they load only into the same game and freki state format) |
+| `game.2.sav` | Battery save of the second copy when a game is linked with itself |
 | `game.cht` | Cheats, saved whenever one is added, removed or switched on or off |
 | `game.bps`, `game.ips` | Patch applied when the game loads |
 | `game-001.png`, … | Screenshots |
@@ -132,6 +136,17 @@ sound, choose your own boot ROM dumps under **Emulation → Boot ROM → Choose 
 256-byte Game Boy and the 2304-byte Game Boy Color boot ROM. They are Nintendo's code and
 not included. The GBC boot ROM also picks the colours for original Game Boy games; without
 it they are shown in grey.
+
+## Link cable
+
+**Emulation → Link cable → Connect a second game…** starts a second Game Boy to the right of
+the first, connected by a link cable (or from the command line: `freki red.gb --link
+blue.gb`). Both run in step, so trades and two-player games work as on two real Game Boys.
+The keyboard and the first gamepad play the left Game Boy and the second gamepad the right
+one; F4 moves the keyboard to the other side. You hear the Game Boy the keyboard plays.
+Each game keeps its battery save; a game linked with itself saves the second copy in
+`game.2.sav`. Save states and rewind are off while linked. Headless mode can link too
+(`--link`, `--link-sav`, `--press2`).
 
 ## Cheats
 
@@ -177,6 +192,7 @@ freki --headless 01-special.gb --until-serial Passed --serial      # exit 0 once
 freki --headless game.gb --watch '$C0A0 w' --trace trace.log       # who writes $C0A0?
 freki --headless rtc.gbc --write-sav a.sav && freki --headless rtc.gbc --sav a.sav --off 2h
 freki --headless game.gbc --cheats --cheat 3 --cheat 010A10C1   # cheat 3 of game.cht, and a code
+freki --headless tetris.gb --link tetris.gb --press 300:start --press2 300:start --screenshot both.png
 ```
 
 ## Development

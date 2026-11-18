@@ -8,7 +8,7 @@ use eframe::egui::{
     StrokeKind, TextureHandle, TextureOptions, pos2, vec2,
 };
 use freki_core::{
-    Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
+    Button, Code, FRAMES_PER_SECOND, Filter, Link, MemorySearch, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
 };
 
 use crate::audio::Audio;
@@ -19,7 +19,7 @@ use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
 use crate::input;
 use crate::session::Start;
-use crate::session::{Session, file_name};
+use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, Palette, Settings};
 use crate::states::SLOTS;
 
@@ -138,8 +138,18 @@ struct SearchUi {
     selected: Option<usize>,
 }
 
+/// The second Game Boy, connected to the first by a link cable.
+struct LinkedGame {
+    session: Session,
+    cable: Link,
+}
+
 pub struct FrekiApp {
     session: Option<Session>,
+    /// A second game on a link cable, shown to the right of the first.
+    link: Option<LinkedGame>,
+    /// While linked: the keyboard plays the second Game Boy (F4 switches).
+    keyboard_second: bool,
     settings: Settings,
     audio: Option<Audio>,
     gamepads: Gamepads,
@@ -180,7 +190,11 @@ pub struct FrekiApp {
 }
 
 impl FrekiApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, rom: Option<PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        rom: Option<PathBuf>,
+        link: Option<PathBuf>,
+    ) -> Self {
         let audio = match Audio::open() {
             Ok(audio) => Some(audio),
             Err(err) => {
@@ -190,6 +204,8 @@ impl FrekiApp {
         };
         let mut app = Self {
             session: None,
+            link: None,
+            keyboard_second: false,
             settings: Settings::load(cc.storage),
             audio,
             gamepads: Gamepads::open(),
@@ -224,6 +240,9 @@ impl FrekiApp {
         println!("freki: type `help` here for cheat and memory commands");
         if let Some(path) = rom {
             app.open_rom(&cc.egui_ctx, &path);
+        }
+        if let Some(path) = link {
+            app.connect_link(&cc.egui_ctx, &path);
         }
         app
     }
@@ -293,18 +312,8 @@ impl FrekiApp {
                 }
                 let cheats = console::load_cheat_file(&session.cheat_file(), &mut session.gb);
                 self.console.set_cheat_file(session.cheat_file());
-                let model = match session.gb.model() {
-                    Model::Cgb => " (Game Boy Color)",
-                    Model::Sgb => " (Super Game Boy)",
-                    Model::Dmg => "",
-                };
-                let title = if session.title.is_empty() {
-                    format!("freki{model}")
-                } else {
-                    format!("freki — {}{model}", session.title)
-                };
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
                 self.session = Some(session);
+                self.update_title(ctx);
                 self.settings.add_recent(path);
                 self.search_ui = SearchUi::default();
                 self.paused = false;
@@ -322,6 +331,87 @@ impl FrekiApp {
         }
     }
 
+    /// The window title: the game's title and console (both games while linked).
+    fn update_title(&self, ctx: &egui::Context) {
+        let describe = |session: &Session| {
+            let model = match session.gb.model() {
+                Model::Cgb => " (Game Boy Color)",
+                Model::Sgb => " (Super Game Boy)",
+                Model::Dmg => "",
+            };
+            format!("{}{model}", session.title)
+        };
+        let title = match (&self.session, &self.link) {
+            (Some(one), Some(two)) => {
+                format!("freki — {} ⇄ {}", describe(one), describe(&two.session))
+            }
+            (Some(one), None) if !one.title.is_empty() => format!("freki — {}", describe(one)),
+            (Some(one), None) => format!("freki{}", describe(one)),
+            (None, _) => "freki".to_string(),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+    }
+
+    /// Connects a second game by link cable, shown to the right of the first.
+    fn connect_link(&mut self, ctx: &egui::Context, path: &Path) {
+        self.disconnect_link();
+        let Some(first) = self.session.as_ref() else {
+            self.set_status("open a game first");
+            return;
+        };
+        let save = session::linked_save_path(path, &first.rom_path);
+        let start = self.start();
+        match Session::open_saving(path, start, save) {
+            Ok((mut session, message)) => {
+                if let Some(audio) = &self.audio {
+                    session.gb.set_audio_sample_rate(audio.sample_rate());
+                }
+                self.link = Some(LinkedGame {
+                    session,
+                    cable: Link::new(),
+                });
+                self.keyboard_second = false;
+                self.update_title(ctx);
+                self.set_status(format!(
+                    "linked: {message}. Keyboard and first gamepad play the left Game Boy, \
+                     the second gamepad the right one (F4 moves the keyboard)"
+                ));
+            }
+            Err(e) => self.set_status(format!("cannot open {}: {e}", file_name(path))),
+        }
+    }
+
+    fn pick_link_rom(&mut self, ctx: &egui::Context) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Game for the second Game Boy")
+            .add_filter("Game Boy ROM", &["gb", "gbc", "sgb", "bin", "zip"]);
+        if let Some(dir) = self.session.as_ref().and_then(|s| s.rom_path.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.connect_link(ctx, &path);
+        }
+    }
+
+    /// Unplugs the link cable, closing the second game (its save is written).
+    fn disconnect_link(&mut self) {
+        if let Some(mut linked) = self.link.take()
+            && let Err(e) = linked.session.write_save(true)
+        {
+            self.set_status(format!("save failed: {e}"));
+        }
+        self.keyboard_second = false;
+    }
+
+    /// Save states and rewind would move one Game Boy away from the other: they are off
+    /// while linked. Returns whether they are (and says so).
+    fn link_blocks_states(&mut self) -> bool {
+        if self.link.is_some() {
+            self.set_status("save states and rewind are off while two Game Boys are linked");
+        }
+        self.link.is_some()
+    }
+
     /// Writes `game.cht` when cheats were added, removed or switched (from the cheat
     /// manager, the memory search or the terminal console).
     fn write_changed_cheats(&mut self) {
@@ -336,6 +426,7 @@ impl FrekiApp {
     }
 
     fn close_rom(&mut self) {
+        self.disconnect_link();
         if let Some(mut session) = self.session.take()
             && let Err(e) = session.write_save(true)
         {
@@ -401,11 +492,20 @@ impl FrekiApp {
             return;
         }
         let pressed = |key| ctx.input(|i| i.key_pressed(key));
-        if pressed(Key::F5) {
+        if pressed(Key::F5) && !self.link_blocks_states() {
             self.with_session(|s| s.save_state());
         }
-        if pressed(Key::F8) {
+        if pressed(Key::F8) && !self.link_blocks_states() {
             self.with_session(|s| s.load_state());
+        }
+        if pressed(Key::F4) && self.link.is_some() {
+            self.keyboard_second = !self.keyboard_second;
+            let side = if self.keyboard_second {
+                "right"
+            } else {
+                "left"
+            };
+            self.set_status(format!("the keyboard plays the {side} Game Boy"));
         }
         if pressed(Key::F6) || pressed(Key::F7) {
             let next = pressed(Key::F7);
@@ -433,7 +533,11 @@ impl FrekiApp {
         if pressed(Key::F11) && self.paused {
             self.debugger_action(cpu_view::Action::StepInstruction);
         }
-        self.rewinding = ctx.input(|i| i.key_down(Key::R)) && self.session.is_some();
+        let rewind = ctx.input(|i| i.key_down(Key::R)) && self.session.is_some();
+        if rewind && !self.rewinding && self.link_blocks_states() {
+            return;
+        }
+        self.rewinding = rewind;
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -555,24 +659,43 @@ impl FrekiApp {
                 queued = target;
             }
             let adjust = ((target - queued) / target).clamp(-1.0, 1.0) * MAX_RATE_ADJUST;
-            session
-                .gb
-                .adjust_audio_sample_rate((rate * (1.0 + adjust)).round() as u32);
+            let adjusted = (rate * (1.0 + adjust)).round() as u32;
+            session.gb.adjust_audio_sample_rate(adjusted);
+            if let Some(linked) = self.link.as_mut() {
+                linked.session.gb.adjust_audio_sample_rate(adjusted);
+            }
             self.timing.audio_ms = queued / rate * 1000.0;
             self.timing.rate_adjust = adjust;
         }
 
         self.gamepads.update();
         let bindings = &self.settings.bindings;
+        // Linked: the first gamepad plays the left Game Boy, the second the right one, and
+        // the keyboard either.
+        let (first_pad, keyboard_second) = match self.link {
+            Some(_) => (Some(0), self.keyboard_second),
+            None => (None, false),
+        };
         for _ in 0..frames {
             let mut held = [false; input::BUTTONS.len()];
             for (i, button) in input::BUTTONS.into_iter().enumerate() {
                 // Alt+Enter toggles fullscreen; it must not press the button on Enter.
                 let down =
                     !typing && ctx.input(|i| !i.modifiers.alt && i.key_down(bindings.key(button)));
-                let pad = self.gamepads.is_pressed(button, bindings.pad(button));
-                held[i] = down || pad;
+                let pad = self
+                    .gamepads
+                    .is_pressed_on(first_pad, button, bindings.pad(button));
+                held[i] = (down && !keyboard_second) || pad;
                 session.gb.set_button(button, held[i]);
+                if let Some(linked) = self.link.as_mut() {
+                    let pad = self
+                        .gamepads
+                        .is_pressed_on(Some(1), button, bindings.pad(button));
+                    linked
+                        .session
+                        .gb
+                        .set_button(button, (down && keyboard_second) || pad);
+                }
             }
             if session.gb.has_tilt_sensor() {
                 // MBC7 tilt: the left stick tilts as far as it is pushed; the D-pad (and
@@ -592,7 +715,15 @@ impl FrekiApp {
                 self.tilt.1 += (target.1 - self.tilt.1) * TILT_EASE;
                 session.gb.set_tilt(self.tilt.0, self.tilt.1);
             }
-            match session.run_frame() {
+            let result = match self.link.as_mut() {
+                Some(linked) => linked
+                    .cable
+                    .run_frame(&mut session.gb, &mut linked.session.gb)
+                    .map(|()| None)
+                    .map_err(Into::into),
+                None => session.run_frame(),
+            };
+            match result {
                 Ok(None) => {}
                 Ok(Some(stop)) => {
                     // Breakpoint or watchpoint: pause and show the debugger.
@@ -613,6 +744,16 @@ impl FrekiApp {
                 }
             }
             session.gb.drain_audio(&mut self.samples);
+            // Linked: the sound of the Game Boy the keyboard plays.
+            if let Some(linked) = self.link.as_mut() {
+                let first = self.samples.len();
+                linked.session.gb.drain_audio(&mut self.samples);
+                if keyboard_second {
+                    self.samples.drain(..first);
+                } else {
+                    self.samples.truncate(first);
+                }
+            }
             if let Some(audio) = &self.audio
                 && speed == 1
             {
@@ -620,7 +761,11 @@ impl FrekiApp {
             }
             self.samples.clear();
         }
-        if let Err(e) = session.autosave() {
+        let mut saved = session.autosave();
+        if let Some(linked) = self.link.as_mut() {
+            saved = saved.and(linked.session.autosave());
+        }
+        if let Err(e) = saved {
             self.status = Some((format!("save failed: {e}"), Instant::now()));
         }
     }
@@ -655,27 +800,35 @@ impl FrekiApp {
 
     /// The screen as shown (palette or colour correction applied), as RGBA, with its size.
     fn screen_rgba(&self) -> (Vec<u8>, [usize; 2]) {
-        match self.session.as_ref() {
-            Some(s) => settings::screen_rgba(
+        let shot = |s: &Session| {
+            settings::screen_rgba(
                 s.gb.screen(),
                 self.settings.palette,
                 self.settings.color_correction,
-            ),
-            None => (
+            )
+        };
+        match (self.session.as_ref(), self.link.as_ref()) {
+            (Some(one), Some(two)) => settings::side_by_side(shot(one), shot(&two.session)),
+            (Some(s), None) => shot(s),
+            (None, _) => (
                 vec![0x20; SCREEN_WIDTH * SCREEN_HEIGHT * 4],
                 [SCREEN_WIDTH, SCREEN_HEIGHT],
             ),
         }
     }
 
-    /// Size of the picture: 160×144, or 256×224 on a Super Game Boy.
+    /// Size of the picture: 160×144, or 256×224 on a Super Game Boy; both side by side
+    /// while linked.
     fn screen_size(&self) -> [usize; 2] {
-        self.session
-            .as_ref()
-            .map_or([SCREEN_WIDTH, SCREEN_HEIGHT], |s| {
-                let (w, h) = s.gb.screen().size();
-                [w, h]
-            })
+        let size = |s: &Session| s.gb.screen().size();
+        match (self.session.as_ref(), self.link.as_ref()) {
+            (Some(one), Some(two)) => {
+                let ((w1, h1), (w2, h2)) = (size(one), size(&two.session));
+                [w1 + settings::LINK_GAP + w2, h1.max(h2)]
+            }
+            (Some(one), None) => size(one).into(),
+            (None, _) => [SCREEN_WIDTH, SCREEN_HEIGHT],
+        }
     }
 
     /// Saves the screen as shown to a PNG next to the ROM.
@@ -796,6 +949,10 @@ impl FrekiApp {
                 }
                 ui.checkbox(&mut self.settings.rumble, "Gamepad rumble")
                     .on_hover_text("Rumble cartridges (MBC5 with motor) shake the controller");
+                ui.separator();
+                ui.add_enabled_ui(loaded, |ui| {
+                    ui.menu_button("Link cable", |ui| self.link_menu(ui));
+                });
             });
 
             ui.menu_button("States", |ui| {
@@ -804,14 +961,18 @@ impl FrekiApp {
                     .clicked()
                 {
                     ui.close();
-                    self.with_session(|s| s.save_state());
+                    if !self.link_blocks_states() {
+                        self.with_session(|s| s.save_state());
+                    }
                 }
                 if ui
                     .add_enabled(loaded, egui::Button::new("Load state").shortcut_text("F8"))
                     .clicked()
                 {
                     ui.close();
-                    self.with_session(|s| s.load_state());
+                    if !self.link_blocks_states() {
+                        self.with_session(|s| s.load_state());
+                    }
                 }
                 ui.separator();
                 ui.label("Slot (F6 / F7)");
@@ -924,6 +1085,47 @@ impl FrekiApp {
                 }
             });
         });
+    }
+
+    fn link_menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let linked = self.link.is_some();
+        let connect = if linked {
+            "Change second game…"
+        } else {
+            "Connect a second game…"
+        };
+        if ui
+            .button(connect)
+            .on_hover_text(
+                "Runs a second Game Boy next to this one, connected by a link cable: for \
+                 trading and two-player games",
+            )
+            .clicked()
+        {
+            ui.close();
+            self.pick_link_rom(&ctx);
+        }
+        let mut keyboard_second = self.keyboard_second;
+        if ui
+            .add_enabled(
+                linked,
+                egui::Checkbox::new(&mut keyboard_second, "Keyboard plays the right Game Boy"),
+            )
+            .on_hover_text("F4. Gamepads: the first plays the left one, the second the right one")
+            .changed()
+        {
+            self.keyboard_second = keyboard_second;
+        }
+        if ui
+            .add_enabled(linked, egui::Button::new("Disconnect"))
+            .clicked()
+        {
+            ui.close();
+            self.disconnect_link();
+            self.update_title(&ctx);
+            self.set_status("link cable disconnected");
+        }
     }
 
     fn console_menu(&mut self, ui: &mut egui::Ui) {

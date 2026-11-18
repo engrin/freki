@@ -137,13 +137,19 @@ impl Gamepads {
         self.last_pressed.take()
     }
 
-    /// Whether Game Boy `button`, bound to controller button `bound`, is held on any
-    /// connected controller (directions also by the left stick).
-    pub fn is_pressed(&self, button: Button, bound: Pad) -> bool {
+    /// Whether Game Boy `button`, bound to controller button `bound`, is held on the
+    /// `index`th connected controller (counted from 0), or on any with `None` (directions
+    /// also by the left stick).
+    pub fn is_pressed_on(&self, index: Option<usize>, button: Button, bound: Pad) -> bool {
         let Some(gilrs) = &self.gilrs else {
             return false;
         };
-        gilrs.gamepads().any(|(_, pad)| {
+        let mut pads = gilrs
+            .gamepads()
+            .enumerate()
+            .filter(|&(i, _)| index.is_none_or(|n| n == i))
+            .map(|(_, pad)| pad);
+        pads.any(|(_, pad)| {
             let stick_x = pad.value(Axis::LeftStickX);
             let stick_y = pad.value(Axis::LeftStickY); // positive is up
             let stick = match button {

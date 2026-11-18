@@ -1,8 +1,9 @@
 //! freki desktop frontend (egui): menu bar, screen, keyboard and gamepad input, sound,
 //! save files, save states, rewind, cheats and a memory search.
 //!
-//! Usage: `freki [rom.gb|rom.zip]` — or open a ROM from the File menu or by dropping it on the
-//! window. `freki --headless rom.gb [options]` runs without a window (see [`headless`]).
+//! Usage: `freki [rom.gb|rom.zip] [--link rom2.gb]` — or open a ROM from the File menu or by
+//! dropping it on the window; `--link` connects a second game by link cable. `freki
+//! --headless rom.gb [options]` runs without a window (see [`headless`]).
 //!
 //! Files next to the ROM: `<rom>.sav` (battery save), `<rom>.ss0` … `<rom>.ss9` (save
 //! states) and `<rom>.cht` (cheats). Settings such as the boot ROM are kept in the
@@ -29,18 +30,42 @@ use std::process;
 use eframe::egui;
 use freki_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
+const USAGE: &str = "usage: freki [ROM] [--link ROM2]   (--link: a second game on a link cable)
+       freki --headless ROM [options]   (--headless --help for more)";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "--headless") {
         process::exit(headless::main(&args[1..]));
     }
     if args.first().is_some_and(|a| a == "-h" || a == "--help") {
-        println!(
-            "usage: freki [ROM]\n       freki --headless ROM [options] (--headless --help for more)"
-        );
+        println!("{USAGE}");
         return;
     }
-    let rom = std::env::args_os().nth(1).map(PathBuf::from);
+    let mut paths = std::env::args_os().skip(1);
+    let mut rom = None;
+    let mut link = None;
+    while let Some(arg) = paths.next() {
+        if arg == "--link" {
+            link = paths.next().map(PathBuf::from);
+            if link.is_none() {
+                eprintln!("freki: --link needs a ROM\n{USAGE}");
+                process::exit(1);
+            }
+        } else if rom.is_none() {
+            rom = Some(PathBuf::from(arg));
+        } else {
+            eprintln!(
+                "freki: unexpected argument {}\n{USAGE}",
+                arg.to_string_lossy()
+            );
+            process::exit(1);
+        }
+    }
+    if link.is_some() && rom.is_none() {
+        eprintln!("freki: --link needs a first ROM\n{USAGE}");
+        process::exit(1);
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("freki")
@@ -52,7 +77,7 @@ fn main() {
     let result = eframe::run_native(
         "freki",
         options,
-        Box::new(move |cc| Ok(Box::new(app::FrekiApp::new(cc, rom)))),
+        Box::new(move |cc| Ok(Box::new(app::FrekiApp::new(cc, rom, link)))),
     );
     if let Err(err) = result {
         eprintln!("freki: {err}");
