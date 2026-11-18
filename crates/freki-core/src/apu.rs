@@ -224,6 +224,10 @@ struct Wave {
     length: Length,
     /// T-cycles since the channel last fetched a byte from wave RAM.
     since_fetch: u32,
+    /// The sample being played: the nibble last fetched. A trigger keeps it until the
+    /// first fetch; powering the APU off clears it (SameSuite, channel_3_first_sample and
+    /// channel_3_restart_delay).
+    sample: u8,
 }
 
 /// On the DMG, CPU access to wave RAM while channel 3 plays only reaches the RAM if it
@@ -248,6 +252,12 @@ impl Wave {
             self.timer = (2048 - self.period as u32) * 2;
             self.position = (self.position + 1) & 31;
             self.since_fetch = 0;
+            let byte = self.ram[self.position as usize / 2];
+            self.sample = if self.position % 2 == 0 {
+                byte >> 4
+            } else {
+                byte & 0x0F
+            };
         }
     }
 
@@ -283,13 +293,7 @@ impl Wave {
         if !self.on || self.level == 0 {
             return 0;
         }
-        let byte = self.ram[self.position as usize / 2];
-        let sample = if self.position % 2 == 0 {
-            byte >> 4
-        } else {
-            byte & 0x0F
-        };
-        sample >> (self.level - 1)
+        self.sample >> (self.level - 1)
     }
 
     fn trigger(&mut self, cgb: bool) {

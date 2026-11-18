@@ -59,17 +59,8 @@ cgb same-suite/apu/channel_2/channel_2_stop_div.gb
 cgb same-suite/apu/channel_2/channel_2_stop_restart.gb
 cgb same-suite/apu/channel_2/channel_2_volume.gb
 cgb same-suite/apu/channel_2/channel_2_volume_div.gb
-cgb same-suite/apu/channel_3/channel_3_and_glitch.gb
-cgb same-suite/apu/channel_3/channel_3_delay.gb
 cgb same-suite/apu/channel_3/channel_3_extra_length_clocking-cgb0.gb
 cgb same-suite/apu/channel_3/channel_3_extra_length_clocking-cgbB.gb
-cgb same-suite/apu/channel_3/channel_3_first_sample.gb
-cgb same-suite/apu/channel_3/channel_3_freq_change_delay.gb
-cgb same-suite/apu/channel_3/channel_3_restart_delay.gb
-cgb same-suite/apu/channel_3/channel_3_restart_during_delay.gb
-cgb same-suite/apu/channel_3/channel_3_restart_stop_delay.gb
-cgb same-suite/apu/channel_3/channel_3_shift_skip_delay.gb
-cgb same-suite/apu/channel_3/channel_3_wave_ram_sync.gb
 cgb same-suite/apu/channel_4/channel_4_align.gb
 cgb same-suite/apu/channel_4/channel_4_delay.gb
 cgb same-suite/apu/channel_4/channel_4_equivalent_frequencies.gb
