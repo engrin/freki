@@ -13,6 +13,9 @@ const RAM_BANK: usize = 0x2000;
 /// MBC2 has 512 half-bytes of RAM built in.
 const MBC2_RAM: usize = 512;
 
+/// What an infrared port reads when it sees no light (no other Game Boy is sending).
+const IR_DARK: u8 = 0xC0;
+
 /// Memory bank controller and its register state.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum Mbc {
@@ -50,6 +53,13 @@ pub enum Mbc {
         /// motor instead of selecting RAM.
         rumble: bool,
         motor: bool,
+    },
+    /// Hudson HuC1: like MBC1 with up to 32 KiB RAM, plus an infrared port in place of RAM.
+    HuC1 {
+        /// $0000–$1FFF = $0E maps the infrared port to $A000–$BFFF instead of RAM.
+        ir_mode: bool,
+        rom_bank: u8,
+        ram_bank: u8,
     },
 }
 
@@ -206,9 +216,17 @@ impl Cartridge {
                 rumble: kind >= 0x1C,
                 motor: false,
             },
+            0xFF => Mbc::HuC1 {
+                ir_mode: false,
+                rom_bank: 1,
+                ram_bank: 0,
+            },
             other => return Err(CartridgeError::UnsupportedType(other)),
         };
-        let battery = matches!(kind, 0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E);
+        let battery = matches!(
+            kind,
+            0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0xFF
+        );
         let ram_size = match (&mbc, rom[0x149]) {
             (Mbc::Mbc2 { .. }, _) => MBC2_RAM,
             (_, 0x02) => 8 * 1024,
@@ -356,6 +374,14 @@ impl Cartridge {
                 }
                 ram_bank as usize * RAM_BANK + local
             }
+            Mbc::HuC1 {
+                ir_mode, ram_bank, ..
+            } => {
+                if ir_mode {
+                    return None;
+                }
+                ram_bank as usize * RAM_BANK + local
+            }
         };
         Some(offset % self.ram.len())
     }
@@ -398,6 +424,13 @@ impl Cartridge {
                 }
             }
             Mbc::Mbc5 { rom_bank, .. } => {
+                if low {
+                    0
+                } else {
+                    rom_bank as usize
+                }
+            }
+            Mbc::HuC1 { rom_bank, .. } => {
                 if low {
                     0
                 } else {
@@ -469,6 +502,16 @@ impl Cartridge {
                 0x4000..=0x5FFF => *ram_bank = value & 0x0F,
                 _ => {}
             },
+            Mbc::HuC1 {
+                ir_mode,
+                rom_bank,
+                ram_bank,
+            } => match addr {
+                0x0000..=0x1FFF => *ir_mode = value & 0x0F == 0x0E,
+                0x2000..=0x3FFF => *rom_bank = (value & 0x3F).max(1),
+                0x4000..=0x5FFF => *ram_bank = value & 0x03,
+                _ => {}
+            },
         }
     }
 
@@ -495,6 +538,9 @@ impl Cartridge {
         } = &self.mbc
         {
             return rtc.read(*reg);
+        }
+        if let Mbc::HuC1 { ir_mode: true, .. } = self.mbc {
+            return IR_DARK;
         }
         let Some(i) = self.ram_offset(addr) else {
             return 0xFF;
@@ -600,6 +646,23 @@ mod tests {
         };
         rtc.advance_second();
         assert_eq!(rtc.regs, [0, 0, 0, 0, Rtc::DAY_CARRY]);
+    }
+
+    #[test]
+    fn huc1_banks_ram_and_infrared_mode() {
+        let mut cart = Cartridge::from_rom(banked_rom(64, 0xFF, 0x03)).unwrap();
+        assert!(cart.has_battery());
+        cart.write_rom(0x2000, 0x3F);
+        assert_eq!(cart.read_rom(0x4000), 0x3F);
+        cart.write_rom(0x4000, 0x02);
+        cart.write_ram(0xA000, 0x42); // RAM needs no enabling
+        cart.write_rom(0x0000, 0x0E);
+        assert_eq!(cart.read_ram(0xA000), IR_DARK, "infrared port: no light");
+        cart.write_ram(0xA000, 0x01); // LED on: not RAM
+        cart.write_rom(0x0000, 0x00);
+        assert_eq!(cart.read_ram(0xA000), 0x42);
+        cart.write_rom(0x4000, 0x00);
+        assert_eq!(cart.read_ram(0xA000), 0x00);
     }
 
     #[test]
