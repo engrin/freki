@@ -38,6 +38,8 @@ Named after Freki, one of Odin's two wolves.
   save-state slots**, **rewind** (up to 20 seconds) and **fast-forward** (2×–8×)
 - **Fullscreen** and window scales from 2× to 6×, with sharp integer scaling (can be
   switched off)
+- **Settings per game:** a game can keep its own console, palette, colour correction and
+  frame blending (Emulation → Settings for this game)
 - **Frame blending** like the real console's slow LCD, so sprites that games flicker every
   other frame look steady (View → Frame blending)
 - **Four Game Boy palettes** (DMG green, greyscale, Pocket, Light), and **GBC colour
@@ -135,6 +137,12 @@ Game Boy** also runs games made for both the GBC and the SGB (such as Dragon War
 with their SGB border; the window grows to the SGB's 256×224 picture. Games without SGB
 features get a plain border in the SGB's default colours. SGB sound and the SGB's own boot
 ROM are not emulated.
+
+**Emulation → Settings for this game** keeps the console, palette, colour correction and
+frame blending chosen while it is ticked for the loaded game only, for example Dragon
+Warrior Monsters always on the Super Game Boy. Other games keep your general settings.
+Games are recognised by their header (title and checksum), so renaming the file keeps
+them.
 
 By default games start in the state the boot ROM leaves behind. For the logo animation and
 sound, choose your own boot ROM dumps under **Emulation → Boot ROM → Choose file…**: the

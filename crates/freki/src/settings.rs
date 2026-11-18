@@ -1,5 +1,6 @@
 //! Settings kept between runs (in eframe's storage: the platform's app data directory).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -44,6 +45,51 @@ pub struct Settings {
     /// Show each frame mixed with the one before, like the slow LCD of the real
     /// console (sprites that flicker every other frame look steady or see-through).
     pub frame_blend: bool,
+    /// Settings kept for single games, by [`game_key`].
+    pub games: BTreeMap<String, GameSettings>,
+}
+
+/// The settings a game can have for itself (Emulation → Settings for this game).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameSettings {
+    pub console: ConsoleModel,
+    pub palette: Palette,
+    pub color_correction: bool,
+    pub frame_blend: bool,
+}
+
+impl GameSettings {
+    /// The values `settings` uses now.
+    pub fn of(settings: &Settings) -> Self {
+        Self {
+            console: settings.console,
+            palette: settings.palette,
+            color_correction: settings.color_correction,
+            frame_blend: settings.frame_blend,
+        }
+    }
+
+    /// Makes `settings` use these values.
+    pub fn apply(&self, settings: &mut Settings) {
+        settings.console = self.console;
+        settings.palette = self.palette;
+        settings.color_correction = self.color_correction;
+        settings.frame_blend = self.frame_blend;
+    }
+}
+
+/// What identifies a game for its own settings: the header title and global checksum
+/// (so renaming the file keeps them), e.g. `DRAGONWARRIORM-1A2B`.
+pub fn game_key(rom: &[u8]) -> Option<String> {
+    let header = rom.get(0x134..0x150)?;
+    let title: String = header[..16]
+        .iter()
+        .take_while(|&&b| b != 0)
+        .filter(|b| b.is_ascii_graphic() || **b == b' ')
+        .map(|&b| b as char)
+        .collect();
+    let checksum = u16::from_be_bytes([header[0x1A], header[0x1B]]);
+    Some(format!("{}-{checksum:04X}", title.trim()))
 }
 
 impl Default for Settings {
@@ -62,6 +108,7 @@ impl Default for Settings {
             rumble: true,
             integer_scaling: true,
             frame_blend: false,
+            games: BTreeMap::new(),
         }
     }
 }
@@ -278,6 +325,28 @@ pub fn cgb_color(color: u16, correct: bool) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn games_are_known_by_title_and_checksum() {
+        let mut rom = vec![0u8; 0x150];
+        rom[0x134..0x13F].copy_from_slice(b"DONKEY KONG");
+        rom[0x14E..0x150].copy_from_slice(&[0x12, 0x34]);
+        assert_eq!(game_key(&rom).as_deref(), Some("DONKEY KONG-1234"));
+        assert_eq!(game_key(&rom[..0x100]), None);
+    }
+
+    #[test]
+    fn game_settings_round_trip() {
+        let mut settings = Settings::default();
+        let mine = GameSettings {
+            console: ConsoleModel::ALL[3],
+            palette: Palette::ALL[2],
+            color_correction: false,
+            frame_blend: true,
+        };
+        mine.apply(&mut settings);
+        assert_eq!(GameSettings::of(&settings), mine);
+    }
 
     #[test]
     fn blending_averages_two_frames() {

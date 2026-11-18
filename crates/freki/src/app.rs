@@ -18,9 +18,10 @@ use crate::cpu_view::{self, CpuView};
 use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
 use crate::input;
+use crate::rom_file;
 use crate::session::Start;
 use crate::session::{self, Session, file_name};
-use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, Palette, Settings};
+use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
 use crate::states::SLOTS;
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
@@ -157,6 +158,11 @@ pub struct FrekiApp {
     texture: Option<TextureHandle>,
     /// Picture size the window was last fitted to (Super Game Boy pictures are larger).
     fitted_size: [usize; 2],
+    /// The loaded game's key for its own settings (see `settings::game_key`).
+    game_key: Option<String>,
+    /// While the loaded game uses its own settings: your general settings, put back when
+    /// it closes.
+    general_settings: Option<GameSettings>,
     /// With frame blending: the picture of the emulated frame before the current one.
     previous_frame: Option<(Vec<u8>, [usize; 2])>,
     samples: Vec<f32>,
@@ -215,6 +221,8 @@ impl FrekiApp {
             texture: None,
             fitted_size: [SCREEN_WIDTH, SCREEN_HEIGHT],
             previous_frame: None,
+            game_key: None,
+            general_settings: None,
             samples: Vec::new(),
             paused: false,
             rewinding: false,
@@ -307,7 +315,22 @@ impl FrekiApp {
 
     fn open_rom(&mut self, ctx: &egui::Context, path: &Path) {
         self.close_rom();
+        // A game with its own settings starts with them (its console included).
+        self.game_key = rom_file::load(path, None)
+            .ok()
+            .and_then(|rom| settings::game_key(&rom.data));
+        let own = self
+            .game_key
+            .as_ref()
+            .and_then(|key| self.settings.games.get(key))
+            .copied();
+        if let Some(own) = own {
+            self.general_settings = Some(GameSettings::of(&self.settings));
+            own.apply(&mut self.settings);
+        }
         let start = self.start();
+        // Fit the window to this game's picture (a Super Game Boy game's is larger).
+        self.fitted_size = [0, 0];
         match Session::open(path, start) {
             Ok((mut session, message)) => {
                 if let Some(audio) = &self.audio {
@@ -321,11 +344,20 @@ impl FrekiApp {
                 self.search_ui = SearchUi::default();
                 self.paused = false;
                 self.set_status(message);
+                if let Some(own) = own {
+                    self.set_status(format!(
+                        "using this game's own settings: {}, {} palette",
+                        own.console.name(),
+                        own.palette.name()
+                    ));
+                }
                 if let Some(msg) = cheats {
                     self.set_status(msg);
                 }
             }
             Err(e) => {
+                self.restore_general_settings();
+                self.game_key = None;
                 if !path.exists() {
                     self.settings.remove_recent(path);
                 }
@@ -428,8 +460,49 @@ impl FrekiApp {
         }
     }
 
+    /// Resets the game, on the console now chosen (the title says which).
+    fn reset(&mut self, ctx: &egui::Context) {
+        self.with_session(|s| s.reset().map(|()| "reset".to_string()));
+        self.update_title(ctx);
+    }
+
+    /// Puts your general settings back after a game with its own settings.
+    fn restore_general_settings(&mut self) {
+        if let Some(general) = self.general_settings.take() {
+            general.apply(&mut self.settings);
+        }
+    }
+
+    /// Emulation → Settings for this game: keeps the console, palette, colour correction
+    /// and frame blending for the loaded game only (`on`), or drops them.
+    fn set_game_settings(&mut self, on: bool) {
+        let Some(key) = self.game_key.clone() else {
+            return;
+        };
+        if on {
+            self.settings
+                .games
+                .insert(key, GameSettings::of(&self.settings));
+            self.general_settings = Some(GameSettings::of(&self.settings));
+            self.set_status(
+                "this game keeps its own console, palette, colour correction and frame blending",
+            );
+        } else {
+            self.settings.games.remove(&key);
+            let console = self.settings.console;
+            self.restore_general_settings();
+            if self.settings.console == console {
+                self.set_status("this game uses your general settings again");
+            } else {
+                self.start_changed("this game uses your general settings again");
+            }
+        }
+    }
+
     fn close_rom(&mut self) {
         self.disconnect_link();
+        self.restore_general_settings();
+        self.game_key = None;
         if let Some(mut session) = self.session.take()
             && let Err(e) = session.write_save(true)
         {
@@ -482,7 +555,7 @@ impl FrekiApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if ctx.input_mut(|i| i.consume_shortcut(&RESET)) {
-            self.with_session(|s| s.reset().map(|()| "reset".to_string()));
+            self.reset(ctx);
         }
         if ctx.input_mut(|i| i.consume_shortcut(&FULLSCREEN)) {
             set_fullscreen(ctx, !is_fullscreen(ctx));
@@ -954,10 +1027,25 @@ impl FrekiApp {
                     .clicked()
                 {
                     ui.close();
-                    self.with_session(|s| s.reset().map(|()| "reset".to_string()));
+                    self.reset(&ctx);
                 }
                 ui.separator();
                 ui.menu_button("Console", |ui| self.console_menu(ui));
+                let mut own = self.general_settings.is_some();
+                if ui
+                    .add_enabled(
+                        self.game_key.is_some(),
+                        egui::Checkbox::new(&mut own, "Settings for this game"),
+                    )
+                    .on_hover_text(
+                        "Keep the console, palette, colour correction and frame blending \
+                         chosen now for this game only; your general settings come back \
+                         for other games",
+                    )
+                    .changed()
+                {
+                    self.set_game_settings(own);
+                }
                 ui.menu_button("Boot ROM", |ui| self.boot_rom_menu(ui));
                 ui.separator();
                 if ui.button("Controls…").clicked() {
@@ -1787,6 +1875,13 @@ impl eframe::App for FrekiApp {
             self.set_paused(paused);
         }
         self.emulate(&ctx);
+        // Changes while a game uses its own settings are its own.
+        if let (Some(key), Some(_)) = (&self.game_key, &self.general_settings) {
+            let now = GameSettings::of(&self.settings);
+            if self.settings.games.get(key) != Some(&now) {
+                self.settings.games.insert(key.clone(), now);
+            }
+        }
         self.write_changed_cheats();
         self.update_rumble();
         self.update_texture(&ctx);
@@ -1872,7 +1967,13 @@ impl eframe::App for FrekiApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // Saved with your general settings, not those of the game being played.
+        let now = GameSettings::of(&self.settings);
+        if let Some(general) = self.general_settings {
+            general.apply(&mut self.settings);
+        }
         self.settings.save(storage);
+        now.apply(&mut self.settings);
     }
 
     fn on_exit(&mut self) {
