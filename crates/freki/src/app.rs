@@ -568,7 +568,7 @@ impl FrekiApp {
                 let (sx, sy) = self.gamepads.left_stick();
                 let target = (
                     (axis(Button::Left, Button::Right) + sx).clamp(-1.0, 1.0),
-                    // Up tilts the top of the Game Boy away from the player.
+                    // Kirby rolls the way the D-pad or stick points.
                     (axis(Button::Up, Button::Down) - sy).clamp(-1.0, 1.0),
                 );
                 self.tilt.0 += (target.0 - self.tilt.0) * TILT_EASE;

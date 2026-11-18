@@ -56,8 +56,8 @@ impl Mbc7 {
         }
     }
 
-    /// Writes register `reg`. `tilt` is the current tilt in g (x right, y towards the
-    /// player); `eeprom` the 256 save bytes. Returns `true` if the EEPROM changed.
+    /// Writes register `reg`. `tilt` is the current tilt in g, by which way things roll:
+    /// `x` to the right, `y` towards the bottom of the screen; `eeprom` the 256 save bytes. Returns `true` if the EEPROM changed.
     pub fn write(&mut self, reg: u8, value: u8, tilt: (f32, f32), eeprom: &mut [u8]) -> bool {
         match (reg, value) {
             (0x0, 0x55) => {
@@ -68,9 +68,10 @@ impl Mbc7 {
             }
             (0x1, 0xAA) if self.erased => {
                 let axis = |g: f32| (CENTER as f32 + g.clamp(-2.0, 2.0) * ONE_G).round() as u16;
-                // Tilting right lowers X; tilting the top towards the player raises Y.
+                // Checked with Kirby Tilt 'n' Tumble: rolling right lowers X, rolling
+                // towards the bottom of the screen lowers Y.
                 self.x = axis(-tilt.0);
-                self.y = axis(tilt.1);
+                self.y = axis(-tilt.1);
                 self.erased = false;
                 false
             }
@@ -314,6 +315,6 @@ mod tests {
         let x = u16::from(m.read(0x2)) | u16::from(m.read(0x3)) << 8;
         let y = u16::from(m.read(0x4)) | u16::from(m.read(0x5)) << 8;
         assert_eq!(x, CENTER - 0x70);
-        assert_eq!(y, CENTER - 0x38);
+        assert_eq!(y, CENTER + 0x38);
     }
 }

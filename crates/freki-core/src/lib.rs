@@ -466,8 +466,9 @@ impl GameBoy {
         self.bus.cart.has_tilt_sensor()
     }
 
-    /// How far the Game Boy is tilted, in g: `x` to the right, `y` with the top towards
-    /// the player (about ±1 at most). Only MBC7 cartridges notice.
+    /// How far the Game Boy is tilted, in g, by which way things on it would roll: `x` to
+    /// the right, `y` towards the bottom of the screen (about ±1 at most). Only MBC7
+    /// cartridges notice.
     pub fn set_tilt(&mut self, x: f32, y: f32) {
         self.bus.cart.set_tilt(x, y);
     }

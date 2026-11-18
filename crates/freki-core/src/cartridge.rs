@@ -260,7 +260,7 @@ pub struct Cartridge {
     /// asked (see [`Cartridge::take_rumble`]).
     #[serde(skip)]
     motor_cycles: (u32, u32),
-    /// MBC7: how far the Game Boy is tilted, in g (x right, y towards the player).
+    /// MBC7: how far the Game Boy is tilted, in g (see [`Cartridge::set_tilt`]).
     #[serde(skip)]
     tilt: (f32, f32),
 }
@@ -469,8 +469,9 @@ impl Cartridge {
         matches!(self.mbc, Mbc::Mbc7 { .. })
     }
 
-    /// Sets how far the Game Boy is tilted, in g: `x` to the right, `y` with the top
-    /// towards the player (about ±1 at most for normal play).
+    /// Sets how far the Game Boy is tilted, in g, by which way things on it would roll:
+    /// `x` to the right, `y` towards the bottom of the screen (about ±1 at most for normal
+    /// play).
     pub fn set_tilt(&mut self, x: f32, y: f32) {
         self.tilt = (x, y);
     }
@@ -920,7 +921,7 @@ mod tests {
         assert_eq!(cart.read_ram(0xA070), 0xFF, "one enable is not enough");
         cart.write_rom(0x4000, 0x40);
         assert_eq!(cart.read_ram(0xA060), 0x00);
-        cart.set_tilt(0.0, 1.0);
+        cart.set_tilt(0.0, -1.0); // rolling up the screen
         cart.write_ram(0xA000, 0x55);
         cart.write_ram(0xA010, 0xAA);
         assert_eq!(cart.read_ram(0xA050), 0x82, "Y high byte: $81D0 + $70");

@@ -39,6 +39,9 @@ run:
   --load-state FILE       start from a save state (.ss0 … .ss9)
   --press FRAME:KEYS[:N]  hold KEYS (a+b+start+select+up+down+left+right) from FRAME
                           for N frames (default 6); repeatable
+  --tilt FRAME:X,Y[:N]    tilt sensor games (MBC7): tilt so things roll right (X) and
+                          down the screen (Y), in g (about -1 to 1), from FRAME for N
+                          frames (default 60); repeatable
 debugging:
   --break ADDR            stop when PC reaches ADDR; repeatable
   --watch 'ADDR [END] [r|w|rw]'
@@ -67,6 +70,7 @@ struct Options {
     sav: Option<PathBuf>,
     load_state: Option<PathBuf>,
     presses: Vec<Press>,
+    tilts: Vec<Tilt>,
     breaks: Vec<String>,
     watches: Vec<String>,
     trace: Option<PathBuf>,
@@ -83,6 +87,14 @@ struct Press {
     from: u64,
     frames: u64,
     buttons: Vec<Button>,
+}
+
+/// The Game Boy tilted by `x`, `y` (in g) from frame `from` for `frames` frames.
+struct Tilt {
+    from: u64,
+    frames: u64,
+    x: f32,
+    y: f32,
 }
 
 impl Press {
@@ -146,6 +158,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--sav" => o.sav = Some(value(arg)?.into()),
             "--load-state" => o.load_state = Some(value(arg)?.into()),
             "--press" => o.presses.push(parse_press(&value(arg)?)?),
+            "--tilt" => o.tilts.push(parse_tilt(&value(arg)?)?),
             "--break" => o.breaks.push(value(arg)?),
             "--watch" => o.watches.push(value(arg)?),
             "--trace" => o.trace = Some(value(arg)?.into()),
@@ -201,6 +214,24 @@ fn parse_press(spec: &str) -> Result<Press, String> {
         from: from.parse().map_err(|_| bad())?,
         frames: frames.parse().map_err(|_| bad())?,
         buttons,
+    })
+}
+
+/// `FRAME:X,Y[:N]`, e.g. `300:1,0` or `300:-0.5,0.2:120`.
+fn parse_tilt(spec: &str) -> Result<Tilt, String> {
+    let bad = || format!("bad --tilt {spec:?} (FRAME:X,Y[:N], e.g. 300:1,0 or 300:-0.5,0:120)");
+    let parts: Vec<&str> = spec.split(':').collect();
+    let (from, xy, frames) = match parts.as_slice() {
+        [f, xy] => (f, xy, "60"),
+        [f, xy, n] => (f, xy, *n),
+        _ => return Err(bad()),
+    };
+    let (x, y) = xy.split_once(',').ok_or_else(bad)?;
+    Ok(Tilt {
+        from: from.parse().map_err(|_| bad())?,
+        frames: frames.parse().map_err(|_| bad())?,
+        x: x.trim().parse().map_err(|_| bad())?,
+        y: y.trim().parse().map_err(|_| bad())?,
     })
 }
 
@@ -267,6 +298,12 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             gb.set_button(b, true);
         }
         pressed = held;
+        let (x, y) = o
+            .tilts
+            .iter()
+            .filter(|t| (t.from..t.from + t.frames).contains(&frame))
+            .fold((0.0, 0.0), |(x, y), t| (x + t.x, y + t.y));
+        gb.set_tilt(x, y);
 
         let result = match trace.as_mut() {
             Some(out) => {
@@ -433,12 +470,18 @@ mod tests {
         let p = &o.presses[0];
         assert_eq!(p.buttons, [Button::A, Button::Start]);
         assert!(!p.held_at(9) && p.held_at(10) && p.held_at(11) && !p.held_at(12));
+        let o = parse_args(&args("game.gb --tilt 5:-0.5,1:9"))
+            .unwrap()
+            .unwrap();
+        let t = &o.tilts[0];
+        assert_eq!((t.from, t.x, t.y, t.frames), (5, -0.5, 1.0, 9));
     }
 
     #[test]
     fn rejects_bad_options() {
         assert!(parse_args(&args("--frames 3")).is_err(), "no ROM");
         assert!(parse_args(&args("a.gb --press 10")).is_err());
+        assert!(parse_args(&args("a.gb --tilt 10:1")).is_err());
         assert!(parse_args(&args("a.gb --bogus")).is_err());
         assert!(parse_args(&args("a.gb --help")).unwrap().is_none());
     }
