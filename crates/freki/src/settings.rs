@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use freki_core::{BootRom, Model};
+use freki_core::{BootRom, Model, Screen, rgb555_to_rgb888};
 
 use crate::input::Bindings;
 use crate::session::Start;
@@ -113,20 +113,24 @@ pub enum ConsoleModel {
     GameBoy,
     /// Also original Game Boy games, coloured like a real GBC does.
     GameBoyColor,
+    /// Every game in a Super Game Boy, with its colours and border where the game has them.
+    SuperGameBoy,
 }
 
 impl ConsoleModel {
-    pub const ALL: [ConsoleModel; 3] = [
+    pub const ALL: [ConsoleModel; 4] = [
         ConsoleModel::Auto,
         ConsoleModel::GameBoy,
         ConsoleModel::GameBoyColor,
+        ConsoleModel::SuperGameBoy,
     ];
 
     pub fn name(self) -> &'static str {
         match self {
-            ConsoleModel::Auto => "Auto (GBC for colour games)",
+            ConsoleModel::Auto => "Auto (GBC for colour games, SGB for SGB games)",
             ConsoleModel::GameBoy => "Game Boy",
             ConsoleModel::GameBoyColor => "Game Boy Color",
+            ConsoleModel::SuperGameBoy => "Super Game Boy",
         }
     }
 
@@ -136,6 +140,7 @@ impl ConsoleModel {
             ConsoleModel::Auto => None,
             ConsoleModel::GameBoy => Some(Model::Dmg),
             ConsoleModel::GameBoyColor => Some(Model::Cgb),
+            ConsoleModel::SuperGameBoy => Some(Model::Sgb),
         }
     }
 }
@@ -201,6 +206,23 @@ impl Palette {
             ],
         }
     }
+}
+
+/// The picture as RGBA, with its width and height: DMG shades in `palette`, GBC colours
+/// (optionally corrected), SGB colours as the SNES outputs them.
+pub fn screen_rgba(screen: Screen, palette: Palette, correct: bool) -> (Vec<u8>, [usize; 2]) {
+    let (width, height) = screen.size();
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    let mut push = |[r, g, b]: [u8; 3]| rgba.extend([r, g, b, 0xFF]);
+    match screen {
+        Screen::Shades(shades) => {
+            let colors = palette.colors();
+            shades.iter().for_each(|&s| push(colors[(s & 3) as usize]));
+        }
+        Screen::Rgb555(pixels) => pixels.iter().for_each(|&c| push(cgb_color(c, correct))),
+        Screen::Sgb(pixels) => pixels.iter().for_each(|&c| push(rgb555_to_rgb888(c))),
+    }
+    (rgba, [width, height])
 }
 
 /// Converts a Game Boy Color RGB555 colour to 8-bit RGB. With `correct`, approximates the

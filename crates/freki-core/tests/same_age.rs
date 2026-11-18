@@ -7,8 +7,8 @@
 //! The AGE file names say which devices a test was verified on: `dmgC` runs on the Game Boy,
 //! `cgbBCE` on the Game Boy Color, `ncmBC` on the Game Boy Color in non-CGB mode. A test
 //! made for several revisions in separate ROMs (`ly-cgbE`, `ly-dmgC-cgbBC`) can pass only
-//! for the revision freki emulates. SameSuite runs on the Game Boy Color; its Super Game Boy
-//! tests are skipped.
+//! for the revision freki emulates. SameSuite runs on the Game Boy Color, its `sgb/` tests
+//! on the Super Game Boy.
 //!
 //! The ROMs come from `scripts/fetch-test-roms.sh`; without them the test passes. Known
 //! failures are listed in `tests/same_age_failures.txt`, and the test fails if any other
@@ -33,6 +33,7 @@ enum Device {
     Cgb,
     /// A Game Boy Color running a Game Boy game.
     NonCgbMode,
+    Sgb,
 }
 
 struct Case {
@@ -82,13 +83,12 @@ fn cases(root: &Path) -> Vec<Case> {
     find(&root.join("same-suite"), "gb", &mut roms);
     roms.sort();
     for rom in roms {
-        if !rom.components().any(|c| c.as_os_str() == "sgb") {
-            cases.push(Case {
-                rom,
-                device: Device::Cgb,
-                screenshot: None,
-            });
-        }
+        let sgb = rom.components().any(|c| c.as_os_str() == "sgb");
+        cases.push(Case {
+            rom,
+            device: if sgb { Device::Sgb } else { Device::Cgb },
+            screenshot: None,
+        });
     }
     let mut roms = Vec::new();
     find(&root.join("age-test-roms"), "gb", &mut roms);
@@ -139,6 +139,7 @@ fn case_name(case: &Case, root: &Path) -> String {
         Device::Dmg => "dmg",
         Device::Cgb => "cgb",
         Device::NonCgbMode => "ncm",
+        Device::Sgb => "sgb",
     };
     let file = case.screenshot.as_ref().unwrap_or(&case.rom);
     let rel = file.strip_prefix(root).unwrap_or(file);
@@ -203,6 +204,7 @@ fn screen_matches(gb: &GameBoy, device: Device, reference: &[[u8; 3]]) -> bool {
             .iter()
             .zip(reference)
             .all(|(&c, &r)| rgb555_to_rgb888(c) == r),
+        Screen::Sgb(_) => unreachable!("AGE runs on a DMG or CGB"),
     }
 }
 
@@ -211,6 +213,7 @@ fn run(case: &Case) -> Result<(), String> {
     let model = match case.device {
         Device::Dmg => Model::Dmg,
         Device::Cgb | Device::NonCgbMode => Model::Cgb,
+        Device::Sgb => Model::Sgb,
     };
     let mut gb = GameBoy::with_model(rom, model).map_err(|e| e.to_string())?;
     let mut cycles = 0u64;

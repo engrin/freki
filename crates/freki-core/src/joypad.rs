@@ -75,6 +75,11 @@ impl Joypad {
         0xC0 | self.select | low
     }
 
+    /// The selection bits 4–5 as last written (0 = selected).
+    pub fn select(&self) -> u8 {
+        self.select
+    }
+
     pub fn write(&mut self, value: u8) {
         self.select = value & 0x30;
     }

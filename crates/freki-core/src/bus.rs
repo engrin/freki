@@ -25,6 +25,8 @@ use crate::timer::Timer;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
+use crate::sgb::Sgb;
+
 /// Interrupt bits, shared by IE ($FFFF) and IF ($FF0F).
 pub mod interrupt {
     pub const VBLANK: u8 = 1 << 0;
@@ -53,6 +55,8 @@ pub struct Bus {
     /// CGB mode: the CGB registers (banks, palettes, speed, VRAM DMA) are available.
     /// Off on a DMG and in the CGB's DMG compatibility mode.
     pub cgb: bool,
+    /// Super Game Boy: the SNES side that colours the picture and adds a border.
+    pub sgb: Option<Box<Sgb>>,
     /// KEY0 ($FF4C) bit 2, written by the CGB boot ROM: switch to DMG compatibility mode
     /// when the boot ROM is unmapped.
     key0_dmg: bool,
@@ -164,6 +168,7 @@ impl Bus {
             breaks: Breakpoints::default(),
             cgb_hardware: false,
             cgb: false,
+            sgb: None,
             key0_dmg: false,
             wram: vec![0; 0x8000],
             svbk: 0,
@@ -305,7 +310,7 @@ impl Bus {
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
             0xFEA0..=0xFEFF if self.cgb_hardware => self.unusable[addr as usize - 0xFEA0],
             0xFEA0..=0xFEFF => 0x00,
-            0xFF00 => self.joypad.read(),
+            0xFF00 => self.read_joypad(),
             0xFF01..=0xFF02 => self.serial.read(addr, self.cgb),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupt_flag | 0xE0,
@@ -345,7 +350,13 @@ impl Bus {
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF if self.cgb_hardware => self.unusable[addr as usize - 0xFEA0] = value,
             0xFEA0..=0xFEFF => {}
-            0xFF00 => self.joypad.write(value),
+            0xFF00 => {
+                let old = self.joypad.select();
+                self.joypad.write(value);
+                if let Some(sgb) = self.sgb.as_mut() {
+                    sgb.write_joypad(old, value & 0x30);
+                }
+            }
             0xFF01..=0xFF02 => self.serial.write(addr, value, self.cgb),
             0xFF04 => {
                 // Resetting the counter can make the serial clock's and the frame
@@ -400,6 +411,25 @@ impl Bus {
             0xFF00..=0xFF7F => {}
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupt_enable = value,
+        }
+    }
+
+    /// P1: on a Super Game Boy in multiplayer mode, the joypad ID with neither button group
+    /// selected, and no buttons for players 2–4 (only player 1 has a joypad).
+    fn read_joypad(&self) -> u8 {
+        let value = self.joypad.read();
+        let Some(sgb) = &self.sgb else {
+            return value;
+        };
+        if self.joypad.select() == 0x30
+            && let Some(id) = sgb.joypad_id()
+        {
+            return (value & 0xF0) | id;
+        }
+        if sgb.player_one() {
+            value
+        } else {
+            value | 0x0F
         }
     }
 
@@ -754,6 +784,11 @@ impl Bus {
         self.serial
             .clock(((counter + cycles) >> shift) - (counter >> shift));
         self.interrupt_flag |= self.ppu.tick(video_cycles);
+        if self.ppu.take_frame_done()
+            && let Some(sgb) = self.sgb.as_mut()
+        {
+            sgb.end_frame(self.ppu.framebuffer());
+        }
         let hblank_started = self.ppu.take_hblank_started();
         if hblank_started && self.hdma.active {
             self.hblank_hdma_request();

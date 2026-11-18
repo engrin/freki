@@ -17,10 +17,7 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use freki_core::{
-    BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
-    Screen,
-};
+use freki_core::{BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Model};
 
 use crate::console::{self, Console};
 use crate::rom_file;
@@ -35,7 +32,8 @@ Runs ROM without a window or sound, as fast as possible.
 run:
   --frames N              frames to run (default 600, about 10 seconds)
   --until-serial TEXT     stop once the serial output contains TEXT (exit 1 if it never does)
-  --model dmg|cgb         console (default: GBC for colour games, else Game Boy)
+  --model dmg|cgb|sgb     console (default: GBC for colour games, SGB for SGB games,
+                          else Game Boy)
   --boot FILE             start with this boot ROM (DMG or GBC, by size)
   --patch FILE            apply this IPS or BPS patch (default: ROM.bps or ROM.ips if present)
   --sav FILE              load this battery save (never written back; see --write-sav)
@@ -168,7 +166,8 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
                 o.model = Some(match value(arg)?.to_ascii_lowercase().as_str() {
                     "dmg" | "gb" => Model::Dmg,
                     "cgb" | "gbc" => Model::Cgb,
-                    m => return Err(format!("unknown model {m:?} (dmg or cgb)")),
+                    "sgb" => Model::Sgb,
+                    m => return Err(format!("unknown model {m:?} (dmg, cgb or sgb)")),
                 });
             }
             "--boot" => o.boot = Some(value(arg)?.into()),
@@ -441,10 +440,12 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         );
     }
     if let Some(path) = &o.screenshot {
-        save_png(
-            path,
-            &screen_rgba(&gb, o.palette.unwrap_or(Palette::Grey), o.color_correction),
-        )?;
+        let (rgba, size) = settings::screen_rgba(
+            gb.screen(),
+            o.palette.unwrap_or(Palette::Grey),
+            o.color_correction,
+        );
+        save_png(path, &rgba, size)?;
         println!("screenshot saved to {}", path.display());
     }
     if let Some(path) = &o.save_state {
@@ -502,34 +503,10 @@ fn doctor_line(gb: &GameBoy) -> String {
     )
 }
 
-fn screen_rgba(gb: &GameBoy, palette: Palette, correct: bool) -> Vec<u8> {
-    let mut rgba = Vec::with_capacity(SCREEN_WIDTH * SCREEN_HEIGHT * 4);
-    match gb.screen() {
-        Screen::Shades(shades) => {
-            let colors = palette.colors();
-            for &shade in shades {
-                let [r, g, b] = colors[(shade & 3) as usize];
-                rgba.extend([r, g, b, 0xFF]);
-            }
-        }
-        Screen::Rgb555(pixels) => {
-            for &color in pixels {
-                let [r, g, b] = settings::cgb_color(color, correct);
-                rgba.extend([r, g, b, 0xFF]);
-            }
-        }
-    }
-    rgba
-}
-
-fn save_png(path: &Path, rgba: &[u8]) -> Result<(), Box<dyn Error>> {
+fn save_png(path: &Path, rgba: &[u8], [width, height]: [usize; 2]) -> Result<(), Box<dyn Error>> {
     let file =
         fs::File::create(path).map_err(|e| format!("cannot create {}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(
-        BufWriter::new(file),
-        SCREEN_WIDTH as u32,
-        SCREEN_HEIGHT as u32,
-    );
+    let mut encoder = png::Encoder::new(BufWriter::new(file), width as u32, height as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.write_header()?.write_image_data(rgba)?;

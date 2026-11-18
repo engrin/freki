@@ -38,7 +38,7 @@ fn expected(stem: &str, model: Model) -> Option<String> {
     let marker = match model {
         Model::Dmg if stem.contains("dmg08_cgb04c_out") => "dmg08_cgb04c_out",
         Model::Dmg if stem.contains("dmg08_out") => "dmg08_out",
-        Model::Dmg => return None,
+        Model::Dmg | Model::Sgb => return None,
         Model::Cgb if stem.contains("dmg08_cgb04c_out") => "dmg08_cgb04c_out",
         Model::Cgb if stem.contains("cgb04c_out") => "cgb04c_out",
         Model::Cgb if stem.contains("dmg08_out") => return None,
@@ -138,6 +138,7 @@ fn black_and_white(gb: &GameBoy) -> Vec<Option<bool>> {
                 _ => None,
             })
             .collect(),
+        Screen::Sgb(_) => unreachable!("the hwtests run on a DMG or CGB"),
     }
 }
 
@@ -209,7 +210,7 @@ fn run(case: &Case) -> bool {
 /// The name a case has in the failure list: ROM path below `hwtests/` and model.
 fn case_name(case: &Case, root: &Path) -> String {
     let model = match case.model {
-        Model::Dmg => "dmg",
+        Model::Dmg | Model::Sgb => "dmg",
         Model::Cgb => "cgb",
     };
     let rel = case.rom.strip_prefix(root).unwrap_or(&case.rom);

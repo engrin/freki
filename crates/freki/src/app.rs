@@ -9,7 +9,6 @@ use eframe::egui::{
 };
 use freki_core::{
     Button, Code, FRAMES_PER_SECOND, Filter, MemorySearch, Model, SCREEN_HEIGHT, SCREEN_WIDTH,
-    Screen,
 };
 
 use crate::audio::Audio;
@@ -146,6 +145,8 @@ pub struct FrekiApp {
     gamepads: Gamepads,
     console: Console,
     texture: Option<TextureHandle>,
+    /// Picture size the window was last fitted to (Super Game Boy pictures are larger).
+    fitted_size: [usize; 2],
     samples: Vec<f32>,
 
     paused: bool,
@@ -194,6 +195,7 @@ impl FrekiApp {
             gamepads: Gamepads::open(),
             console: Console::start(),
             texture: None,
+            fitted_size: [SCREEN_WIDTH, SCREEN_HEIGHT],
             samples: Vec::new(),
             paused: false,
             rewinding: false,
@@ -293,6 +295,7 @@ impl FrekiApp {
                 self.console.set_cheat_file(session.cheat_file());
                 let model = match session.gb.model() {
                     Model::Cgb => " (Game Boy Color)",
+                    Model::Sgb => " (Super Game Boy)",
                     Model::Dmg => "",
                 };
                 let title = if session.title.is_empty() {
@@ -367,9 +370,10 @@ impl FrekiApp {
     fn set_scale(&mut self, ctx: &egui::Context, scale: u32) {
         self.settings.scale = scale;
         // Room for the menu bar and status bar around the screen.
+        let [width, height] = self.screen_size();
         let size = vec2(
-            (SCREEN_WIDTH as u32 * scale) as f32,
-            (SCREEN_HEIGHT as u32 * scale) as f32 + 56.0,
+            (width as u32 * scale) as f32,
+            (height as u32 * scale) as f32 + 56.0,
         );
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
     }
@@ -636,42 +640,49 @@ impl FrekiApp {
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
-        let rgba = self.screen_rgba();
-        let image = ColorImage::from_rgba_unmultiplied([SCREEN_WIDTH, SCREEN_HEIGHT], &rgba);
+        let (rgba, size) = self.screen_rgba();
+        let image = ColorImage::from_rgba_unmultiplied(size, &rgba);
+        // A game with the other picture size (Super Game Boy or not): fit the window to it.
+        if size != self.fitted_size && !is_fullscreen(ctx) {
+            self.fitted_size = size;
+            self.set_scale(ctx, self.settings.scale);
+        }
         match &mut self.texture {
             Some(texture) => texture.set(image, TextureOptions::NEAREST),
             None => self.texture = Some(ctx.load_texture("screen", image, TextureOptions::NEAREST)),
         }
     }
 
-    /// The screen as shown (palette or colour correction applied), as RGBA.
-    fn screen_rgba(&self) -> Vec<u8> {
-        let colors = self.settings.palette.colors();
-        let correct = self.settings.color_correction;
-        let mut rgba = Vec::with_capacity(SCREEN_WIDTH * SCREEN_HEIGHT * 4);
-        match self.session.as_ref().map(|s| s.gb.screen()) {
-            Some(Screen::Shades(shades)) => {
-                for &shade in shades {
-                    let [r, g, b] = colors[(shade & 3) as usize];
-                    rgba.extend([r, g, b, 0xFF]);
-                }
-            }
-            Some(Screen::Rgb555(pixels)) => {
-                for &color in pixels {
-                    let [r, g, b] = settings::cgb_color(color, correct);
-                    rgba.extend([r, g, b, 0xFF]);
-                }
-            }
-            None => rgba.resize(SCREEN_WIDTH * SCREEN_HEIGHT * 4, 0x20),
+    /// The screen as shown (palette or colour correction applied), as RGBA, with its size.
+    fn screen_rgba(&self) -> (Vec<u8>, [usize; 2]) {
+        match self.session.as_ref() {
+            Some(s) => settings::screen_rgba(
+                s.gb.screen(),
+                self.settings.palette,
+                self.settings.color_correction,
+            ),
+            None => (
+                vec![0x20; SCREEN_WIDTH * SCREEN_HEIGHT * 4],
+                [SCREEN_WIDTH, SCREEN_HEIGHT],
+            ),
         }
-        rgba
+    }
+
+    /// Size of the picture: 160×144, or 256×224 on a Super Game Boy.
+    fn screen_size(&self) -> [usize; 2] {
+        self.session
+            .as_ref()
+            .map_or([SCREEN_WIDTH, SCREEN_HEIGHT], |s| {
+                let (w, h) = s.gb.screen().size();
+                [w, h]
+            })
     }
 
     /// Saves the screen as shown to a PNG next to the ROM.
     fn screenshot(&mut self) {
-        let rgba = self.screen_rgba();
+        let (rgba, size) = self.screen_rgba();
         self.with_session(|s| {
-            let path = s.save_screenshot(&rgba)?;
+            let path = s.save_screenshot(&rgba, size)?;
             Ok(format!("saved {}", file_name(&path)))
         });
     }
@@ -1012,14 +1023,14 @@ impl FrekiApp {
         }
         // The largest scale that fits; with integer scaling, the largest whole one (pixels
         // stay sharp and even), unless the window is smaller than the screen.
-        let fit = (available.width() / SCREEN_WIDTH as f32)
-            .min(available.height() / SCREEN_HEIGHT as f32);
+        let [width, height] = texture.size().map(|n| n as f32);
+        let fit = (available.width() / width).min(available.height() / height);
         let scale = if self.settings.integer_scaling && fit >= 1.0 {
             fit.floor()
         } else {
             fit
         };
-        let size = vec2(SCREEN_WIDTH as f32 * scale, SCREEN_HEIGHT as f32 * scale);
+        let size = vec2(width * scale, height * scale);
         let rect = Rect::from_center_size(available.center(), size);
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         ui.painter().image(texture.id(), rect, uv, Color32::WHITE);

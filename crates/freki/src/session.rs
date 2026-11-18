@@ -29,13 +29,12 @@ pub struct Start {
 /// A machine with `rom` inserted: started by the console's boot ROM if there is one,
 /// otherwise in the state the boot ROM leaves behind.
 pub fn power_on(rom: Vec<u8>, start: &Start) -> Result<GameBoy, CartridgeError> {
-    let colour_game = rom.get(0x143).is_some_and(|flag| flag & 0x80 != 0);
-    let model = start
-        .model
-        .unwrap_or(if colour_game { Model::Cgb } else { Model::Dmg });
+    let model = start.model.unwrap_or_else(|| Model::for_rom(&rom));
     let boot_rom = match model {
         Model::Dmg => &start.dmg_boot_rom,
         Model::Cgb => &start.cgb_boot_rom,
+        // The SGB's own boot ROM is not supported: start in its post-boot state.
+        Model::Sgb => &None,
     };
     match boot_rom {
         Some(boot) => GameBoy::with_boot_rom(rom, boot.clone()),
@@ -93,9 +92,13 @@ impl Session {
         self.start = start;
     }
 
-    /// Writes `rgba` (the 160×144 screen) as `<rom>-NNN.png` next to the ROM, using the
-    /// first free number. Returns the path.
-    pub fn save_screenshot(&self, rgba: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+    /// Writes `rgba` (the screen, `width` × `height`) as `<rom>-NNN.png` next to the ROM,
+    /// using the first free number. Returns the path.
+    pub fn save_screenshot(
+        &self,
+        rgba: &[u8],
+        [width, height]: [usize; 2],
+    ) -> Result<PathBuf, Box<dyn Error>> {
         let stem = self.rom_path.with_extension("");
         let stem = stem.to_string_lossy();
         let path = (1..10_000)
@@ -103,11 +106,8 @@ impl Session {
             .find(|p| !p.exists())
             .ok_or("too many screenshots")?;
         let file = fs::File::create(&path)?;
-        let mut encoder = png::Encoder::new(
-            std::io::BufWriter::new(file),
-            freki_core::SCREEN_WIDTH as u32,
-            freki_core::SCREEN_HEIGHT as u32,
-        );
+        let mut encoder =
+            png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.write_header()?.write_image_data(rgba)?;
@@ -222,8 +222,9 @@ mod tests {
         fs::write(&rom_path, rom).unwrap();
         let (session, _) = Session::open(&rom_path, Start::default()).unwrap();
         let rgba = vec![0x80; freki_core::SCREEN_WIDTH * freki_core::SCREEN_HEIGHT * 4];
-        let first = session.save_screenshot(&rgba).unwrap();
-        let second = session.save_screenshot(&rgba).unwrap();
+        let size = [freki_core::SCREEN_WIDTH, freki_core::SCREEN_HEIGHT];
+        let first = session.save_screenshot(&rgba, size).unwrap();
+        let second = session.save_screenshot(&rgba, size).unwrap();
         assert_eq!(first, dir.join("game-001.png"));
         assert_eq!(second, dir.join("game-002.png"));
         let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(&first).unwrap()));

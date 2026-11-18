@@ -19,6 +19,9 @@ Named after Freki, one of Odin's two wolves.
   MBC5 with rumble, MBC7 with tilt sensor (tilted with the D-pad, arrow keys or left
   stick), Hudson's HuC1 and HuC3 (with real-time clock), and Bandai's TAMA5
   (Tamagotchi 3, with its clock)
+- **Super Game Boy:** the borders and colours SGB games bring along (Pokémon, Donkey Kong,
+  Dragon Warrior Monsters, …), with palettes, colour attributes, screen masking and the
+  multiplayer request games use to detect an SGB
 - **Optional boot ROMs:** start with the real Game Boy or Game Boy Color boot animation, or
   straight into the game
 
@@ -67,7 +70,7 @@ Named after Freki, one of Odin's two wolves.
 | mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
 | mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
 | Gambatte hardware tests | DMG 1517 / 1651, GBC 2510 / 3023 |
-| SameSuite (GBC; mostly sound, sample-exact) | 29 / 76 |
+| SameSuite (GBC and SGB; mostly sound, sample-exact) | 31 / 78 |
 | AGE test ROMs (DMG, GBC and GBC in DMG mode) | 14 / 59 |
 
 The failures are listed in `crates/freki-core/tests/gambatte_failures.txt` and
@@ -116,9 +119,13 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 
 ## Consoles and boot ROMs
 
-**Emulation → Console** chooses the hardware. **Auto** runs Game Boy Color games on a GBC
-and everything else on a Game Boy. **Game Boy Color** also runs original Game Boy games on
-a GBC, in colour as on the real thing.
+**Emulation → Console** chooses the hardware. **Auto** runs Game Boy Color games on a GBC,
+games with Super Game Boy features on an SGB, and everything else on a Game Boy. **Game Boy
+Color** also runs original Game Boy games on a GBC, in colour as on the real thing. **Super
+Game Boy** also runs games made for both the GBC and the SGB (such as Dragon Warrior Monsters)
+with their SGB border; the window grows to the SGB's 256×224 picture. Games without SGB
+features get a plain border in the SGB's default colours. SGB sound and the SGB's own boot
+ROM are not emulated.
 
 By default games start in the state the boot ROM leaves behind. For the logo animation and
 sound, choose your own boot ROM dumps under **Emulation → Boot ROM → Choose file…**: the

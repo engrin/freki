@@ -179,6 +179,16 @@ impl Cpu {
         }
     }
 
+    /// After the Super Game Boy's boot ROM: C = $14 tells games they run on an SGB.
+    pub fn new_post_boot_sgb() -> Self {
+        let mut cpu = Self::new_post_boot();
+        cpu.regs.set_af(0x0100);
+        cpu.regs.set_bc(0x0014);
+        cpu.regs.set_de(0x0000);
+        cpu.regs.set_hl(0xC060);
+        cpu
+    }
+
     // ---- bus timing -------------------------------------------------------------------
 
     /// Runs the rest of the hardware for `cycles` T-cycles.

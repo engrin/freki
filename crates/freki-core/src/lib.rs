@@ -19,6 +19,7 @@ pub mod mbc7;
 pub mod mmm01;
 pub mod ppu;
 pub mod serial;
+pub mod sgb;
 pub mod state;
 pub mod tama5;
 pub mod timer;
@@ -32,6 +33,7 @@ pub use disasm::{Instruction, disassemble};
 pub use joypad::Button;
 
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+pub use sgb::{SGB_HEIGHT, SGB_WIDTH};
 pub use state::{Rewind, StateError};
 
 use bus::Bus;
@@ -70,15 +72,48 @@ pub enum Model {
     /// Game Boy Color: CGB games in colour mode, original Game Boy games in its DMG
     /// compatibility mode.
     Cgb,
+    /// Super Game Boy: a Game Boy whose picture the SNES colours and frames with a border.
+    Sgb,
 }
 
-/// The current picture, 160×144 pixels row by row.
+impl Model {
+    /// The model a game is best played on: the Game Boy Color for colour games, the
+    /// Super Game Boy for games with SGB features, otherwise the Game Boy.
+    pub fn for_rom(rom: &[u8]) -> Self {
+        if rom.get(0x143).is_some_and(|flag| flag & 0x80 != 0) {
+            Model::Cgb
+        } else if sgb_game(rom) {
+            Model::Sgb
+        } else {
+            Model::Dmg
+        }
+    }
+}
+
+/// Whether the header unlocks Super Game Boy features (SGB flag $03, old licensee $33).
+pub fn sgb_game(rom: &[u8]) -> bool {
+    rom.get(0x146) == Some(&0x03) && rom.get(0x14B) == Some(&0x33)
+}
+
+/// The current picture, row by row: 160×144 pixels, or 256×224 on a Super Game Boy.
 #[derive(Debug, Clone, Copy)]
 pub enum Screen<'a> {
     /// DMG: shades 0 (lightest) to 3 (darkest); the frontend picks the colours.
     Shades(&'a [u8; SCREEN_WIDTH * SCREEN_HEIGHT]),
     /// CGB: RGB555 colours (bits 0–4 red, 5–9 green, 10–14 blue).
     Rgb555(&'a [u16]),
+    /// SGB: 256×224 RGB555 colours, the Game Boy screen inside the border at (48, 40).
+    Sgb(&'a [u16]),
+}
+
+impl Screen<'_> {
+    /// Width and height in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        match self {
+            Screen::Sgb(_) => (SGB_WIDTH, SGB_HEIGHT),
+            _ => (SCREEN_WIDTH, SCREEN_HEIGHT),
+        }
+    }
 }
 
 /// Converts an RGB555 colour to 8-bit RGB by bit replication (no colour correction).
@@ -106,10 +141,17 @@ impl GameBoy {
         Self::with_model(rom, if cgb { Model::Cgb } else { Model::Dmg })
     }
 
+    /// Like [`GameBoy::new`], but SGB games run on a Super Game Boy (see [`Model::for_rom`]).
+    pub fn for_rom(rom: Vec<u8>) -> Result<Self, CartridgeError> {
+        let model = Model::for_rom(&rom);
+        Self::with_model(rom, model)
+    }
+
     /// Creates a Game Boy of the given model with `rom` inserted, in the post-boot state.
     /// On a [`Model::Cgb`], original Game Boy games run in DMG compatibility mode, in
     /// shades of grey (the CGB boot ROM, see [`GameBoy::with_boot_rom`], picks colours).
     pub fn with_model(rom: Vec<u8>, model: Model) -> Result<Self, CartridgeError> {
+        let sgb = (model == Model::Sgb).then(|| Box::new(sgb::Sgb::new(&rom)));
         let cart = Cartridge::from_rom(rom)?;
         let cgb_game = cart.supports_cgb();
         let logo: [u8; 48] = std::array::from_fn(|i| cart.read_rom(0x104 + i as u16));
@@ -130,6 +172,9 @@ impl GameBoy {
                 bus.joypad.write(0x30);
                 Cpu::new_post_boot_cgb_compat(cart_title_sum(&bus.cart))
             }
+        } else if let Some(sgb) = sgb {
+            bus.sgb = Some(sgb);
+            Cpu::new_post_boot_sgb()
         } else {
             Cpu::new_post_boot()
         };
@@ -144,6 +189,8 @@ impl GameBoy {
     pub fn model(&self) -> Model {
         if self.bus.cgb_hardware {
             Model::Cgb
+        } else if self.bus.sgb.is_some() {
+            Model::Sgb
         } else {
             Model::Dmg
         }
@@ -314,7 +361,9 @@ impl GameBoy {
 
     /// The current picture: shades on a DMG, colours on a CGB.
     pub fn screen(&self) -> Screen<'_> {
-        if self.bus.ppu.outputs_rgb() {
+        if let Some(sgb) = &self.bus.sgb {
+            Screen::Sgb(sgb.frame())
+        } else if self.bus.ppu.outputs_rgb() {
             Screen::Rgb555(self.bus.ppu.rgb_framebuffer())
         } else {
             Screen::Shades(self.bus.ppu.framebuffer())

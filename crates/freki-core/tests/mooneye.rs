@@ -31,7 +31,7 @@ fn run_cgb(path: &str) {
 /// Runs a test after the real DMG or CGB boot ROM, if it is present.
 fn run_after_boot_rom(path: &str, model: Model) {
     let file = match model {
-        Model::Dmg => "gb_bios.bin",
+        Model::Dmg | Model::Sgb => "gb_bios.bin",
         Model::Cgb => "gbc_bios.bin",
     };
     let boot = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

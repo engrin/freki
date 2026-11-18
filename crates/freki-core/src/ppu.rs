@@ -228,6 +228,9 @@ pub struct Ppu {
     /// CGB mode output: RGB555 colours.
     rgb_framebuffer: Vec<u16>,
     frame_ready: bool,
+    /// Like `frame_ready`, for the bus (the Super Game Boy picks up each frame).
+    #[serde(skip)]
+    frame_done: bool,
     /// Dot position within the current scanline.
     dot: u32,
     /// Mode as reported by STAT.
@@ -373,6 +376,7 @@ impl Ppu {
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             rgb_framebuffer: vec![0x7FFF; SCREEN_WIDTH * SCREEN_HEIGHT],
             frame_ready: false,
+            frame_done: false,
             dot: 0,
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
@@ -528,6 +532,10 @@ impl Ppu {
 
     pub fn is_cgb(&self) -> bool {
         self.cgb
+    }
+
+    pub fn take_frame_done(&mut self) -> bool {
+        std::mem::take(&mut self.frame_done)
     }
 
     pub fn take_frame_ready(&mut self) -> bool {
@@ -1085,6 +1093,7 @@ impl Ppu {
             if self.ly as usize == SCREEN_HEIGHT {
                 self.mode = Mode::VBlank;
                 self.frame_ready = true;
+                self.frame_done = true;
                 irq |= interrupt::VBLANK;
                 // DMG quirk: entering VBlank also triggers the OAM (mode 2) STAT interrupt.
                 if self.dmg_hardware() && self.irq_stat & stat::OAM_INT != 0 && !self.stat_line {
