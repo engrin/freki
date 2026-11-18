@@ -271,6 +271,8 @@ pub struct Ppu {
     /// Set when mode 3 of a visible line ends (starts HBlank DMA on the CGB).
     #[serde(skip)]
     hblank_started: bool,
+    /// The dot of the line at which the last HBlank began.
+    hblank_start_dot: u32,
     /// The first line after the LCD is switched on: it has no mode 2 (STAT goes from mode 0
     /// straight to mode 3 and OAM stays accessible).
     first_line: bool,
@@ -387,6 +389,7 @@ impl Ppu {
             obj_size_history: 0,
             lyc_flag_off: false,
             hblank_started: false,
+            hblank_start_dot: 0,
             first_line: false,
             pipeline_active: false,
             bg_fifo: VecDeque::with_capacity(16),
@@ -514,6 +517,11 @@ impl Ppu {
     }
 
     /// Whether an HBlank began since the last call.
+    /// The dot of the line at which the last HBlank began.
+    pub fn hblank_start_dot(&self) -> u32 {
+        self.hblank_start_dot
+    }
+
     pub fn take_hblank_started(&mut self) -> bool {
         std::mem::take(&mut self.hblank_started)
     }
@@ -524,6 +532,11 @@ impl Ppu {
 
     pub fn take_frame_ready(&mut self) -> bool {
         std::mem::take(&mut self.frame_ready)
+    }
+
+    /// The current line (LY's internal counter) and dot within it.
+    pub fn line_and_dot(&self) -> (u8, u32) {
+        (self.ly, self.dot)
     }
 
     pub fn mode(&self) -> Mode {
@@ -1029,6 +1042,7 @@ impl Ppu {
                     self.irq_mode = Mode::HBlank;
                     self.palette_unlock_in = PALETTE_UNLOCK_DELAY;
                     self.hblank_started = true;
+                    self.hblank_start_dot = self.dot;
                 }
             }
         }
@@ -1767,6 +1781,7 @@ impl Ppu {
         }
         if self.mode == Mode::Drawing {
             self.hblank_started = true;
+            self.hblank_start_dot = self.dot;
         }
         self.mode = Mode::HBlank;
         self.irq_mode = Mode::HBlank;

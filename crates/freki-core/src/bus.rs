@@ -95,6 +95,12 @@ pub struct Bus {
     /// The CPU halted during an HBlank that had its block already, so waking in an HBlank
     /// copies none.
     halted_in_hdma_period: bool,
+    /// Line and dot of the last HALT.
+    halted_at: (u8, u32),
+    /// An HBlank began right after HALT: its block is copied when the CPU wakes.
+    hdma_requested_in_halt: bool,
+    /// Line and dot until which the last HBlank block is being copied.
+    hdma_busy_until: (u8, u32),
 }
 
 /// CGB VRAM DMA ($FF51–$FF55): copies 16-byte blocks into VRAM, either all at once
@@ -181,6 +187,9 @@ impl Bus {
             dma_stall: 0,
             cpu_halted: false,
             halted_in_hdma_period: false,
+            halted_at: (0, 0),
+            hdma_requested_in_halt: false,
+            hdma_busy_until: (0, 0),
         }
     }
 
@@ -435,17 +444,39 @@ impl Bus {
     /// The CPU executed HALT.
     pub fn cpu_halt(&mut self) {
         self.cpu_halted = true;
+        self.halted_at = self.ppu.line_and_dot();
+        self.hdma_requested_in_halt = false;
         self.halted_in_hdma_period = self.hdma.active && self.in_hdma_period(4);
     }
 
     /// The CPU woke from HALT (or did not halt after all): an HBlank transfer copies the
     /// block it skipped while halted if an HBlank is under way, unless it halted in one.
     pub fn cpu_woke(&mut self) {
-        if std::mem::take(&mut self.cpu_halted)
-            && !self.halted_in_hdma_period
-            && self.hdma.active
-            && self.in_hdma_period(8)
-        {
+        let requested = std::mem::take(&mut self.hdma_requested_in_halt);
+        if !std::mem::take(&mut self.cpu_halted) {
+            return;
+        }
+        let hblank_now = !self.halted_in_hdma_period && self.in_hdma_period(8);
+        if self.hdma.active && (requested || hblank_now) {
+            self.hdma_hblank_block();
+        }
+    }
+
+    /// An HBlank began with a transfer under way. As in Gambatte (and its hwtests
+    /// dma/hdma_*halt*, dma/hdma_transition_*): a request that comes while the previous
+    /// block is still being copied is lost with it; while the CPU is halted no block is
+    /// copied, except that an HBlank beginning within 4 dots (2 in double speed) of the
+    /// HALT counts as requested before it and is copied when the CPU wakes.
+    fn hblank_hdma_request(&mut self) {
+        let (line, start) = (self.ppu.line_and_dot().0, self.ppu.hblank_start_dot());
+        if self.hdma_busy_until.0 == line && start < self.hdma_busy_until.1 {
+            return;
+        }
+        if self.cpu_halted {
+            let (halt_line, halt_dot) = self.halted_at;
+            self.hdma_requested_in_halt |= halt_line == line
+                && start.saturating_sub(halt_dot) <= 4 >> u32::from(self.double_speed);
+        } else {
             self.hdma_hblank_block();
         }
     }
@@ -467,6 +498,13 @@ impl Bus {
     /// One block of an HBlank transfer.
     fn hdma_hblank_block(&mut self) {
         self.hdma_block();
+        // The copy takes the CPU's time; in dots that is half as much in double speed.
+        let ds = u32::from(self.double_speed);
+        let (line, dot) = self.ppu.line_and_dot();
+        self.hdma_busy_until = (
+            line,
+            dot + (((HDMA_BLOCK_CYCLES << ds) + DMA_END_CYCLES) >> ds),
+        );
         self.dma_stall += DMA_END_CYCLES;
         if self.hdma.remaining == 0 {
             self.hdma.active = false;
@@ -713,8 +751,9 @@ impl Bus {
         self.serial
             .clock(((counter + cycles) >> shift) - (counter >> shift));
         self.interrupt_flag |= self.ppu.tick(video_cycles);
-        if self.ppu.take_hblank_started() && self.hdma.active && !self.cpu_halted {
-            self.hdma_hblank_block();
+        let hblank_started = self.ppu.take_hblank_started();
+        if hblank_started && self.hdma.active {
+            self.hblank_hdma_request();
         }
         self.interrupt_flag |= self.joypad.take_interrupt();
         self.interrupt_flag |= self.serial.take_interrupt();
