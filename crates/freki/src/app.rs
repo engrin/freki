@@ -1464,154 +1464,195 @@ impl FrekiApp {
         ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
     }
 
+    /// The cheat manager, in a window of its own.
     fn cheat_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_cheats;
-        let Some(session) = self.session.as_mut() else {
+        if !self.show_cheats || self.session.is_none() {
             return;
-        };
+        }
         let mut status = None;
-        egui::Window::new("Cheats")
-            .open(&mut open)
-            .resizable(true)
-            .show(ctx, |ui| {
-                let gb = &mut session.gb;
-                let mut remove = None;
-                egui::ScrollArea::vertical()
-                    .max_height(240.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("cheat_list").striped(true).show(ui, |ui| {
-                            let indices = 0..gb.cheats().list().len();
-                            for i in indices {
-                                let mut enabled = gb.cheats().list()[i].enabled;
-                                if ui.checkbox(&mut enabled, "").changed() {
-                                    gb.cheats_mut().set_enabled(i, enabled);
-                                }
-                                let cheat = &gb.cheats().list()[i];
-                                ui.monospace(&cheat.text);
-                                if gb.cheat_fits(cheat) {
-                                    ui.label("");
-                                } else {
-                                    ui.colored_label(ui.visuals().warn_fg_color, "⚠")
-                                        .on_hover_text(
-                                            "Made for another version of the game: this \
-                                             ROM does not have the bytes its Game Genie \
-                                             code expects, so it does nothing",
-                                        );
-                                }
-                                ui.label(&cheat.name);
-                                if ui.small_button("✖").on_hover_text("Remove").clicked() {
-                                    remove = Some(i);
-                                }
-                                ui.end_row();
-                            }
-                        });
-                    });
-                if let Some(i) = remove {
-                    gb.cheats_mut().remove(i);
-                }
-                if gb.cheats().list().is_empty() {
-                    ui.label("No cheats yet.");
-                }
-                let templates = gb.cheats().templates();
-                if !templates.is_empty() {
-                    ui.separator();
-                    ui.label("Templates: enter a value (decimal, or hex with $) to add a cheat");
-                    self.template_values.resize(templates.len(), String::new());
-                    egui::ScrollArea::vertical()
-                        .id_salt("cheat_templates")
-                        .max_height(120.0)
-                        .show(ui, |ui| {
-                            egui::Grid::new("cheat_templates_grid")
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    for (t, template) in templates.iter().enumerate() {
-                                        ui.monospace(&template.code);
-                                        ui.label(&template.name);
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.template_values[t],
-                                            )
-                                            .hint_text(format!("0–{}", template.max()))
-                                            .desired_width(64.0),
-                                        );
-                                        if ui.button("Add").clicked() {
-                                            let value = parse_byte(&self.template_values[t])
-                                                .ok_or("not a number from 0 to 255".to_string())
-                                                .and_then(|v| {
-                                                    gb.cheats_mut()
-                                                        .fill_template(t, v)
-                                                        .map_err(|e| e.to_string())
-                                                });
-                                            match value {
-                                                Ok(_) => {
-                                                    self.template_values[t].clear();
-                                                    self.cheat_error = None;
-                                                }
-                                                Err(e) => self.cheat_error = Some(e),
-                                            }
-                                        }
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Code");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.new_code)
-                            .hint_text("01VVLLHH, 9xVVLLHH or ABC-DEF-GHI")
-                            .desired_width(130.0),
-                    );
-                    ui.label("Name");
-                    ui.add(egui::TextEdit::singleline(&mut self.new_name).desired_width(140.0));
-                    if ui.button("Add").clicked() {
-                        match gb.cheats_mut().add(&self.new_code, &self.new_name) {
-                            Ok(_) => {
-                                self.new_code.clear();
-                                self.new_name.clear();
-                                self.cheat_error = None;
-                            }
-                            Err(e) => self.cheat_error = Some(e.to_string()),
-                        }
-                    }
-                });
-                if let Some(err) = &self.cheat_error {
-                    ui.colored_label(Color32::LIGHT_RED, err);
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut gb.cheats_mut().enabled, "All cheats enabled (F9)");
-                    let path = session_cheat_path(&session.rom_path);
-                    if ui
-                        .button("Reload .cht")
-                        .on_hover_text(format!(
-                            "Changes are saved to {} automatically",
-                            file_name(&path)
-                        ))
-                        .clicked()
-                    {
-                        status = Some(
-                            console::load_cheat_file(&path, gb)
-                                .unwrap_or_else(|| format!("{} not found", file_name(&path))),
-                        );
-                    }
-                });
-            });
+        let open = tool_window(ctx, "cheats", "freki — Cheats", [640.0, 560.0], |ui| {
+            status = self.cheat_contents(ui);
+        });
         self.show_cheats = open;
         if let Some(message) = status {
             self.set_status(message);
         }
     }
 
+    /// The cheat manager's contents. Returns a status message, if any.
+    fn cheat_contents(&mut self, ui: &mut egui::Ui) -> Option<String> {
+        let session = self.session.as_mut()?;
+        let mut status = None;
+        let gb = &mut session.gb;
+        let mut remove = None;
+        let templates = gb.cheats().templates();
+        // The list gets the height the rest leaves.
+        let reserved = if templates.is_empty() { 95.0 } else { 255.0 };
+        egui::ScrollArea::vertical()
+            .id_salt("cheat_list")
+            .auto_shrink([false, true])
+            .max_height((ui.available_height() - reserved).max(120.0))
+            .show(ui, |ui| {
+                let gap = ui.spacing().item_spacing.x;
+                let name_width = ui.available_width()
+                    - (CHECK_WIDTH + CODE_WIDTH + WARNING_WIDTH + BUTTON_WIDTH + 4.0 * gap);
+                for i in 0..gb.cheats().list().len() {
+                    ui.horizontal(|ui| {
+                        fixed(ui, CHECK_WIDTH, |ui| {
+                            let mut enabled = gb.cheats().list()[i].enabled;
+                            if ui.checkbox(&mut enabled, "").changed() {
+                                gb.cheats_mut().set_enabled(i, enabled);
+                            }
+                        });
+                        let cheat = &gb.cheats().list()[i];
+                        cell(ui, CODE_WIDTH, &cheat.text, true);
+                        let fits = gb.cheat_fits(cheat);
+                        fixed(ui, WARNING_WIDTH, |ui| {
+                            if !fits {
+                                ui.colored_label(ui.visuals().warn_fg_color, "⚠")
+                                    .on_hover_text(
+                                        "Made for another version of the game: this ROM \
+                                         does not have the bytes its Game Genie code \
+                                         expects, so it does nothing",
+                                    );
+                            }
+                        });
+                        cell(ui, name_width, &cheat.name, false);
+                        fixed(ui, BUTTON_WIDTH, |ui| {
+                            if ui.small_button("✖").on_hover_text("Remove").clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    });
+                }
+            });
+        if let Some(i) = remove {
+            gb.cheats_mut().remove(i);
+        }
+        if gb.cheats().list().is_empty() {
+            ui.label("No cheats yet.");
+        }
+        if !templates.is_empty() {
+            ui.separator();
+            ui.label("Templates: enter a value (decimal, or hex with $) to add a cheat");
+            self.template_values.resize(templates.len(), String::new());
+            egui::ScrollArea::vertical()
+                .id_salt("cheat_templates")
+                .auto_shrink([false, true])
+                .max_height(120.0)
+                .show(ui, |ui| {
+                    let gap = ui.spacing().item_spacing.x;
+                    let name_width =
+                        ui.available_width() - (CODE_WIDTH + VALUE_WIDTH + ADD_WIDTH + 3.0 * gap);
+                    for (t, template) in templates.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            cell(ui, CODE_WIDTH, &template.code, true);
+                            cell(ui, name_width, &template.name, false);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.template_values[t])
+                                    .hint_text(format!("0–{}", template.max()))
+                                    .desired_width(VALUE_WIDTH - 8.0),
+                            );
+                            if ui
+                                .add_sized([ADD_WIDTH, 18.0], egui::Button::new("Add"))
+                                .clicked()
+                            {
+                                let value = parse_byte(&self.template_values[t])
+                                    .ok_or("not a number from 0 to 255".to_string())
+                                    .and_then(|v| {
+                                        gb.cheats_mut()
+                                            .fill_template(t, v)
+                                            .map_err(|e| e.to_string())
+                                    });
+                                match value {
+                                    Ok(_) => {
+                                        self.template_values[t].clear();
+                                        self.cheat_error = None;
+                                    }
+                                    Err(e) => self.cheat_error = Some(e),
+                                }
+                            }
+                        });
+                    }
+                });
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Code");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.new_code)
+                    .hint_text("01VVLLHH, 9xVVLLHH or ABC-DEF-GHI")
+                    .desired_width(130.0),
+            );
+            ui.label("Name");
+            let gap = ui.spacing().item_spacing.x;
+            let width = (ui.available_width() - ADD_WIDTH - gap - 8.0).max(60.0);
+            ui.add(egui::TextEdit::singleline(&mut self.new_name).desired_width(width));
+            if ui
+                .add_sized([ADD_WIDTH, 18.0], egui::Button::new("Add"))
+                .clicked()
+            {
+                match gb.cheats_mut().add(&self.new_code, &self.new_name) {
+                    Ok(_) => {
+                        self.new_code.clear();
+                        self.new_name.clear();
+                        self.cheat_error = None;
+                    }
+                    Err(e) => self.cheat_error = Some(e.to_string()),
+                }
+            }
+        });
+        if let Some(err) = &self.cheat_error {
+            ui.colored_label(Color32::LIGHT_RED, err);
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut gb.cheats_mut().enabled, "All cheats enabled (F9)");
+            let path = session_cheat_path(&session.rom_path);
+            if ui
+                .button("Reload .cht")
+                .on_hover_text(format!(
+                    "Changes are saved to {} automatically",
+                    file_name(&path)
+                ))
+                .clicked()
+            {
+                status = Some(
+                    console::load_cheat_file(&path, gb)
+                        .unwrap_or_else(|| format!("{} not found", file_name(&path))),
+                );
+            }
+        });
+        status
+    }
+
+    /// The memory search, in a window of its own.
     fn search_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_search;
-        let Some(session) = self.session.as_mut() else {
+        if !self.show_search || self.session.is_none() {
             return;
-        };
+        }
+        let mut status = None;
+        let open = tool_window(
+            ctx,
+            "search",
+            "freki — Memory search",
+            [480.0, 480.0],
+            |ui| {
+                status = self.search_contents(ui);
+            },
+        );
+        self.show_search = open;
+        if let Some(message) = status {
+            self.set_status(message);
+        }
+    }
+
+    /// The memory search's contents. Returns a status message, if any.
+    fn search_contents(&mut self, ui: &mut egui::Ui) -> Option<String> {
+        let session = self.session.as_mut()?;
         let ui_state = &mut self.search_ui;
         let mut status = None;
-        egui::Window::new("Memory search").open(&mut open).resizable(true).show(ctx, |ui| {
+        {
             let gb = &mut session.gb;
             ui.label("Find the address of a value (lives, money, …): start, change the value in the game, then filter.");
             ui.horizontal(|ui| {
@@ -1624,17 +1665,23 @@ impl FrekiApp {
                 }
             });
             if let Some(search) = ui_state.search.as_mut() {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Value");
                     ui.add(egui::TextEdit::singleline(&mut ui_state.value).desired_width(50.0));
                     let value = parse_byte(&ui_state.value);
                     let mut apply = |filter| {
                         search.filter(filter, |l| gb.peek_location(l));
                     };
-                    if ui.add_enabled(value.is_some(), egui::Button::new("=")).clicked() {
+                    if ui
+                        .add_enabled(value.is_some(), egui::Button::new("="))
+                        .clicked()
+                    {
                         apply(Filter::Equal(value.unwrap_or(0)));
                     }
-                    if ui.add_enabled(value.is_some(), egui::Button::new("≠")).clicked() {
+                    if ui
+                        .add_enabled(value.is_some(), egui::Button::new("≠"))
+                        .clicked()
+                    {
                         apply(Filter::NotEqual(value.unwrap_or(0)));
                     }
                     ui.separator();
@@ -1652,28 +1699,49 @@ impl FrekiApp {
                     }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                    for (i, &(location, _)) in search.candidates().iter().take(200).enumerate() {
-                        let v = gb.peek_location(location);
-                        let text = format!("{location:>7} = {v:>3} (${v:02X})");
-                        if ui.selectable_label(ui_state.selected == Some(i), egui::RichText::new(text).monospace()).clicked() {
-                            ui_state.selected = Some(i);
-                            ui_state.cheat_value = v.to_string();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .max_height((ui.available_height() - 60.0).max(120.0))
+                    .show(ui, |ui| {
+                        for (i, &(location, _)) in search.candidates().iter().take(200).enumerate()
+                        {
+                            let v = gb.peek_location(location);
+                            let text = format!("{location:>7} = {v:>3} (${v:02X})");
+                            if ui
+                                .selectable_label(
+                                    ui_state.selected == Some(i),
+                                    egui::RichText::new(text).monospace(),
+                                )
+                                .clicked()
+                            {
+                                ui_state.selected = Some(i);
+                                ui_state.cheat_value = v.to_string();
+                            }
                         }
-                    }
-                    if search.len() > 200 {
-                        ui.label(format!("… {} more", search.len() - 200));
-                    }
-                });
-                if let Some(&(location, _)) = ui_state.selected.and_then(|i| search.candidates().get(i)) {
+                        if search.len() > 200 {
+                            ui.label(format!("… {} more", search.len() - 200));
+                        }
+                    });
+                if let Some(&(location, _)) =
+                    ui_state.selected.and_then(|i| search.candidates().get(i))
+                {
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label(format!("{location}: hold at"));
-                        ui.add(egui::TextEdit::singleline(&mut ui_state.cheat_value).desired_width(40.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut ui_state.cheat_value)
+                                .desired_width(40.0),
+                        );
                         ui.label("name");
-                        ui.add(egui::TextEdit::singleline(&mut ui_state.cheat_name).desired_width(120.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut ui_state.cheat_name)
+                                .desired_width(120.0),
+                        );
                         let value = parse_byte(&ui_state.cheat_value);
-                        if ui.add_enabled(value.is_some(), egui::Button::new("Add cheat")).clicked() {
+                        if ui
+                            .add_enabled(value.is_some(), egui::Button::new("Add cheat"))
+                            .clicked()
+                        {
                             let value = value.unwrap_or(0);
                             let code = Code::gameshark(location, value);
                             let name = if ui_state.cheat_name.is_empty() {
@@ -1689,11 +1757,8 @@ impl FrekiApp {
                     });
                 }
             }
-        });
-        self.show_search = open;
-        if let Some(message) = status {
-            self.set_status(message);
         }
+        status
     }
 
     /// While binding a gamepad button: takes the next button pressed.
@@ -2141,6 +2206,68 @@ impl eframe::App for FrekiApp {
         // Let videos being written finish their files.
         self.poll_recordings(true);
     }
+}
+
+/// Width of the code column in the cheat manager.
+const CODE_WIDTH: f32 = 190.0;
+/// Width of the ⚠ column in the cheat manager.
+const WARNING_WIDTH: f32 = 16.0;
+/// Widths of the checkbox and remove-button columns, the template value field and the
+/// Add buttons in the cheat manager.
+const CHECK_WIDTH: f32 = 20.0;
+const BUTTON_WIDTH: f32 = 22.0;
+const VALUE_WIDTH: f32 = 64.0;
+const ADD_WIDTH: f32 = 40.0;
+
+/// A cell exactly `width` wide holding `contents`.
+fn fixed(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        vec2(width, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_width(width);
+            contents(ui);
+        },
+    );
+}
+
+/// A table cell `width` wide: `text` cut off with "…" when longer, shown whole on hover.
+fn cell(ui: &mut egui::Ui, width: f32, text: &str, monospace: bool) {
+    let text = if monospace {
+        egui::RichText::new(text).monospace()
+    } else {
+        egui::RichText::new(text)
+    };
+    fixed(ui, width.max(20.0), |ui| {
+        ui.add(egui::Label::new(text.clone()).truncate())
+            .on_hover_text(text);
+    });
+}
+
+/// Shows a tool window (cheats, memory search) as a window of its own, which can be moved
+/// and sized independently of the game's; where the platform cannot open more windows,
+/// inside the main window with a Close button. Returns whether it is still open.
+fn tool_window(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    size: [f32; 2],
+    mut contents: impl FnMut(&mut egui::Ui),
+) -> bool {
+    let builder = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size(size)
+        .with_min_inner_size([320.0, 240.0]);
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(id), builder, |ui, class| {
+        if class == egui::ViewportClass::EmbeddedWindow {
+            let close = ui.button("Close").clicked();
+            contents(ui);
+            !close
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| contents(ui));
+            !ui.ctx().input(|i| i.viewport().close_requested())
+        }
+    })
 }
 
 /// The picture of `session` (and of the linked game to its right), as RGBA with its size.

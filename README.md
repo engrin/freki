@@ -177,7 +177,9 @@ Each game keeps its battery save; a game linked with itself saves the second cop
 ## Cheats
 
 **Cheats → Cheat manager…** adds, toggles and removes codes, and **Cheats → Memory
-search…** finds the address of a value. Codes are kept in `game.cht` and saved as soon as
+search…** finds the address of a value. Both open as windows of their own, so they can sit
+next to the game or on another screen at any size; long names are cut off and shown in
+full on hover. Codes are kept in `game.cht` and saved as soon as
 the list changes, one per line with an optional name (`#` starts a comment, `!` adds a code
 switched off, `+` joins several codes into one cheat):
 
