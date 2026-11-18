@@ -84,6 +84,7 @@ at the end (in this order):
   --screenshot FILE.png   save the screen (with --link: both screens side by side)
   --palette NAME          DMG shades for the screenshot: green, grey (default), pocket, light
   --color-correction      GBC colours as the GBC screen shows them (default: raw)
+  --frame-blend           mix the screenshot with the frame before, like the real LCD
   --save-state FILE       save the machine state
   --write-sav FILE        write the battery save (RAM, then the clock, if any)
 
@@ -120,6 +121,7 @@ struct Options {
     screenshot: Option<PathBuf>,
     palette: Option<Palette>,
     color_correction: bool,
+    frame_blend: bool,
     save_state: Option<PathBuf>,
     write_sav: Option<PathBuf>,
 }
@@ -243,6 +245,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
                 });
             }
             "--color-correction" | "--colour-correction" => o.color_correction = true,
+            "--frame-blend" => o.frame_blend = true,
             "--save-state" => o.save_state = Some(value(arg)?.into()),
             "--write-sav" => o.write_sav = Some(value(arg)?.into()),
             a if a.starts_with('-') => return Err(format!("unknown option {a}")),
@@ -431,7 +434,12 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     let mut pressed: Vec<Button> = Vec::new();
     let mut pressed2: Vec<Button> = Vec::new();
     let mut frame = 0;
+    // With --frame-blend: the picture before the last frame.
+    let mut previous = None;
     while frame < o.frames {
+        if o.frame_blend && frame + 1 == o.frames {
+            previous = Some(picture(o, &gb, partner.as_ref().map(|(gb2, _)| gb2)));
+        }
         pressed = hold(&mut gb, &o.presses, frame, &pressed);
         if let Some((gb2, _)) = partner.as_mut() {
             pressed2 = hold(gb2, &o.presses2, frame, &pressed2);
@@ -511,17 +519,12 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         );
     }
     if let Some(path) = &o.screenshot {
-        let shot = |gb: &GameBoy| {
-            settings::screen_rgba(
-                gb.screen(),
-                o.palette.unwrap_or(Palette::Grey),
-                o.color_correction,
-            )
-        };
-        let (rgba, size) = match &partner {
-            Some((gb2, _)) => settings::side_by_side(shot(&gb), shot(gb2)),
-            None => shot(&gb),
-        };
+        let (mut rgba, size) = picture(o, &gb, partner.as_ref().map(|(gb2, _)| gb2));
+        if let Some((before, before_size)) = &previous
+            && *before_size == size
+        {
+            settings::blend(before, &mut rgba);
+        }
         save_png(path, &rgba, size)?;
         out!("screenshot saved to {}", path.display());
     }
@@ -543,6 +546,21 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         );
     }
     Ok(status)
+}
+
+/// The screen as a screenshot shows it (RGBA, with its size); with a linked game, both.
+fn picture(o: &Options, gb: &GameBoy, partner: Option<&GameBoy>) -> (Vec<u8>, [usize; 2]) {
+    let shot = |gb: &GameBoy| {
+        settings::screen_rgba(
+            gb.screen(),
+            o.palette.unwrap_or(Palette::Grey),
+            o.color_correction,
+        )
+    };
+    match partner {
+        Some(gb2) => settings::side_by_side(shot(gb), shot(gb2)),
+        None => shot(gb),
+    }
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {

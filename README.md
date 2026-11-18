@@ -38,6 +38,8 @@ Named after Freki, one of Odin's two wolves.
   save-state slots**, **rewind** (up to 20 seconds) and **fast-forward** (2×–8×)
 - **Fullscreen** and window scales from 2× to 6×, with sharp integer scaling (can be
   switched off)
+- **Frame blending** like the real console's slow LCD, so sprites that games flicker every
+  other frame look steady (View → Frame blending)
 - **Four Game Boy palettes** (DMG green, greyscale, Pocket, Light), and **GBC colour
   correction** that looks like the real screen
 - **Keyboard and gamepads**, plugged in at any time. The Controls window shows a Game Boy
@@ -199,6 +201,7 @@ freki --headless game.gb --watch '$C0A0 w' --trace trace.log       # who writes 
 freki --headless rtc.gbc --write-sav a.sav && freki --headless rtc.gbc --sav a.sav --off 2h
 freki --headless game.gbc --cheats --cheat 3 --cheat 010A10C1   # cheat 3 of game.cht, and a code
 freki --headless tetris.gb --link tetris.gb --press 300:start --press2 300:start --screenshot both.png
+freki --headless game.gbc --frames 400 --frame-blend --screenshot blended.png
 ```
 
 ## Development

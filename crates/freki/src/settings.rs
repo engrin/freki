@@ -41,6 +41,9 @@ pub struct Settings {
     pub rumble: bool,
     /// Scale the screen by whole numbers only (sharp, even pixels; black borders).
     pub integer_scaling: bool,
+    /// Show each frame mixed with the one before, like the slow LCD of the real
+    /// console (sprites that flicker every other frame look steady or see-through).
+    pub frame_blend: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +61,7 @@ impl Default for Settings {
             bindings: Bindings::default(),
             rumble: true,
             integer_scaling: true,
+            frame_blend: false,
         }
     }
 }
@@ -225,6 +229,13 @@ pub fn screen_rgba(screen: Screen, palette: Palette, correct: bool) -> (Vec<u8>,
     (rgba, [width, height])
 }
 
+/// Mixes `previous` (RGBA) half and half into `current`: frame blending.
+pub fn blend(previous: &[u8], current: &mut [u8]) {
+    for (c, &p) in current.iter_mut().zip(previous) {
+        *c = (u16::from(*c) + u16::from(p)).div_ceil(2) as u8;
+    }
+}
+
 /// Pixels between the two screens of linked Game Boys.
 pub const LINK_GAP: usize = 8;
 
@@ -267,6 +278,14 @@ pub fn cgb_color(color: u16, correct: bool) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blending_averages_two_frames() {
+        let previous = [0, 255, 100, 255];
+        let mut current = [255, 255, 50, 255];
+        blend(&previous, &mut current);
+        assert_eq!(current, [128, 255, 75, 255]);
+    }
 
     #[test]
     fn linked_screens_sit_side_by_side() {

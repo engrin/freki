@@ -157,6 +157,8 @@ pub struct FrekiApp {
     texture: Option<TextureHandle>,
     /// Picture size the window was last fitted to (Super Game Boy pictures are larger).
     fitted_size: [usize; 2],
+    /// With frame blending: the picture of the emulated frame before the current one.
+    previous_frame: Option<(Vec<u8>, [usize; 2])>,
     samples: Vec<f32>,
 
     paused: bool,
@@ -212,6 +214,7 @@ impl FrekiApp {
             console: Console::start(),
             texture: None,
             fitted_size: [SCREEN_WIDTH, SCREEN_HEIGHT],
+            previous_frame: None,
             samples: Vec::new(),
             paused: false,
             rewinding: false,
@@ -626,6 +629,7 @@ impl FrekiApp {
         };
 
         if self.rewinding {
+            self.previous_frame = None;
             for _ in 0..frames {
                 match session.rewind_step() {
                     Ok(true) => {}
@@ -715,6 +719,14 @@ impl FrekiApp {
                 self.tilt.1 += (target.1 - self.tilt.1) * TILT_EASE;
                 session.gb.set_tilt(self.tilt.0, self.tilt.1);
             }
+            if self.settings.frame_blend {
+                self.previous_frame = Some(picture(
+                    session,
+                    self.link.as_ref(),
+                    self.settings.palette,
+                    self.settings.color_correction,
+                ));
+            }
             let result = match self.link.as_mut() {
                 Some(linked) => linked
                     .cable
@@ -785,7 +797,15 @@ impl FrekiApp {
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
-        let (rgba, size) = self.screen_rgba();
+        let (mut rgba, size) = self.screen_rgba();
+        if !self.settings.frame_blend {
+            self.previous_frame = None;
+        }
+        if let Some((previous, previous_size)) = &self.previous_frame
+            && *previous_size == size
+        {
+            settings::blend(previous, &mut rgba);
+        }
         let image = ColorImage::from_rgba_unmultiplied(size, &rgba);
         // A game with the other picture size (Super Game Boy or not): fit the window to it.
         if size != self.fitted_size && !is_fullscreen(ctx) {
@@ -800,17 +820,14 @@ impl FrekiApp {
 
     /// The screen as shown (palette or colour correction applied), as RGBA, with its size.
     fn screen_rgba(&self) -> (Vec<u8>, [usize; 2]) {
-        let shot = |s: &Session| {
-            settings::screen_rgba(
-                s.gb.screen(),
+        match self.session.as_ref() {
+            Some(s) => picture(
+                s,
+                self.link.as_ref(),
                 self.settings.palette,
                 self.settings.color_correction,
-            )
-        };
-        match (self.session.as_ref(), self.link.as_ref()) {
-            (Some(one), Some(two)) => settings::side_by_side(shot(one), shot(&two.session)),
-            (Some(s), None) => shot(s),
-            (None, _) => (
+            ),
+            None => (
                 vec![0x20; SCREEN_WIDTH * SCREEN_HEIGHT * 4],
                 [SCREEN_WIDTH, SCREEN_HEIGHT],
             ),
@@ -1031,6 +1048,11 @@ impl FrekiApp {
                 }
                 ui.checkbox(&mut self.settings.integer_scaling, "Integer scaling")
                     .on_hover_text("Whole-number scale only: sharp, even pixels");
+                ui.checkbox(&mut self.settings.frame_blend, "Frame blending")
+                    .on_hover_text(
+                        "Mix each frame with the one before, like the slow LCD of the real \
+                     console: sprites that games flicker every other frame look steady",
+                    );
                 ui.separator();
                 ui.label("Window scale");
                 for scale in 2..=6 {
@@ -1855,6 +1877,20 @@ impl eframe::App for FrekiApp {
 
     fn on_exit(&mut self) {
         self.close_rom();
+    }
+}
+
+/// The picture of `session` (and of the linked game to its right), as RGBA with its size.
+fn picture(
+    session: &Session,
+    link: Option<&LinkedGame>,
+    palette: Palette,
+    correct: bool,
+) -> (Vec<u8>, [usize; 2]) {
+    let shot = |s: &Session| settings::screen_rgba(s.gb.screen(), palette, correct);
+    match link {
+        Some(two) => settings::side_by_side(shot(session), shot(&two.session)),
+        None => shot(session),
     }
 }
 
