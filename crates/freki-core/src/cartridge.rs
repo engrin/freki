@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::CLOCK_HZ;
+use crate::huc3::HuC3Clock;
 use crate::mbc7::{self, Mbc7};
 
 const ROM_BANK: usize = 0x4000;
@@ -61,6 +62,15 @@ pub enum Mbc {
         ir_mode: bool,
         rom_bank: u8,
         ram_bank: u8,
+    },
+    /// Hudson HuC3: up to 32 KiB RAM, a real-time clock, an infrared port and a tone
+    /// generator (silent here); see [`crate::huc3`].
+    HuC3 {
+        /// What $A000–$BFFF does ($0A RAM, $0B–$0D clock, $0E infrared, else RAM read only).
+        mode: u8,
+        rom_bank: u8,
+        ram_bank: u8,
+        clock: Box<HuC3Clock>,
     },
     /// MBC7: accelerometer and serial EEPROM (see [`crate::mbc7`]); the EEPROM is the RAM.
     Mbc7 {
@@ -234,6 +244,12 @@ impl Cartridge {
                 rom_bank: 1,
                 chip: Mbc7::default(),
             },
+            0xFE => Mbc::HuC3 {
+                mode: 0,
+                rom_bank: 1,
+                ram_bank: 0,
+                clock: Box::default(),
+            },
             0xFF => Mbc::HuC1 {
                 ir_mode: false,
                 rom_bank: 1,
@@ -243,7 +259,7 @@ impl Cartridge {
         };
         let battery = matches!(
             kind,
-            0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFF
+            0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFE | 0xFF
         );
         let ram_size = match (&mbc, rom[0x149]) {
             (Mbc::Mbc2 { .. }, _) => MBC2_RAM,
@@ -327,6 +343,7 @@ impl Cartridge {
     pub fn tick(&mut self, cycles: u32) {
         match &mut self.mbc {
             Mbc::Mbc3 { rtc: Some(rtc), .. } => rtc.tick(cycles),
+            Mbc::HuC3 { clock, .. } => clock.tick(cycles),
             Mbc::Mbc5 {
                 rumble: true,
                 motor,
@@ -419,6 +436,12 @@ impl Cartridge {
                 }
                 ram_bank as usize * RAM_BANK + local
             }
+            Mbc::HuC3 { mode, ram_bank, .. } => {
+                if !matches!(mode, 0x00..=0x0A) {
+                    return None;
+                }
+                ram_bank as usize * RAM_BANK + local
+            }
             // The EEPROM is reached through registers only.
             Mbc::Mbc7 { .. } => return None,
         };
@@ -469,7 +492,9 @@ impl Cartridge {
                     rom_bank as usize
                 }
             }
-            Mbc::HuC1 { rom_bank, .. } | Mbc::Mbc7 { rom_bank, .. } => {
+            Mbc::HuC1 { rom_bank, .. }
+            | Mbc::HuC3 { rom_bank, .. }
+            | Mbc::Mbc7 { rom_bank, .. } => {
                 if low {
                     0
                 } else {
@@ -551,6 +576,17 @@ impl Cartridge {
                 0x4000..=0x5FFF => *ram_bank = value & 0x03,
                 _ => {}
             },
+            Mbc::HuC3 {
+                mode,
+                rom_bank,
+                ram_bank,
+                ..
+            } => match addr {
+                0x0000..=0x1FFF => *mode = value & 0x0F,
+                0x2000..=0x3FFF => *rom_bank = value & 0x7F,
+                0x4000..=0x5FFF => *ram_bank = value & 0x03,
+                _ => {}
+            },
             Mbc::Mbc7 {
                 ram_enable1,
                 ram_enable2,
@@ -590,7 +626,12 @@ impl Cartridge {
             return rtc.read(*reg);
         }
         match &self.mbc {
-            Mbc::HuC1 { ir_mode: true, .. } => return IR_DARK,
+            Mbc::HuC1 { ir_mode: true, .. } | Mbc::HuC3 { mode: 0x0E, .. } => return IR_DARK,
+            Mbc::HuC3 {
+                mode: 0x0C, clock, ..
+            } => return clock.response(),
+            Mbc::HuC3 { mode: 0x0D, .. } => return 0xFF, // ready
+            Mbc::HuC3 { mode: 0x0B, .. } => return 0xFF,
             Mbc::Mbc7 {
                 ram_enable1: true,
                 ram_enable2: true,
@@ -613,6 +654,16 @@ impl Cartridge {
     pub fn write_ram(&mut self, addr: u16, value: u8) {
         if let Some((rtc, reg)) = self.rtc_register() {
             rtc.write(reg, value);
+            return;
+        }
+        if let Mbc::HuC3 { mode, clock, .. } = &mut self.mbc
+            && *mode != 0x0A
+        {
+            // Clock commands in mode $0B; the other modes ignore writes (read-only RAM,
+            // the infrared LED, the ready flag).
+            if *mode == 0x0B {
+                clock.command(value);
+            }
             return;
         }
         if let Mbc::Mbc7 {
@@ -735,6 +786,28 @@ mod tests {
         assert_eq!(cart.read_ram(0xA000), 0x42);
         cart.write_rom(0x4000, 0x00);
         assert_eq!(cart.read_ram(0xA000), 0x00);
+    }
+
+    #[test]
+    fn huc3_modes_switch_between_ram_clock_and_infrared() {
+        let mut cart = Cartridge::from_rom(banked_rom(32, 0xFE, 0x03)).unwrap();
+        assert!(cart.has_battery());
+        cart.write_rom(0x2000, 0x1F);
+        assert_eq!(cart.read_rom(0x4000), 0x1F);
+        cart.write_rom(0x0000, 0x0A);
+        cart.write_rom(0x4000, 0x01);
+        cart.write_ram(0xA000, 0x77);
+        cart.write_rom(0x0000, 0x00); // read only
+        cart.write_ram(0xA000, 0x11);
+        assert_eq!(cart.read_ram(0xA000), 0x77);
+        cart.write_rom(0x0000, 0x0B);
+        cart.write_ram(0xA000, 0x62); // "ready?"
+        cart.write_rom(0x0000, 0x0C);
+        assert_eq!(cart.read_ram(0xA000), 0x61);
+        cart.write_rom(0x0000, 0x0D);
+        assert_eq!(cart.read_ram(0xA000) & 1, 1);
+        cart.write_rom(0x0000, 0x0E);
+        assert_eq!(cart.read_ram(0xA000), IR_DARK);
     }
 
     #[test]

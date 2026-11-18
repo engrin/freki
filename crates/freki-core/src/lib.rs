@@ -12,6 +12,7 @@ pub mod cheats;
 pub mod cpu;
 pub mod debugger;
 pub mod disasm;
+pub mod huc3;
 pub mod joypad;
 pub mod mbc7;
 pub mod ppu;
