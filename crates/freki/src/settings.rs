@@ -225,6 +225,27 @@ pub fn screen_rgba(screen: Screen, palette: Palette, correct: bool) -> (Vec<u8>,
     (rgba, [width, height])
 }
 
+/// Pixels between the two screens of linked Game Boys.
+pub const LINK_GAP: usize = 8;
+
+/// Two screens (RGBA with their sizes) side by side, `LINK_GAP` pixels apart and centred
+/// vertically on a dark background: the picture of two linked Game Boys.
+pub fn side_by_side(
+    (left, [lw, lh]): (Vec<u8>, [usize; 2]),
+    (right, [rw, rh]): (Vec<u8>, [usize; 2]),
+) -> (Vec<u8>, [usize; 2]) {
+    let (width, height) = (lw + LINK_GAP + rw, lh.max(rh));
+    let mut rgba = [0x20, 0x20, 0x20, 0xFF].repeat(width * height);
+    for (pixels, w, h, x0) in [(&left, lw, lh, 0), (&right, rw, rh, lw + LINK_GAP)] {
+        let y0 = (height - h) / 2;
+        for y in 0..h {
+            let at = ((y0 + y) * width + x0) * 4;
+            rgba[at..at + w * 4].copy_from_slice(&pixels[y * w * 4..(y + 1) * w * 4]);
+        }
+    }
+    (rgba, [width, height])
+}
+
 /// Converts a Game Boy Color RGB555 colour to 8-bit RGB. With `correct`, approximates the
 /// colours of the GBC's LCD, which mixes channels and is less saturated than a modern
 /// screen (the formula used by Gambatte and higan); otherwise scales each channel.
@@ -246,6 +267,19 @@ pub fn cgb_color(color: u16, correct: bool) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_screens_sit_side_by_side() {
+        let red = ([255, 0, 0, 255].repeat(2 * 2), [2, 2]);
+        let blue = ([0, 0, 255, 255].repeat(3 * 4), [3, 4]);
+        let (rgba, [w, h]) = side_by_side(red, blue);
+        assert_eq!([w, h], [2 + LINK_GAP + 3, 4]);
+        let px = |x: usize, y: usize| &rgba[(y * w + x) * 4..][..3];
+        assert_eq!(px(0, 1), [255, 0, 0], "left screen centred vertically");
+        assert_eq!(px(0, 0), [0x20; 3], "background above it");
+        assert_eq!(px(2 + LINK_GAP, 0), [0, 0, 255]);
+        assert_eq!(px(w - 1, 3), [0, 0, 255]);
+    }
 
     #[test]
     fn colour_correction_keeps_black_and_white() {

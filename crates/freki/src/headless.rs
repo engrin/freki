@@ -17,7 +17,7 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use freki_core::{BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Model};
+use freki_core::{BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Link, Model};
 
 use crate::console::{self, Console};
 use crate::rom_file;
@@ -45,6 +45,10 @@ run:
   --tilt FRAME:X,Y[:N]    tilt sensor games (MBC7): tilt so things roll right (X) and
                           down the screen (Y), in g (about -1 to 1), from FRAME for N
                           frames (default 60); repeatable
+  --link ROM2             connect ROM2 by link cable, on a second Game Boy (its console
+                          chosen as by default); it runs in step with ROM
+  --link-sav FILE         load this battery save into ROM2
+  --press2 FRAME:KEYS[:N] like --press, for ROM2
   --cheats                load the game's cheat file (ROM.cht, or one named as in cheat
                           databases) with the cheats switched on as saved there
   --cheat N|CODE          switch on cheat N of that file, or add a GameShark or Game
@@ -58,7 +62,7 @@ debugging:
 at the end (in this order):
   --exec 'COMMAND'        run a console command (regs, dis, peek $C000 16, …); repeatable
   --serial                print what the game sent over the serial port
-  --screenshot FILE.png   save the screen
+  --screenshot FILE.png   save the screen (with --link: both screens side by side)
   --palette NAME          DMG shades for the screenshot: green, grey (default), pocket, light
   --color-correction      GBC colours as the GBC screen shows them (default: raw)
   --save-state FILE       save the machine state
@@ -83,6 +87,9 @@ struct Options {
     off: Option<u64>,
     load_state: Option<PathBuf>,
     presses: Vec<Press>,
+    link: Option<PathBuf>,
+    link_sav: Option<PathBuf>,
+    presses2: Vec<Press>,
     tilts: Vec<Tilt>,
     load_cheats: bool,
     cheats: Vec<String>,
@@ -117,6 +124,25 @@ impl Press {
     fn held_at(&self, frame: u64) -> bool {
         (self.from..self.from + self.frames).contains(&frame)
     }
+}
+
+/// Holds the buttons `presses` call for at `frame`, releasing those of `pressed` that no
+/// longer are; returns the held buttons.
+fn hold(gb: &mut GameBoy, presses: &[Press], frame: u64, pressed: &[Button]) -> Vec<Button> {
+    let held: Vec<Button> = presses
+        .iter()
+        .filter(|p| p.held_at(frame))
+        .flat_map(|p| p.buttons.iter().copied())
+        .collect();
+    for &b in pressed {
+        if !held.contains(&b) {
+            gb.set_button(b, false);
+        }
+    }
+    for &b in &held {
+        gb.set_button(b, true);
+    }
+    held
 }
 
 /// Runs headless with `args` (everything after the program name, `--headless` removed).
@@ -176,6 +202,9 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--off" => o.off = Some(parse_duration(&value(arg)?)?),
             "--load-state" => o.load_state = Some(value(arg)?.into()),
             "--press" => o.presses.push(parse_press(&value(arg)?)?),
+            "--link" => o.link = Some(value(arg)?.into()),
+            "--link-sav" => o.link_sav = Some(value(arg)?.into()),
+            "--press2" => o.presses2.push(parse_press(&value(arg)?)?),
             "--tilt" => o.tilts.push(parse_tilt(&value(arg)?)?),
             "--cheats" => o.load_cheats = true,
             "--cheat" => o.cheats.push(value(arg)?),
@@ -207,6 +236,12 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
     }
     if o.off.is_some() && o.sav.is_none() {
         return Err("--off needs --sav".into());
+    }
+    if o.link.is_none() && (o.link_sav.is_some() || !o.presses2.is_empty()) {
+        return Err("--link-sav and --press2 need --link".into());
+    }
+    if o.link.is_some() && (o.trace.is_some() || !o.breaks.is_empty() || !o.watches.is_empty()) {
+        return Err("--trace, --break and --watch do not work with --link".into());
     }
     Ok(Some(o))
 }
@@ -355,25 +390,33 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         None => None,
     };
 
+    // The second Game Boy on the link cable.
+    let mut partner = match &o.link {
+        Some(path) => {
+            let rom = rom_file::load(path, None)?;
+            println!("linked {}{}", session::file_name(path), rom.describe());
+            let partner_start = Start {
+                model: None,
+                ..start.clone()
+            };
+            let mut gb2 = session::power_on(rom.data, &partner_start)?;
+            if let Some(sav) = &o.link_sav {
+                gb2.load_save_data(&read(sav)?, None);
+            }
+            Some((gb2, Link::new()))
+        }
+        None => None,
+    };
+
     let mut status = 0;
     let mut pressed: Vec<Button> = Vec::new();
+    let mut pressed2: Vec<Button> = Vec::new();
     let mut frame = 0;
     while frame < o.frames {
-        let held: Vec<Button> = o
-            .presses
-            .iter()
-            .filter(|p| p.held_at(frame))
-            .flat_map(|p| p.buttons.iter().copied())
-            .collect();
-        for &b in &pressed {
-            if !held.contains(&b) {
-                gb.set_button(b, false);
-            }
+        pressed = hold(&mut gb, &o.presses, frame, &pressed);
+        if let Some((gb2, _)) = partner.as_mut() {
+            pressed2 = hold(gb2, &o.presses2, frame, &pressed2);
         }
-        for &b in &held {
-            gb.set_button(b, true);
-        }
-        pressed = held;
         let (x, y) = o
             .tilts
             .iter()
@@ -381,6 +424,15 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             .fold((0.0, 0.0), |(x, y), t| (x + t.x, y + t.y));
         gb.set_tilt(x, y);
 
+        if let Some((gb2, link)) = partner.as_mut() {
+            if let Err(e) = link.run_frame(&mut gb, gb2) {
+                println!("frame {frame}: {e}");
+                status = 1;
+                break;
+            }
+            frame += 1;
+            continue;
+        }
         let result = match trace.as_mut() {
             Some(out) => {
                 let mut io = Ok(());
@@ -440,11 +492,17 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         );
     }
     if let Some(path) = &o.screenshot {
-        let (rgba, size) = settings::screen_rgba(
-            gb.screen(),
-            o.palette.unwrap_or(Palette::Grey),
-            o.color_correction,
-        );
+        let shot = |gb: &GameBoy| {
+            settings::screen_rgba(
+                gb.screen(),
+                o.palette.unwrap_or(Palette::Grey),
+                o.color_correction,
+            )
+        };
+        let (rgba, size) = match &partner {
+            Some((gb2, _)) => settings::side_by_side(shot(&gb), shot(gb2)),
+            None => shot(&gb),
+        };
         save_png(path, &rgba, size)?;
         println!("screenshot saved to {}", path.display());
     }
@@ -551,6 +609,12 @@ mod tests {
             .unwrap();
         assert!(o.load_cheats);
         assert_eq!(o.cheats, ["3", "010A10C1"]);
+        let o = parse_args(&args("a.gb --link b.gb --link-sav b.sav --press2 5:a"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.link, Some(PathBuf::from("b.gb")));
+        assert_eq!(o.link_sav, Some(PathBuf::from("b.sav")));
+        assert_eq!(o.presses2[0].buttons, [Button::A]);
         assert_eq!(parse_duration("90"), Ok(90));
         assert_eq!(parse_duration("3d"), Ok(3 * 86_400));
     }
@@ -561,6 +625,11 @@ mod tests {
         assert!(parse_args(&args("a.gb --press 10")).is_err());
         assert!(parse_args(&args("a.gb --tilt 10:1")).is_err());
         assert!(parse_args(&args("a.gb --bogus")).is_err());
+        assert!(
+            parse_args(&args("a.gb --press2 5:a")).is_err(),
+            "--press2 without --link"
+        );
+        assert!(parse_args(&args("a.gb --link b.gb --break 100")).is_err());
         assert!(
             parse_args(&args("a.gb --off 1h")).is_err(),
             "--off without --sav"

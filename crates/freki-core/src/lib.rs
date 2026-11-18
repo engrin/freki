@@ -14,6 +14,7 @@ pub mod debugger;
 pub mod disasm;
 pub mod huc3;
 pub mod joypad;
+pub mod link;
 pub mod mbc6;
 pub mod mbc7;
 pub mod mmm01;
@@ -31,6 +32,7 @@ pub use cpu::{CpuError, Registers};
 pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};
 pub use disasm::{Instruction, disassemble};
 pub use joypad::Button;
+pub use link::{Link, LinkError, Player};
 
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use sgb::{SGB_HEIGHT, SGB_WIDTH};
@@ -248,6 +250,17 @@ impl GameBoy {
         }
         self.apply_frame_cheats();
         Ok(())
+    }
+
+    /// One instruction for linked play (see [`Link`]): returns the T-cycles it took and
+    /// whether it finished a frame (cheats are applied then).
+    fn step_linked(&mut self) -> Result<(u32, bool), CpuError> {
+        let cycles = self.step()?;
+        let frame = self.bus.ppu.take_frame_ready();
+        if frame {
+            self.apply_frame_cheats();
+        }
+        Ok((cycles, frame))
     }
 
     /// CPU cycles in one frame: twice as many in CGB double speed. Bounds a frame while
