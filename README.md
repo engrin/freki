@@ -62,6 +62,8 @@ Named after Freki, one of Odin's two wolves.
   memory and stack; breakpoints and read/write watchpoints
 - **Video memory viewers:** tiles, tile maps, sprites and palettes, live, for both VRAM
   banks on the GBC
+- The debugger, the viewers, the cheat manager and the memory search each open as a window
+  of their own, to place next to the game or on another screen
 - **Terminal console:** the same debugger, cheat and memory commands, typed while the game
   runs
 - **Headless mode:** run a game without a window for scripts and regression checks,

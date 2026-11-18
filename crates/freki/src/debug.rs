@@ -4,6 +4,7 @@
 //! Everything is read through `GameBoy::peek`, which has no side effects, so the views
 //! never disturb the running game.
 
+use crate::window::tool_window;
 use eframe::egui::{
     self, Color32, ColorImage, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
     load::SizedTexture, pos2, vec2,
@@ -308,70 +309,71 @@ impl DebugViews {
             [TILES_W, TILES_H],
             &rgba,
         );
-        let mut open = true;
-        egui::Window::new("Tiles")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                if palettes.is_cgb() {
-                    ui.horizontal(|ui| {
-                        ui.label("VRAM bank");
-                        ui.radio_value(&mut self.tile_bank, 0, "0");
-                        ui.radio_value(&mut self.tile_bank, 1, "1");
-                        ui.separator();
-                        egui::ComboBox::from_id_salt("tile_palette")
-                            .selected_text(palette_name(self.tile_palette))
-                            .show_ui(ui, |ui| {
-                                for n in 0..8 {
-                                    let p = TilePalette::Bg(n);
-                                    ui.selectable_value(&mut self.tile_palette, p, palette_name(p));
-                                }
-                                for n in 0..8 {
-                                    let p = TilePalette::Obj(n);
-                                    ui.selectable_value(&mut self.tile_palette, p, palette_name(p));
-                                }
-                            });
-                    });
-                }
-                let scale = 2.0;
-                let size = vec2(TILES_W as f32, TILES_H as f32) * scale;
-                let response = ui.add(
-                    egui::Image::from_texture(SizedTexture::new(tex, size)).sense(Sense::hover()),
-                );
-                let hovered = response.hover_pos().map(|p| {
-                    let local = (p - response.rect.min) / scale;
-                    (local.y as u16 / 8) * 16 + local.x as u16 / 8
+        let open = tool_window(ctx, "tiles", "freki — Tiles", [300.0, 560.0], |ui| {
+            if palettes.is_cgb() {
+                ui.horizontal(|ui| {
+                    ui.label("VRAM bank");
+                    ui.radio_value(&mut self.tile_bank, 0, "0");
+                    ui.radio_value(&mut self.tile_bank, 1, "1");
+                    ui.separator();
+                    egui::ComboBox::from_id_salt("tile_palette")
+                        .selected_text(palette_name(self.tile_palette))
+                        .show_ui(ui, |ui| {
+                            for n in 0..8 {
+                                let p = TilePalette::Bg(n);
+                                ui.selectable_value(&mut self.tile_palette, p, palette_name(p));
+                            }
+                            for n in 0..8 {
+                                let p = TilePalette::Obj(n);
+                                ui.selectable_value(&mut self.tile_palette, p, palette_name(p));
+                            }
+                        });
                 });
-                match hovered {
-                    Some(tile) if tile < 384 => {
-                        let addr = 0x8000 + tile * 16;
-                        let ids = if tile < 256 {
-                            format!("${tile:02X} at $8000")
-                        } else {
-                            String::new()
-                        };
-                        let signed = if tile >= 128 {
-                            format!("${:02X} at $9000", (tile - 256) as u8)
-                        } else {
-                            String::new()
-                        };
-                        let names = [ids, signed]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let bank = if palettes.is_cgb() {
-                            format!(" (bank {})", self.tile_bank)
-                        } else {
-                            String::new()
-                        };
-                        ui.label(format!("tile ${addr:04X}{bank}: {names}"));
-                    }
-                    _ => {
-                        ui.label("hover a tile for its address");
-                    }
-                }
+            }
+            // The largest whole scale that fits the window (room left for the
+            // details under the picture), at least 1.
+            let room = ui.available_size() - vec2(0.0, 60.0);
+            let scale = (room.x / TILES_W as f32)
+                .min(room.y / TILES_H as f32)
+                .floor()
+                .max(1.0);
+            let size = vec2(TILES_W as f32, TILES_H as f32) * scale;
+            let response = ui
+                .add(egui::Image::from_texture(SizedTexture::new(tex, size)).sense(Sense::hover()));
+            let hovered = response.hover_pos().map(|p| {
+                let local = (p - response.rect.min) / scale;
+                (local.y as u16 / 8) * 16 + local.x as u16 / 8
             });
+            match hovered {
+                Some(tile) if tile < 384 => {
+                    let addr = 0x8000 + tile * 16;
+                    let ids = if tile < 256 {
+                        format!("${tile:02X} at $8000")
+                    } else {
+                        String::new()
+                    };
+                    let signed = if tile >= 128 {
+                        format!("${:02X} at $9000", (tile - 256) as u8)
+                    } else {
+                        String::new()
+                    };
+                    let names = [ids, signed]
+                        .into_iter()
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let bank = if palettes.is_cgb() {
+                        format!(" (bank {})", self.tile_bank)
+                    } else {
+                        String::new()
+                    };
+                    ui.label(format!("tile ${addr:04X}{bank}: {names}"));
+                }
+                _ => {
+                    ui.label("hover a tile for its address");
+                }
+            }
+        });
         self.show_tiles = open;
     }
 
@@ -403,75 +405,76 @@ impl DebugViews {
             [MAP_SIZE, MAP_SIZE],
             &rgba,
         );
-        let mut open = true;
-        egui::Window::new("Tile map")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.map, MapChoice::Background, "Background");
-                    ui.radio_value(&mut self.map, MapChoice::Window, "Window");
-                    ui.radio_value(&mut self.map, MapChoice::Map9800, "$9800");
-                    ui.radio_value(&mut self.map, MapChoice::Map9C00, "$9C00");
-                });
-                let scale = 2.0;
-                let size = vec2(MAP_SIZE as f32, MAP_SIZE as f32) * scale;
-                let response = ui.add(
-                    egui::Image::from_texture(SizedTexture::new(tex, size)).sense(Sense::hover()),
-                );
-                let painter = ui.painter().with_clip_rect(response.rect);
-                let stroke = Stroke::new(2.0, Color32::from_rgb(0xFF, 0x40, 0x40));
-                if self.map == MapChoice::Background
-                    || (self.map != MapChoice::Window && base == bg_map(lcdc))
-                {
-                    // Visible screen area, wrapping around the 256×256 map.
-                    let (scx, scy) = (gb.peek(SCX) as f32, gb.peek(SCY) as f32);
-                    for dx in [0.0, -256.0] {
-                        for dy in [0.0, -256.0] {
-                            let min = response.rect.min + vec2(scx + dx, scy + dy) * scale;
-                            let rect = Rect::from_min_size(min, vec2(160.0, 144.0) * scale);
-                            painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
-                        }
+        let open = tool_window(ctx, "map", "freki — Tile map", [560.0, 660.0], |ui| {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.map, MapChoice::Background, "Background");
+                ui.radio_value(&mut self.map, MapChoice::Window, "Window");
+                ui.radio_value(&mut self.map, MapChoice::Map9800, "$9800");
+                ui.radio_value(&mut self.map, MapChoice::Map9C00, "$9C00");
+            });
+            // The largest whole scale that fits the window (room left for the
+            // details under the picture), at least 1.
+            let room = ui.available_size() - vec2(0.0, 60.0);
+            let scale = (room.x / MAP_SIZE as f32)
+                .min(room.y / MAP_SIZE as f32)
+                .floor()
+                .max(1.0);
+            let size = vec2(MAP_SIZE as f32, MAP_SIZE as f32) * scale;
+            let response = ui
+                .add(egui::Image::from_texture(SizedTexture::new(tex, size)).sense(Sense::hover()));
+            let painter = ui.painter().with_clip_rect(response.rect);
+            let stroke = Stroke::new(2.0, Color32::from_rgb(0xFF, 0x40, 0x40));
+            if self.map == MapChoice::Background
+                || (self.map != MapChoice::Window && base == bg_map(lcdc))
+            {
+                // Visible screen area, wrapping around the 256×256 map.
+                let (scx, scy) = (gb.peek(SCX) as f32, gb.peek(SCY) as f32);
+                for dx in [0.0, -256.0] {
+                    for dy in [0.0, -256.0] {
+                        let min = response.rect.min + vec2(scx + dx, scy + dy) * scale;
+                        let rect = Rect::from_min_size(min, vec2(160.0, 144.0) * scale);
+                        painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
                     }
                 }
-                let source = format!(
-                    "map ${base:04X}, tiles at {} · SCX {} SCY {} · WX {} WY {} · window {}",
-                    if lcdc & 0x10 != 0 {
-                        "$8000"
-                    } else {
-                        "$9000 (signed)"
-                    },
-                    gb.peek(SCX),
-                    gb.peek(SCY),
-                    gb.peek(WX),
-                    gb.peek(WY),
-                    if lcdc & 0x20 != 0 { "on" } else { "off" },
-                );
-                ui.label(source);
-                if let Some(p) = response.hover_pos() {
-                    let local = (p - response.rect.min) / scale;
-                    let (col, row) = (local.x as u16 / 8, local.y as u16 / 8);
-                    let addr = base + row * 32 + col;
-                    let attributes = if palettes.is_cgb() {
-                        let a = gb.peek_vram(1, addr);
-                        let flag = |bit: u8, c: char| if a & bit != 0 { c } else { '·' };
-                        format!(
-                            " · palette {} bank {} {}{}{}",
-                            a & 7,
-                            (a >> 3) & 1,
-                            flag(0x20, 'X'),
-                            flag(0x40, 'Y'),
-                            flag(0x80, 'P')
-                        )
-                    } else {
-                        String::new()
-                    };
-                    ui.label(format!(
-                        "({col}, {row}) at ${addr:04X}: tile ${:02X}{attributes}",
-                        gb.peek_vram(0, addr)
-                    ));
-                }
-            });
+            }
+            let source = format!(
+                "map ${base:04X}, tiles at {} · SCX {} SCY {} · WX {} WY {} · window {}",
+                if lcdc & 0x10 != 0 {
+                    "$8000"
+                } else {
+                    "$9000 (signed)"
+                },
+                gb.peek(SCX),
+                gb.peek(SCY),
+                gb.peek(WX),
+                gb.peek(WY),
+                if lcdc & 0x20 != 0 { "on" } else { "off" },
+            );
+            ui.label(source);
+            if let Some(p) = response.hover_pos() {
+                let local = (p - response.rect.min) / scale;
+                let (col, row) = (local.x as u16 / 8, local.y as u16 / 8);
+                let addr = base + row * 32 + col;
+                let attributes = if palettes.is_cgb() {
+                    let a = gb.peek_vram(1, addr);
+                    let flag = |bit: u8, c: char| if a & bit != 0 { c } else { '·' };
+                    format!(
+                        " · palette {} bank {} {}{}{}",
+                        a & 7,
+                        (a >> 3) & 1,
+                        flag(0x20, 'X'),
+                        flag(0x40, 'Y'),
+                        flag(0x80, 'P')
+                    )
+                } else {
+                    String::new()
+                };
+                ui.label(format!(
+                    "({col}, {row}) at ${addr:04X}: tile ${:02X}{attributes}",
+                    gb.peek_vram(0, addr)
+                ));
+            }
+        });
         self.show_map = open;
     }
 
@@ -488,103 +491,100 @@ impl DebugViews {
             &rgba,
         );
         let height = if tall { 16 } else { 8 };
-        let mut open = true;
-        egui::Window::new("Sprites")
-            .open(&mut open)
-            .resizable(true)
-            .default_height(420.0)
-            .show(ctx, |ui| {
-                let palette_flag = if cgb {
-                    "number: palette, 1 VRAM bank 1"
-                } else {
-                    "P OBP1"
-                };
-                ui.label(format!(
+        let open = tool_window(ctx, "sprites", "freki — Sprites", [720.0, 480.0], |ui| {
+            let palette_flag = if cgb {
+                "number: palette, 1 VRAM bank 1"
+            } else {
+                "P OBP1"
+            };
+            ui.label(format!(
                     "8×{height} sprites, objects {} · flags: {palette_flag}, X/Y flip, B behind background",
                     if lcdc & 0x02 != 0 { "on" } else { "off" }
                 ));
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    egui::Grid::new("sprites").striped(true).show(ui, |ui| {
-                        for title in ["#", "", "X", "Y", "tile", "flags", ""] {
-                            ui.strong(title);
-                        }
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("sprites").striped(true).show(ui, |ui| {
+                    for title in ["#", "", "X", "Y", "tile", "flags", ""] {
+                        ui.strong(title);
+                    }
+                    ui.end_row();
+                    for (i, s) in sprites(gb).iter().enumerate() {
+                        ui.label(i.to_string());
+                        let cell = Rect::from_min_size(
+                            pos2(i as f32 * 8.0 / SPRITES_W as f32, 0.0),
+                            vec2(8.0 / SPRITES_W as f32, height as f32 / SPRITES_H as f32),
+                        );
+                        let size = vec2(16.0, height as f32 * 2.0);
+                        ui.add(egui::Image::from_texture(SizedTexture::new(tex, size)).uv(cell));
+                        ui.monospace(format!("{:>3}", s.x));
+                        ui.monospace(format!("{:>3}", s.y));
+                        ui.monospace(format!("${:02X}", s.tile));
+                        let flag = |bit: u8, c: char| if s.flags & bit != 0 { c } else { '·' };
+                        let palette = if cgb {
+                            format!("{}{}", s.flags & 7, flag(0x08, '1'))
+                        } else {
+                            flag(0x10, 'P').to_string()
+                        };
+                        ui.monospace(format!(
+                            "{palette}{}{}{}",
+                            flag(0x20, 'X'),
+                            flag(0x40, 'Y'),
+                            flag(0x80, 'B')
+                        ));
+                        ui.label(if s.visible(height) { "on screen" } else { "" });
                         ui.end_row();
-                        for (i, s) in sprites(gb).iter().enumerate() {
-                            ui.label(i.to_string());
-                            let cell = Rect::from_min_size(
-                                pos2(i as f32 * 8.0 / SPRITES_W as f32, 0.0),
-                                vec2(8.0 / SPRITES_W as f32, height as f32 / SPRITES_H as f32),
-                            );
-                            let size = vec2(16.0, height as f32 * 2.0);
-                            ui.add(
-                                egui::Image::from_texture(SizedTexture::new(tex, size)).uv(cell),
-                            );
-                            ui.monospace(format!("{:>3}", s.x));
-                            ui.monospace(format!("{:>3}", s.y));
-                            ui.monospace(format!("${:02X}", s.tile));
-                            let flag = |bit: u8, c: char| if s.flags & bit != 0 { c } else { '·' };
-                            let palette = if cgb {
-                                format!("{}{}", s.flags & 7, flag(0x08, '1'))
-                            } else {
-                                flag(0x10, 'P').to_string()
-                            };
-                            ui.monospace(format!(
-                                "{palette}{}{}{}",
-                                flag(0x20, 'X'),
-                                flag(0x40, 'Y'),
-                                flag(0x80, 'B')
-                            ));
-                            ui.label(if s.visible(height) { "on screen" } else { "" });
-                            ui.end_row();
-                        }
-                    });
+                    }
                 });
             });
+        });
         self.show_sprites = open;
     }
 
     fn palettes_window(&mut self, ctx: &egui::Context, gb: &GameBoy, palettes: &Palettes) {
-        let mut open = true;
-        egui::Window::new("Palettes")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| match palettes {
-                Palettes::Dmg(colors) => {
-                    egui::Grid::new("dmg_palettes").show(ui, |ui| {
-                        for (name, addr) in [("BGP", BGP), ("OBP0", OBP0), ("OBP1", OBP1)] {
-                            let value = gb.peek(addr);
-                            ui.monospace(format!("{name} ${value:02X}"));
-                            for index in 0..4 {
-                                let shade = (value >> (index * 2)) & 3;
-                                swatch(
-                                    ui,
-                                    colors[shade as usize],
-                                    format!("colour {index}: shade {shade}"),
-                                );
-                            }
-                            ui.end_row();
-                        }
-                    });
-                }
-                Palettes::Cgb { bg, obj, correct } => {
-                    egui::Grid::new("cgb_palettes").show(ui, |ui| {
-                        for n in 0..8u8 {
-                            for (kind, ram) in [("BG", bg), ("OBJ", obj)] {
-                                ui.monospace(format!("{kind} {n}"));
-                                for index in 0..4u8 {
-                                    let i = n as usize * 8 + index as usize * 2;
-                                    let color = u16::from_le_bytes([ram[i], ram[i + 1]]) & 0x7FFF;
-                                    let rgb = settings::cgb_color(color, *correct);
-                                    swatch(ui, rgb, format!("colour {index}: ${color:04X}"));
+        let open =
+            tool_window(
+                ctx,
+                "palettes",
+                "freki — Palettes",
+                [400.0, 330.0],
+                |ui| match palettes {
+                    Palettes::Dmg(colors) => {
+                        egui::Grid::new("dmg_palettes").show(ui, |ui| {
+                            for (name, addr) in [("BGP", BGP), ("OBP0", OBP0), ("OBP1", OBP1)] {
+                                let value = gb.peek(addr);
+                                ui.monospace(format!("{name} ${value:02X}"));
+                                for index in 0..4 {
+                                    let shade = (value >> (index * 2)) & 3;
+                                    swatch(
+                                        ui,
+                                        colors[shade as usize],
+                                        format!("colour {index}: shade {shade}"),
+                                    );
                                 }
-                                ui.add_space(12.0);
+                                ui.end_row();
                             }
-                            ui.end_row();
-                        }
-                    });
-                    ui.weak("Hover a colour for its RGB555 value.");
-                }
-            });
+                        });
+                    }
+                    Palettes::Cgb { bg, obj, correct } => {
+                        egui::Grid::new("cgb_palettes").show(ui, |ui| {
+                            for n in 0..8u8 {
+                                for (kind, ram) in [("BG", bg), ("OBJ", obj)] {
+                                    ui.monospace(format!("{kind} {n}"));
+                                    for index in 0..4u8 {
+                                        let i = n as usize * 8 + index as usize * 2;
+                                        let color =
+                                            u16::from_le_bytes([ram[i], ram[i + 1]]) & 0x7FFF;
+                                        let rgb = settings::cgb_color(color, *correct);
+                                        swatch(ui, rgb, format!("colour {index}: ${color:04X}"));
+                                    }
+                                    ui.add_space(12.0);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                        ui.weak("Hover a colour for its RGB555 value.");
+                    }
+                },
+            );
         self.show_palettes = open;
     }
 }

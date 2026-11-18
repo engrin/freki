@@ -24,6 +24,7 @@ use crate::session::Start;
 use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
 use crate::states::SLOTS;
+use crate::window::tool_window;
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
@@ -2242,32 +2243,6 @@ fn cell(ui: &mut egui::Ui, width: f32, text: &str, monospace: bool) {
         ui.add(egui::Label::new(text.clone()).truncate())
             .on_hover_text(text);
     });
-}
-
-/// Shows a tool window (cheats, memory search) as a window of its own, which can be moved
-/// and sized independently of the game's; where the platform cannot open more windows,
-/// inside the main window with a Close button. Returns whether it is still open.
-fn tool_window(
-    ctx: &egui::Context,
-    id: &str,
-    title: &str,
-    size: [f32; 2],
-    mut contents: impl FnMut(&mut egui::Ui),
-) -> bool {
-    let builder = egui::ViewportBuilder::default()
-        .with_title(title)
-        .with_inner_size(size)
-        .with_min_inner_size([320.0, 240.0]);
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(id), builder, |ui, class| {
-        if class == egui::ViewportClass::EmbeddedWindow {
-            let close = ui.button("Close").clicked();
-            contents(ui);
-            !close
-        } else {
-            egui::CentralPanel::default().show(ui, |ui| contents(ui));
-            !ui.ctx().input(|i| i.viewport().close_requested())
-        }
-    })
 }
 
 /// The picture of `session` (and of the linked game to its right), as RGBA with its size.

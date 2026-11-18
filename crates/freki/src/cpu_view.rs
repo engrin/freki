@@ -1,6 +1,7 @@
 //! The Debugger window: execution control, registers, disassembly, memory, stack and
 //! breakpoint/watchpoint lists.
 
+use crate::window::tool_window;
 use eframe::egui::{self, Color32, RichText};
 use freki_core::{GameBoy, Stop, Watchpoint};
 
@@ -54,26 +55,25 @@ impl CpuView {
     /// Draws the window. Returns the requested execution action, if any.
     pub fn show(&mut self, ctx: &egui::Context, gb: &mut GameBoy, paused: bool) -> Option<Action> {
         let mut action = None;
-        let mut open = self.open;
-        egui::Window::new("Debugger")
-            .open(&mut open)
-            .default_size([760.0, 560.0])
-            .resizable(true)
-            .show(ctx, |ui| {
-                action = self.toolbar(ui, paused);
-                ui.separator();
-                ui.columns(2, |cols| {
-                    self.registers(&mut cols[0], gb);
-                    cols[0].separator();
-                    self.disassembly(&mut cols[0], gb);
-                    self.memory(&mut cols[1], gb);
-                    cols[1].separator();
-                    stack(&mut cols[1], gb);
+        self.open = tool_window(ctx, "debugger", "freki — Debugger", [780.0, 720.0], |ui| {
+            action = self.toolbar(ui, paused);
+            ui.separator();
+            // Everything below the toolbar scrolls when the window is smaller than it.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.columns(2, |cols| {
+                        self.registers(&mut cols[0], gb);
+                        cols[0].separator();
+                        self.disassembly(&mut cols[0], gb);
+                        self.memory(&mut cols[1], gb);
+                        cols[1].separator();
+                        stack(&mut cols[1], gb);
+                    });
+                    ui.separator();
+                    self.breakpoints(ui, gb);
                 });
-                ui.separator();
-                self.breakpoints(ui, gb);
-            });
-        self.open = open;
+        });
         action
     }
 

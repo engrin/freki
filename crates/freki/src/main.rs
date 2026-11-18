@@ -24,6 +24,7 @@ mod rom_file;
 mod session;
 mod settings;
 mod states;
+mod window;
 
 use std::path::PathBuf;
 use std::process;
