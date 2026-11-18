@@ -47,6 +47,10 @@ run:
   --tilt FRAME:X,Y[:N]    tilt sensor games (MBC7): tilt so things roll right (X) and
                           down the screen (Y), in g (about -1 to 1), from FRAME for N
                           frames (default 60); repeatable
+  --cheats                load the game's cheat file (ROM.cht, or one named as in cheat
+                          databases) with the cheats switched on as saved there
+  --cheat N|CODE          switch on cheat N of that file, or add a GameShark or Game
+                          Genie code (A+B for several); repeatable; active from frame 0
 debugging:
   --break ADDR            stop when PC reaches ADDR; repeatable
   --watch 'ADDR [END] [r|w|rw]'
@@ -82,6 +86,8 @@ struct Options {
     load_state: Option<PathBuf>,
     presses: Vec<Press>,
     tilts: Vec<Tilt>,
+    load_cheats: bool,
+    cheats: Vec<String>,
     breaks: Vec<String>,
     watches: Vec<String>,
     trace: Option<PathBuf>,
@@ -172,6 +178,8 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--load-state" => o.load_state = Some(value(arg)?.into()),
             "--press" => o.presses.push(parse_press(&value(arg)?)?),
             "--tilt" => o.tilts.push(parse_tilt(&value(arg)?)?),
+            "--cheats" => o.load_cheats = true,
+            "--cheat" => o.cheats.push(value(arg)?),
             "--break" => o.breaks.push(value(arg)?),
             "--watch" => o.watches.push(value(arg)?),
             "--trace" => o.trace = Some(value(arg)?.into()),
@@ -315,6 +323,24 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
     }
 
     let mut console = Console::detached(rom_path.with_extension("cht"));
+    let mut cheat_lines = Vec::new();
+    if o.load_cheats {
+        cheat_lines.push("cheat reload".to_string());
+    }
+    for cheat in &o.cheats {
+        cheat_lines.push(if cheat.parse::<usize>().is_ok() {
+            format!("cheat on {cheat}")
+        } else {
+            format!("cheat add {cheat}")
+        });
+    }
+    for line in cheat_lines {
+        let out = console.execute(&line, &mut gb);
+        if let Some(e) = out.strip_prefix("error: ") {
+            return Err(format!("{line}: {e}").into());
+        }
+        println!("{out}");
+    }
     for addr in &o.breaks {
         command(&mut console, &format!("break {addr}"), &mut gb)?;
     }
@@ -543,6 +569,11 @@ mod tests {
             .unwrap();
         assert_eq!(o.off, Some(7200));
         assert_eq!(o.write_sav, Some(PathBuf::from("out.sav")));
+        let o = parse_args(&args("game.gb --cheats --cheat 3 --cheat 010A10C1"))
+            .unwrap()
+            .unwrap();
+        assert!(o.load_cheats);
+        assert_eq!(o.cheats, ["3", "010A10C1"]);
         assert_eq!(parse_duration("90"), Ok(90));
         assert_eq!(parse_duration("3d"), Ok(3 * 86_400));
     }

@@ -53,7 +53,7 @@ Named after Freki, one of Odin's two wolves.
 - **Terminal console:** the same debugger, cheat and memory commands, typed while the game
   runs
 - **Headless mode:** run a game without a window for scripts and regression checks,
-  with scripted button presses, instruction traces in Gameboy Doctor's format, screenshots
+  with scripted button presses, cheats, instruction traces in Gameboy Doctor's format, screenshots
   and save states
 
 ## Accuracy
@@ -166,6 +166,7 @@ freki --headless tetris.gb --frames 1200 --press 200:start --screenshot out.png 
 freki --headless 01-special.gb --until-serial Passed --serial      # exit 0 once it passes
 freki --headless game.gb --watch '$C0A0 w' --trace trace.log       # who writes $C0A0?
 freki --headless rtc.gbc --write-sav a.sav && freki --headless rtc.gbc --sav a.sav --off 2h
+freki --headless game.gbc --cheats --cheat 3 --cheat 010A10C1   # cheat 3 of game.cht, and a code
 ```
 
 ## Development
