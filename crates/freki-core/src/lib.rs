@@ -15,6 +15,7 @@ pub mod disasm;
 pub mod huc3;
 pub mod joypad;
 pub mod mbc7;
+pub mod mmm01;
 pub mod ppu;
 pub mod serial;
 pub mod state;

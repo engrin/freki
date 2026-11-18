@@ -9,6 +9,7 @@ use std::fmt;
 use crate::CLOCK_HZ;
 use crate::huc3::HuC3Clock;
 use crate::mbc7::{self, Mbc7};
+use crate::mmm01::Mmm01;
 
 const ROM_BANK: usize = 0x4000;
 const RAM_BANK: usize = 0x2000;
@@ -80,6 +81,9 @@ pub enum Mbc {
         rom_bank: u8,
         chip: Mbc7,
     },
+    /// MMM01: multi-game collections; a menu, then one game's slice of the ROM (see
+    /// [`crate::mmm01`]).
+    Mmm01(Mmm01),
 }
 
 /// MBC3 real-time clock. It runs on emulated time: one second per [`CLOCK_HZ`] T-cycles.
@@ -246,6 +250,26 @@ impl fmt::Display for CartridgeError {
 
 impl std::error::Error for CartridgeError {}
 
+/// Whether `rom` is an MMM01 collection, judged by the menu's header in the last 32 KiB
+/// (the first bank holds a game's header). As in SameBoy, $11 (MBC3) there counts too,
+/// for some collections that claim it.
+fn is_mmm01(rom: &[u8]) -> bool {
+    let Some(menu) = rom.len().checked_sub(0x8000).filter(|&m| m > 0) else {
+        return false;
+    };
+    rom[0x104..0x134] == rom[menu + 0x104..menu + 0x134]
+        && matches!(rom[menu + 0x147], 0x0B..=0x0D | 0x11)
+}
+
+/// Some MMM01 dumps put the menu first (its header says $0B–$0D); the cartridge has it
+/// in the last 32 KiB, so move it there.
+fn mmm01_menu_last(mut rom: Vec<u8>) -> Vec<u8> {
+    if matches!(rom[0x147], 0x0B..=0x0D) && rom.len() > 0x8000 {
+        rom.rotate_left(0x8000);
+    }
+    rom
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Cartridge {
     /// Not part of save states: restored from the loaded ROM.
@@ -277,7 +301,10 @@ impl Cartridge {
         if rom.len() < 0x8000 {
             return Err(CartridgeError::TooSmall(rom.len()));
         }
-        let kind = rom[0x147];
+        let rom = mmm01_menu_last(rom);
+        let mmm01 = is_mmm01(&rom);
+        let header = if mmm01 { rom.len() - 0x8000 } else { 0 };
+        let kind = if mmm01 { 0x0B } else { rom[0x147] };
         let mbc = match kind {
             0x00 | 0x08 | 0x09 => Mbc::RomOnly,
             0x01..=0x03 => Mbc::Mbc1 {
@@ -291,6 +318,7 @@ impl Cartridge {
                 ram_enabled: false,
                 rom_bank: 1,
             },
+            0x0B..=0x0D => Mbc::Mmm01(Mmm01::default()),
             0x0F..=0x13 => Mbc::Mbc3 {
                 ram_enabled: false,
                 rom_bank: 1,
@@ -324,10 +352,10 @@ impl Cartridge {
             other => return Err(CartridgeError::UnsupportedType(other)),
         };
         let battery = matches!(
-            kind,
-            0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFE | 0xFF
+            rom[header + 0x147],
+            0x03 | 0x06 | 0x0D | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E | 0x22 | 0xFE | 0xFF
         );
-        let ram_size = match (&mbc, rom[0x149]) {
+        let ram_size = match (&mbc, rom[header + 0x149]) {
             (Mbc::Mbc2 { .. }, _) => MBC2_RAM,
             (Mbc::Mbc7 { .. }, _) => mbc7::EEPROM_BYTES,
             (_, 0x02) => 8 * 1024,
@@ -364,19 +392,27 @@ impl Cartridge {
     /// $0143 is the CGB flag, not part of the title.
     pub fn title(&self) -> String {
         let end = if self.supports_cgb() { 0x143 } else { 0x144 };
-        let raw = &self.rom[0x134..end];
+        let raw = &self.header()[0x134..end];
         let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         String::from_utf8_lossy(&raw[..end]).trim().to_string()
     }
 
     /// Whether the header ($0143 bit 7) says the game uses Game Boy Color features.
     pub fn supports_cgb(&self) -> bool {
-        self.rom[0x143] & 0x80 != 0
+        self.header()[0x143] & 0x80 != 0
     }
 
     /// Whether the game runs only on a Game Boy Color ($0143 = $C0).
     pub fn cgb_only(&self) -> bool {
-        self.rom[0x143] == 0xC0
+        self.header()[0x143] == 0xC0
+    }
+
+    /// The ROM's header area: the menu's, at the end, on an MMM01 collection.
+    fn header(&self) -> &[u8] {
+        match self.mbc {
+            Mbc::Mmm01(_) => &self.rom[self.rom.len() - 0x8000..],
+            _ => &self.rom,
+        }
     }
 
     pub fn mbc(&self) -> &Mbc {
@@ -502,6 +538,12 @@ impl Cartridge {
                 let bank = if advanced { bank2 as usize } else { 0 };
                 bank * RAM_BANK + local
             }
+            Mbc::Mmm01(ref m) => {
+                if !m.ram_enabled {
+                    return None;
+                }
+                m.ram_bank() * RAM_BANK + local
+            }
             Mbc::Mbc2 { ram_enabled, .. } => {
                 if !ram_enabled {
                     return None;
@@ -571,6 +613,10 @@ impl Cartridge {
                     (false, _) => ((bank2 as usize) << shift) | bank1 as usize,
                 }
             }
+            Mbc::Mmm01(ref m) => {
+                let (bank0, bank) = m.rom_banks(self.rom.len() / ROM_BANK);
+                if low { bank0 } else { bank }
+            }
             Mbc::Mbc2 { rom_bank, .. } => {
                 if low {
                     0
@@ -609,6 +655,7 @@ impl Cartridge {
     pub fn write_rom(&mut self, addr: u16, value: u8) {
         match &mut self.mbc {
             Mbc::RomOnly => {}
+            Mbc::Mmm01(m) => m.write(addr, value),
             Mbc::Mbc1 {
                 ram_enabled,
                 bank1,
@@ -1022,6 +1069,44 @@ mod tests {
         let cart = Cartridge::from_rom(banked_rom(4, 0x0F, 0x00)).unwrap();
         assert!(cart.has_battery());
         assert_eq!(cart.save_data(0).len(), Rtc::SAVE_BYTES);
+    }
+
+    /// A 4-game, 256 KiB collection: a game's header in bank 0, the menu's ($0D, 8 KiB
+    /// RAM, battery) in the last 32 KiB, each bank filled with its number.
+    fn mmm01_rom() -> Vec<u8> {
+        let mut rom = banked_rom(16, 0x01, 0x00);
+        let menu = rom.len() - 0x8000;
+        // Both headers carry the same Nintendo logo.
+        rom[0x104..0x134].fill(0xCE);
+        rom[menu + 0x104..menu + 0x134].fill(0xCE);
+        rom[menu + 0x134..menu + 0x13C].copy_from_slice(b"MENU\0\0\0\0");
+        rom[menu + 0x147] = 0x0D;
+        rom[menu + 0x149] = 0x02;
+        rom
+    }
+
+    #[test]
+    fn mmm01_is_found_by_the_menu_header_at_the_end() {
+        let cart = Cartridge::from_rom(mmm01_rom()).unwrap();
+        assert!(matches!(cart.mbc, Mbc::Mmm01(_)));
+        assert_eq!(cart.title(), "MENU");
+        assert!(cart.has_battery());
+        assert_eq!(cart.ram().len(), 8 * 1024);
+        assert_eq!((cart.read_rom(0x0000), cart.read_rom(0x4000)), (14, 15));
+
+        // A dump with the menu first is the same cartridge.
+        let mut menu_first = mmm01_rom();
+        menu_first.rotate_right(0x8000);
+        let mut cart = Cartridge::from_rom(menu_first).unwrap();
+        assert_eq!((cart.read_rom(0x0000), cart.read_rom(0x4000)), (14, 15));
+
+        // The menu maps the game at banks 4–7 (mid = 0, high = 0, low bits 2–4 frozen).
+        cart.write_rom(0x2000, 0x04);
+        cart.write_rom(0x6000, 0b1110 << 2);
+        cart.write_rom(0x0000, 0x40);
+        assert_eq!((cart.read_rom(0x0000), cart.read_rom(0x4000)), (4, 5));
+        cart.write_rom(0x2000, 0x03);
+        assert_eq!(cart.read_rom(0x4000), 7);
     }
 
     #[test]
