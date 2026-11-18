@@ -113,6 +113,9 @@ const SPEED_SWITCH_DELAY_TO_DOUBLE: u32 = 12;
 const SPEED_SWITCH_DELAY_TO_NORMAL: u32 = 2;
 /// T-cycles (at normal speed) the CPU is paused per 16-byte VRAM DMA block.
 const HDMA_BLOCK_CYCLES: u32 = 32;
+/// T-cycles the CPU stays paused after a VRAM DMA transfer (a whole general-purpose one,
+/// or one HBlank block) has copied its bytes (Gambatte's hwtests, dma/*_cycles_*).
+const DMA_END_CYCLES: u32 = 8;
 
 /// The memory buses OAM DMA can collide with the CPU on.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -397,6 +400,7 @@ impl Bus {
             for _ in 0..=blocks {
                 self.hdma_block();
             }
+            self.dma_stall += DMA_END_CYCLES;
             self.hdma.remaining = 0x7F;
         } else {
             self.hdma.active = true;
@@ -425,6 +429,7 @@ impl Bus {
     /// One block of an HBlank transfer.
     fn hdma_hblank_block(&mut self) {
         self.hdma_block();
+        self.dma_stall += DMA_END_CYCLES;
         if self.hdma.remaining == 0 {
             self.hdma.active = false;
             self.hdma.remaining = 0x7F;
