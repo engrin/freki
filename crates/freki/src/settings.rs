@@ -37,6 +37,8 @@ pub struct Settings {
     pub color_correction: bool,
     /// Keyboard and gamepad controls.
     pub bindings: Bindings,
+    /// Rumble cartridges shake the gamepad.
+    pub rumble: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +54,7 @@ impl Default for Settings {
             fast_forward_speed: 4,
             color_correction: true,
             bindings: Bindings::default(),
+            rumble: true,
         }
     }
 }

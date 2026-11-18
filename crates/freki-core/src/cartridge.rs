@@ -46,6 +46,10 @@ pub enum Mbc {
         /// 9-bit ROM bank; unlike MBC1/3, bank 0 can be mapped to $4000–$7FFF.
         rom_bank: u16,
         ram_bank: u8,
+        /// Rumble cartridge (types $1C–$1E): bit 3 of the RAM bank register drives the
+        /// motor instead of selecting RAM.
+        rumble: bool,
+        motor: bool,
     },
 }
 
@@ -157,6 +161,10 @@ pub struct Cartridge {
     battery: bool,
     /// Set whenever RAM is written; lets the frontend save only when needed.
     ram_dirty: bool,
+    /// T-cycles the rumble motor was on, and T-cycles in all, since the frontend last
+    /// asked (see [`Cartridge::take_rumble`]).
+    #[serde(skip)]
+    motor_cycles: (u32, u32),
 }
 
 /// Detects an MBC1M multicart (several games on one 8 Mbit MBC1 cartridge): a second
@@ -195,6 +203,8 @@ impl Cartridge {
                 ram_enabled: false,
                 rom_bank: 1,
                 ram_bank: 0,
+                rumble: kind >= 0x1C,
+                motor: false,
             },
             other => return Err(CartridgeError::UnsupportedType(other)),
         };
@@ -213,6 +223,7 @@ impl Cartridge {
             mbc,
             battery,
             ram_dirty: false,
+            motor_cycles: (0, 0),
         })
     }
 
@@ -270,9 +281,27 @@ impl Cartridge {
 
     /// Advances time-based hardware (the MBC3 clock) by `cycles` T-cycles.
     pub fn tick(&mut self, cycles: u32) {
-        if let Mbc::Mbc3 { rtc: Some(rtc), .. } = &mut self.mbc {
-            rtc.tick(cycles);
+        match &mut self.mbc {
+            Mbc::Mbc3 { rtc: Some(rtc), .. } => rtc.tick(cycles),
+            Mbc::Mbc5 {
+                rumble: true,
+                motor,
+                ..
+            } => {
+                let (on, all) = &mut self.motor_cycles;
+                *on = on.saturating_add(if *motor { cycles } else { 0 });
+                *all = all.saturating_add(cycles);
+            }
+            _ => {}
         }
+    }
+
+    /// How strongly a rumble cartridge's motor ran since the last call: the fraction of
+    /// time it was on (games pulse it to set the strength), 0 to 1. `None` if no time
+    /// has passed or the cartridge has no motor.
+    pub fn take_rumble(&mut self) -> Option<f32> {
+        let (on, all) = std::mem::take(&mut self.motor_cycles);
+        (all > 0).then_some(on as f32 / all as f32)
     }
 
     fn rom_byte(&self, bank: usize, addr: u16) -> u8 {
@@ -427,10 +456,16 @@ impl Cartridge {
                 ram_enabled,
                 rom_bank,
                 ram_bank,
+                rumble,
+                motor,
             } => match addr {
                 0x0000..=0x1FFF => *ram_enabled = value & 0x0F == 0x0A,
                 0x2000..=0x2FFF => *rom_bank = (*rom_bank & 0x100) | value as u16,
                 0x3000..=0x3FFF => *rom_bank = (*rom_bank & 0xFF) | ((value as u16 & 1) << 8),
+                0x4000..=0x5FFF if *rumble => {
+                    *ram_bank = value & 0x07;
+                    *motor = value & 0x08 != 0;
+                }
                 0x4000..=0x5FFF => *ram_bank = value & 0x0F,
                 _ => {}
             },
@@ -565,6 +600,27 @@ mod tests {
         };
         rtc.advance_second();
         assert_eq!(rtc.regs, [0, 0, 0, 0, Rtc::DAY_CARRY]);
+    }
+
+    #[test]
+    fn mbc5_rumble_motor_uses_ram_bank_bit_3() {
+        let mut cart = Cartridge::from_rom(banked_rom(4, 0x1E, 0x03)).unwrap();
+        cart.write_rom(0x0000, 0x0A);
+        cart.write_rom(0x4000, 0x01);
+        cart.write_ram(0xA000, 0x55);
+        cart.write_rom(0x4000, 0x09); // motor on, still RAM bank 1
+        assert_eq!(cart.read_ram(0xA000), 0x55);
+        cart.tick(300);
+        cart.write_rom(0x4000, 0x01); // motor off
+        cart.tick(100);
+        assert_eq!(cart.take_rumble(), Some(0.75));
+        assert_eq!(cart.take_rumble(), None, "no time passed");
+
+        // Without a motor, bit 3 selects RAM bank 8+ and nothing rumbles.
+        let mut plain = Cartridge::from_rom(banked_rom(4, 0x1B, 0x04)).unwrap();
+        plain.write_rom(0x4000, 0x08);
+        plain.tick(100);
+        assert_eq!(plain.take_rumble(), None);
     }
 
     #[test]

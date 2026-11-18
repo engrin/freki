@@ -9,7 +9,7 @@ Named after Freki, one of Odin's two wolves.
 > `cgb-acid2` renders pixel-perfect and all of Blargg's `cgb_sound` tests pass.
 > freki passes all of Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`
 > and `dmg_sound` tests, and renders `dmg-acid2` pixel-perfect. Cartridges with no MBC,
-> MBC1, MBC2, MBC3 (with clock) and MBC5 work, with battery saves, save states, rewind and cheats.
+> MBC1, MBC2, MBC3 (with clock) and MBC5 (with rumble, passed on to the gamepad) work, with battery saves, save states, rewind and cheats.
 > The PPU draws pixel by pixel with DMG-accurate timing: 22 of the 24 mealybug-tearoom
 > mid-scanline tests match real hardware exactly (the other two differ by 4 and 3 pixels),
 > and all 94 DMG Mooneye acceptance and MBC tests pass (OAM DMA, timer, serial,

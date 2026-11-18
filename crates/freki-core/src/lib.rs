@@ -446,6 +446,12 @@ impl GameBoy {
         self.bus.cart.load_ram(data);
     }
 
+    /// Rumble strength since the last call, 0 to 1; `None` without a rumble cartridge or
+    /// if no time has passed.
+    pub fn take_rumble(&mut self) -> Option<f32> {
+        self.bus.cart.take_rumble()
+    }
+
     /// Returns `true` if cartridge RAM changed since the last call (i.e. the save is stale).
     pub fn take_save_dirty(&mut self) -> bool {
         self.bus.cart.take_ram_dirty()

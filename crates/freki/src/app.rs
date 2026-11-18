@@ -553,6 +553,20 @@ impl FrekiApp {
         }
     }
 
+    /// Passes a rumble cartridge's motor on to the gamepads (stopped while not running).
+    fn update_rumble(&mut self) {
+        let strength = match self.session.as_mut() {
+            Some(s) if self.settings.rumble && !self.paused && !self.rewinding => {
+                s.gb.take_rumble()
+            }
+            _ => Some(0.0),
+        };
+        // `None`: no frame ran since the last update; keep the current strength.
+        if let Some(strength) = strength {
+            self.gamepads.set_rumble(strength);
+        }
+    }
+
     fn update_texture(&mut self, ctx: &egui::Context) {
         let rgba = self.screen_rgba();
         let image = ColorImage::from_rgba_unmultiplied([SCREEN_WIDTH, SCREEN_HEIGHT], &rgba);
@@ -701,6 +715,8 @@ impl FrekiApp {
                     ui.close();
                     self.show_controls = true;
                 }
+                ui.checkbox(&mut self.settings.rumble, "Gamepad rumble")
+                    .on_hover_text("Rumble cartridges (MBC5 with motor) shake the controller");
             });
 
             ui.menu_button("States", |ui| {
@@ -1236,6 +1252,7 @@ impl eframe::App for FrekiApp {
             self.set_paused(paused);
         }
         self.emulate(&ctx);
+        self.update_rumble();
         self.update_texture(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
