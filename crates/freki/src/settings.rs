@@ -47,6 +47,11 @@ pub struct Settings {
     pub frame_blend: bool,
     /// Settings kept for single games, by [`game_key`].
     pub games: BTreeMap<String, GameSettings>,
+    /// Sound volume in percent (0–100).
+    pub volume: u8,
+    pub muted: bool,
+    /// Pause while no freki window has focus.
+    pub pause_in_background: bool,
 }
 
 /// The settings a game can have for itself (Emulation → Settings for this game).
@@ -109,11 +114,24 @@ impl Default for Settings {
             integer_scaling: true,
             frame_blend: false,
             games: BTreeMap::new(),
+            volume: 100,
+            muted: false,
+            pause_in_background: true,
         }
     }
 }
 
 impl Settings {
+    /// Factor for the samples heard: off when muted, and the volume on a square curve, so
+    /// the slider's steps sound even.
+    pub fn gain(&self) -> f32 {
+        if self.muted {
+            0.0
+        } else {
+            (f32::from(self.volume.min(100)) / 100.0).powi(2)
+        }
+    }
+
     /// Puts `path` at the top of the recent ROMs.
     pub fn add_recent(&mut self, path: &Path) {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());

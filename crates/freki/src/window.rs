@@ -4,10 +4,11 @@
 
 use eframe::egui::{self, Event, Key, Modifiers, ViewportId};
 
-/// Hotkeys passed from a focused tool window to the main window: the function keys and P
-/// (pause), plus Ctrl+O / Ctrl+Q / Ctrl+R. Game buttons and the keys held down (rewind,
+/// Hotkeys passed from a focused tool window to the main window: the function keys, P
+/// (pause) and M (mute), plus Ctrl+O / Ctrl+Q / Ctrl+R. Game buttons and the keys held down (rewind,
 /// fast-forward) stay with the main window.
-const FORWARDED: [Key; 10] = [
+const FORWARDED: [Key; 11] = [
+    Key::M,
     Key::F4,
     Key::F5,
     Key::F6,
@@ -45,7 +46,7 @@ pub fn tool_window(
     let viewport = ViewportId::from_hash_of(id);
     let geometry_id = viewport.0.with("geometry");
     let opened_id = viewport.0.with("opened");
-    let frame = ctx.cumulative_frame_nr();
+    let frame = ctx.cumulative_frame_nr_for(ViewportId::ROOT);
 
     // The geometry to open with is read once when the window opens; giving the builder a
     // new position every frame would fight the player dragging it.
@@ -77,6 +78,11 @@ pub fn tool_window(
             remember_geometry(&ctx, geometry_id);
         }
         forward_hotkeys(&ctx);
+        if ctx.input(|i| i.viewport().focused == Some(true)) {
+            // The main window's frame count: each window counts its own frames.
+            let frame = ctx.cumulative_frame_nr_for(ViewportId::ROOT);
+            ctx.data_mut(|d| d.insert_temp(tool_focus_id(), frame));
+        }
         !ctx.input(|i| i.viewport().close_requested())
     })
 }
@@ -128,6 +134,21 @@ fn forward_hotkeys(ctx: &egui::Context) {
             .extend(keys)
     });
     ctx.request_repaint_of(ViewportId::ROOT);
+}
+
+fn tool_focus_id() -> egui::Id {
+    ViewportId::ROOT.0.with("tool window focused")
+}
+
+/// Whether the main window or a tool window has keyboard focus (on platforms that don't
+/// say, it counts as focused).
+pub fn any_window_focused(ctx: &egui::Context) -> bool {
+    if ctx.input(|i| i.viewport().focused != Some(false)) {
+        return true;
+    }
+    let frame = ctx.cumulative_frame_nr_for(ViewportId::ROOT);
+    ctx.data(|d| d.get_temp::<u64>(tool_focus_id()))
+        .is_some_and(|seen| seen + 2 >= frame)
 }
 
 /// Hotkeys pressed in tool windows since the last call, with their modifiers.

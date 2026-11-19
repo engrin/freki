@@ -26,9 +26,11 @@ use crate::session::Start;
 use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
 use crate::state_previews::{Pick, StatePreviews};
-use crate::window::{take_forwarded_hotkeys, tool_window};
+use crate::window::{self, take_forwarded_hotkeys, tool_window};
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+/// How long no freki window must have focus before the game pauses in the background.
+const FOCUS_GRACE: Duration = Duration::from_millis(200);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const RESET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
 /// How much of the way to the D-pad's or stick's tilt MBC7 games get each frame.
@@ -193,7 +195,13 @@ pub struct FrekiApp {
     show_search: bool,
     show_controls: bool,
     /// The Game Boy button whose key or gamepad button is being chosen.
-    capture: Option<(Button, Capture)>,
+    capture: Option<(input::Control, Capture)>,
+    /// Frames each turbo button (A, B) has been held, per Game Boy (left, right).
+    turbo: [[u32; 2]; 2],
+    /// Paused because no freki window has focus (see [`Settings::pause_in_background`]).
+    background_paused: bool,
+    /// When the last freki window lost focus.
+    unfocused_since: Option<Instant>,
     controls_tab: ControlsTab,
     /// Tilt passed to MBC7 cartridges, eased towards the input (see `emulate`).
     tilt: (f32, f32),
@@ -255,6 +263,9 @@ impl FrekiApp {
             show_search: false,
             show_controls: false,
             capture: None,
+            turbo: [[0; 2]; 2],
+            background_paused: false,
+            unfocused_since: None,
             controls_tab: ControlsTab::Keyboard,
             tilt: (0.0, 0.0),
             controls_message: None,
@@ -753,6 +764,15 @@ impl FrekiApp {
         if pressed(Key::F9) {
             self.toggle_cheats();
         }
+        if pressed(Key::M) {
+            self.settings.muted = !self.settings.muted;
+            let msg = if self.settings.muted {
+                "muted"
+            } else {
+                "sound on"
+            };
+            self.set_status(msg);
+        }
         // Shift+F12 records video; F12 alone takes a screenshot.
         let tool_shift_f12 = forwarded
             .iter()
@@ -859,6 +879,30 @@ impl FrekiApp {
         self.frame_debt -= frames as f64;
 
         let typing = ctx.text_edit_focused();
+        // In the background (no freki window focused), the game waits for the player.
+        // Focus moving between freki's own windows leaves none focused for a moment.
+        let unfocused = self.settings.pause_in_background
+            && self.recorder.is_none()
+            && !window::any_window_focused(ctx);
+        if !unfocused {
+            self.unfocused_since = None;
+        }
+        let since = *self.unfocused_since.get_or_insert(now);
+        let background = unfocused && now.duration_since(since) >= FOCUS_GRACE;
+        if background != self.background_paused {
+            self.background_paused = background;
+            if !self.paused && self.session.is_some() {
+                self.set_status(if background {
+                    "paused in the background"
+                } else {
+                    "resumed"
+                });
+            }
+        }
+        if background {
+            return;
+        }
+
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -917,25 +961,45 @@ impl FrekiApp {
             Some(_) => (Some(0), self.keyboard_second),
             None => (None, false),
         };
+        // Alt+Enter toggles fullscreen; it must not press the button on Enter.
+        let key_down = |control: input::Control| {
+            !typing && ctx.input(|i| !i.modifiers.alt && i.key_down(bindings.key(control)))
+        };
+        // Whether `control` is held on the left (0) or right (1) Game Boy.
+        let gamepads = &self.gamepads;
+        let down = |side: usize, control: input::Control| {
+            let button = match control {
+                input::Control::Button(b) | input::Control::Turbo(b) => b,
+            };
+            let pad = if side == 0 { first_pad } else { Some(1) };
+            (key_down(control) && (side == 1) == keyboard_second)
+                || gamepads.is_pressed_on(pad, button, bindings.pad(control))
+        };
         for _ in 0..frames {
+            // Turbo A and B: pressed and released in turn while held.
+            let mut turbo = [[false; 2]; 2];
+            for (side, counters) in self.turbo.iter_mut().enumerate() {
+                for (n, control) in input::TURBOS.into_iter().enumerate() {
+                    if down(side, control) {
+                        turbo[side][n] = input::turbo_pressed(counters[n]);
+                        counters[n] += 1;
+                    } else {
+                        counters[n] = 0;
+                    }
+                }
+            }
+            let turbo_for = |side: usize, button: Button| match button {
+                Button::A => turbo[side][0],
+                Button::B => turbo[side][1],
+                _ => false,
+            };
             let mut held = [false; input::BUTTONS.len()];
             for (i, button) in input::BUTTONS.into_iter().enumerate() {
-                // Alt+Enter toggles fullscreen; it must not press the button on Enter.
-                let down =
-                    !typing && ctx.input(|i| !i.modifiers.alt && i.key_down(bindings.key(button)));
-                let pad = self
-                    .gamepads
-                    .is_pressed_on(first_pad, button, bindings.pad(button));
-                held[i] = (down && !keyboard_second) || pad;
+                held[i] = down(0, button.into()) || turbo_for(0, button);
                 session.gb.set_button(button, held[i]);
                 if let Some(linked) = self.link.as_mut() {
-                    let pad = self
-                        .gamepads
-                        .is_pressed_on(Some(1), button, bindings.pad(button));
-                    linked
-                        .session
-                        .gb
-                        .set_button(button, (down && keyboard_second) || pad);
+                    let pressed = down(1, button.into()) || turbo_for(1, button);
+                    linked.session.gb.set_button(button, pressed);
                 }
             }
             if session.gb.has_tilt_sensor() {
@@ -1024,7 +1088,14 @@ impl FrekiApp {
             if let Some(audio) = &self.audio
                 && speed == 1
             {
-                audio.push(&self.samples);
+                // Volume applies to what is heard only; recordings keep the full level.
+                let gain = self.settings.gain();
+                if gain == 1.0 {
+                    audio.push(&self.samples);
+                } else {
+                    self.samples.iter_mut().for_each(|s| *s *= gain);
+                    audio.push(&self.samples);
+                }
             }
             self.samples.clear();
         }
@@ -1040,7 +1111,12 @@ impl FrekiApp {
     /// Passes a rumble cartridge's motor on to the gamepads (stopped while not running).
     fn update_rumble(&mut self) {
         let strength = match self.session.as_mut() {
-            Some(s) if self.settings.rumble && !self.paused && !self.rewinding => {
+            Some(s)
+                if self.settings.rumble
+                    && !self.paused
+                    && !self.background_paused
+                    && !self.rewinding =>
+            {
                 s.gb.take_rumble()
             }
             _ => Some(0.0),
@@ -1201,6 +1277,11 @@ impl FrekiApp {
                     let msg = if self.paused { "paused" } else { "resumed" };
                     self.set_status(msg);
                 }
+                ui.checkbox(
+                    &mut self.settings.pause_in_background,
+                    "Pause in the background",
+                )
+                .on_hover_text("Pause while no freki window has focus; resumes when you return");
                 ui.add_enabled(false, egui::Button::new("Rewind").shortcut_text("hold R"));
                 ui.horizontal(|ui| {
                     ui.add_enabled(
@@ -1250,6 +1331,23 @@ impl FrekiApp {
                 if ui.button("Controls…").clicked() {
                     ui.close();
                     self.show_controls = true;
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Volume");
+                    ui.add(egui::Slider::new(&mut self.settings.volume, 0..=100).suffix(" %"));
+                });
+                if ui
+                    .add(egui::Checkbox::new(&mut self.settings.muted, "Mute"))
+                    .on_hover_text("M")
+                    .changed()
+                {
+                    let msg = if self.settings.muted {
+                        "muted"
+                    } else {
+                        "sound on"
+                    };
+                    self.set_status(msg);
                 }
                 ui.checkbox(&mut self.settings.rumble, "Gamepad rumble")
                     .on_hover_text("Rumble cartridges (MBC5 with motor) shake the controller");
@@ -1533,11 +1631,15 @@ impl FrekiApp {
                     "cheats off".to_string()
                 });
                 ui.separator();
-                if self.paused {
+                if self.paused || self.background_paused {
                     ui.label("paused");
                     ui.separator();
                 } else if self.speed() > 1 {
                     ui.label(format!("fast-forward {}×", self.speed()));
+                    ui.separator();
+                }
+                if self.settings.muted {
+                    ui.label("muted");
                     ui.separator();
                 }
             }
@@ -1941,7 +2043,7 @@ impl FrekiApp {
                         controls::AMBER,
                         format!(
                             "Press the {what} for {} … (Esc cancels)",
-                            input::button_name(button)
+                            input::control_name(button)
                         ),
                     );
                 }
@@ -1990,7 +2092,11 @@ impl FrekiApp {
         let map = |p: Pos2| origin + p.to_vec2() * k;
         let painter = ui.painter_at(area);
         let line = Stroke::new(1.2, Color32::from_rgb(0x5C, 0x5C, 0x66));
-        let waiting_for = self.capture.filter(|(_, k)| *k == kind).map(|(b, _)| b);
+        let waiting_control = self.capture.filter(|(_, k)| *k == kind).map(|(c, _)| c);
+        let waiting_for = match waiting_control {
+            Some(input::Control::Button(button)) => Some(button),
+            _ => None,
+        };
         for button in input::BUTTONS {
             let points: Vec<Pos2> = controls::layout::leader(button)
                 .into_iter()
@@ -2120,7 +2226,11 @@ impl FrekiApp {
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
-                self.capture = if waiting { None } else { Some((button, kind)) };
+                self.capture = if waiting {
+                    None
+                } else {
+                    Some((button.into(), kind))
+                };
                 self.controls_message = None;
                 // Forget presses made before the capture started.
                 self.gamepads.update();
@@ -2128,6 +2238,37 @@ impl FrekiApp {
             }
         }
 
+        ui.horizontal(|ui| {
+            for turbo in input::TURBOS {
+                let waiting = waiting_control == Some(turbo);
+                ui.label(input::control_name(turbo));
+                let text = if waiting {
+                    if kind == Capture::Key {
+                        "press a key…".to_string()
+                    } else {
+                        "press a button…".to_string()
+                    }
+                } else if kind == Capture::Key {
+                    key_label(self.settings.bindings.key(turbo))
+                } else {
+                    let (_, name) =
+                        controls::pad_label(pad_kind, self.settings.bindings.pad(turbo));
+                    name
+                };
+                let mut chip = egui::Button::new(text).min_size(vec2(90.0, 0.0));
+                if waiting {
+                    chip = chip.stroke(Stroke::new(1.5, controls::AMBER));
+                }
+                if ui.add(chip).clicked() {
+                    self.capture = if waiting { None } else { Some((turbo, kind)) };
+                    self.controls_message = None;
+                    self.gamepads.update();
+                    self.gamepads.take_pressed();
+                }
+                ui.add_space(12.0);
+            }
+            ui.weak("held: presses the button 15 times a second");
+        });
         ui.separator();
         ui.horizontal(|ui| {
             let (default, label) = match kind {
@@ -2159,6 +2300,7 @@ impl FrekiApp {
                     ("Rewind", "hold R"),
                     ("Fast-forward", "hold Tab"),
                     ("Pause", "P"),
+                    ("Mute", "M"),
                     ("Cheats on/off", "F9"),
                     ("Screenshot", "F12"),
                     ("Fullscreen", "Alt+Enter (Esc leaves)"),
@@ -2268,7 +2410,12 @@ impl eframe::App for FrekiApp {
             self.debug.show(&ctx, &session.gb, &palettes);
         }
 
-        ctx.request_repaint();
+        if self.background_paused {
+            // Nothing moves; focus coming back wakes the window at once anyway.
+            ctx.request_repaint_after(Duration::from_millis(100));
+        } else {
+            ctx.request_repaint();
+        }
     }
 
     /// Takes Tab away from egui (which would move keyboard focus through the menus on

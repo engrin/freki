@@ -42,6 +42,9 @@ Named after Freki, one of Odin's two wolves.
 - **10 save-state slots** with previews: the States menu shows each slot's screen and how
   long ago it was saved (click to select, double-click to load). State files are PNGs of
   the screen with the state inside, so image viewers show them too
+- **Volume and mute** (Emulation menu, or M), **turbo buttons** for A and B, and **pause
+  in the background:** the game waits while no freki window has focus (can be switched
+  off; never while recording video)
 - **Fullscreen** and window scales from 2× to 6×, with sharp integer scaling (can be
   switched off)
 - **Settings per game:** a game can keep its own console, palette, colour correction and
@@ -113,11 +116,13 @@ cargo run --release -- path/to/game.gb    # or start without a ROM: File → Ope
 | D-pad | Arrow keys | D-pad or left stick |
 | A / B | X / Z | Right / bottom face button |
 | Start / Select | Enter / Backspace | Start / Select |
+| Turbo A / turbo B (15 presses a second while held) | S / A | Top / left face button |
 | Save / load state | F5 / F8 | |
 | Previous / next slot | F6 / F7 | |
 | Rewind | hold R | |
 | Fast-forward | hold Tab | |
 | Pause | P | |
+| Mute | M | |
 | Cheats on / off | F9 | |
 | Keyboard to the other linked Game Boy | F4 | |
 | Screenshot | F12 | |
@@ -128,8 +133,9 @@ cargo run --release -- path/to/game.gb    # or start without a ROM: File → Ope
 These shortcuts also work while a tool window (debugger, viewers, cheats, printer) has
 focus, except rewind and fast-forward; the Game Boy buttons only work in the game's window.
 
-The Game Boy buttons can be rebound under **Emulation → Controls…**. Settings such as the
-palette, scale, controls, recent ROMs, boot ROMs and where the tool windows were are
+The Game Boy buttons and the turbo buttons can be rebound under **Emulation →
+Controls…**. Settings such as the palette, scale, controls, volume, recent ROMs, boot ROMs
+and where the tool windows were are
 remembered between runs.
 
 ## Files next to the ROM
