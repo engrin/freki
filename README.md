@@ -17,9 +17,9 @@ Named after Freki, one of Odin's two wolves.
   adjustments
 - **Cartridges:** no MBC, MBC1 (including multicarts), MMM01 collections, MBC2, MBC3
   with real-time clock (kept in the save file, so it moves on while freki is closed),
-  MBC5 with rumble, MBC7 with tilt sensor (tilted with the D-pad, arrow keys or left
-  stick), Hudson's HuC1 and HuC3 (with real-time clock), and Bandai's TAMA5
-  (Tamagotchi 3, with its clock)
+  MBC5 with rumble, MBC6 with its flash chip (Net de Get, which downloads minigames into
+  it), MBC7 with tilt sensor (tilted with the D-pad, arrow keys or left stick), Hudson's
+  HuC1 and HuC3 (with real-time clock), and Bandai's TAMA5 (Tamagotchi 3, with its clock)
 - **Super Game Boy:** the borders and colours SGB games bring along (Pokémon, Donkey Kong,
   Dragon Warrior Monsters, …), with palettes, colour attributes, screen masking and the
   multiplayer request games use to detect an SGB
