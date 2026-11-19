@@ -635,7 +635,8 @@ impl Cartridge {
                 ram_select,
                 ..
             } => {
-                if !ram_enabled || ram_select > 0x03 {
+                let last_bank = if self.is_mbc30() { 0x07 } else { 0x03 };
+                if !ram_enabled || ram_select > last_bank {
                     return None;
                 }
                 ram_select as usize * RAM_BANK + local
@@ -757,6 +758,14 @@ impl Cartridge {
         bank % (self.rom.len() / ROM_BANK).max(1)
     }
 
+    /// Whether this MBC3 cartridge is an MBC30 (only the Japanese Pokémon Crystal): the
+    /// same chip with 8 RAM banks (64 KiB) and an 8-bit ROM bank register (4 MiB). The
+    /// header type is MBC3's, so the sizes tell them apart, as in other emulators.
+    fn is_mbc30(&self) -> bool {
+        matches!(self.mbc, Mbc::Mbc3 { .. })
+            && (self.ram.len() > 4 * RAM_BANK || self.rom.len() > 128 * ROM_BANK)
+    }
+
     /// Size of the ROM in bytes.
     pub fn rom_len(&self) -> usize {
         self.rom.len()
@@ -769,6 +778,7 @@ impl Cartridge {
 
     /// Write to $0000–$7FFF (MBC control registers).
     pub fn write_rom(&mut self, addr: u16, value: u8) {
+        let rom_bank_mask = if self.is_mbc30() { 0xFF } else { 0x7F };
         match &mut self.mbc {
             // TAMA5 is driven through $A000/$A001 only.
             Mbc::RomOnly | Mbc::Tama5(_) => {}
@@ -810,7 +820,7 @@ impl Cartridge {
                 rtc,
             } => match addr {
                 0x0000..=0x1FFF => *ram_enabled = value & 0x0F == 0x0A,
-                0x2000..=0x3FFF => *rom_bank = (value & 0x7F).max(1),
+                0x2000..=0x3FFF => *rom_bank = (value & rom_bank_mask).max(1),
                 0x4000..=0x5FFF => *ram_select = value & 0x0F,
                 _ => {
                     if let Some(rtc) = rtc {
@@ -1035,6 +1045,41 @@ mod tests {
         cart.write_rom(0x6000, 0x00);
         cart.write_rom(0x6000, 0x01);
         assert_eq!(cart.read_ram(0xA000), 3);
+    }
+
+    /// MBC30 (Japanese Pokémon Crystal: 2 MiB ROM, 64 KiB RAM, clock): RAM banks 4–7
+    /// exist; a plain MBC3 with 32 KiB has none there. Bigger MBC30 ROMs use bit 7 of the
+    /// ROM bank.
+    #[test]
+    fn mbc30_has_eight_ram_banks_and_256_rom_banks() {
+        let mut crystal = Cartridge::from_rom(banked_rom(128, 0x10, 0x05)).unwrap();
+        assert_eq!(crystal.ram().len(), 64 * 1024);
+        crystal.write_rom(0x0000, 0x0A);
+        for bank in 0..8u8 {
+            crystal.write_rom(0x4000, bank);
+            crystal.write_ram(0xA123, 0x40 + bank);
+        }
+        for bank in 0..8u8 {
+            crystal.write_rom(0x4000, bank);
+            assert_eq!(crystal.read_ram(0xA123), 0x40 + bank, "RAM bank {bank}");
+        }
+        crystal.write_rom(0x4000, 0x08); // the clock still answers at $08–$0C
+        crystal.write_rom(0x6000, 0x00);
+        crystal.write_rom(0x6000, 0x01);
+        assert_eq!(crystal.read_ram(0xA000), 0, "seconds");
+
+        let mut mbc3 = Cartridge::from_rom(banked_rom(128, 0x10, 0x03)).unwrap();
+        mbc3.write_rom(0x0000, 0x0A);
+        mbc3.write_rom(0x4000, 0x05);
+        mbc3.write_ram(0xA123, 0x99);
+        assert_eq!(mbc3.read_ram(0xA123), 0xFF, "no RAM bank 5 on an MBC3");
+        assert!(mbc3.ram().iter().all(|&b| b == 0));
+
+        let mut big = Cartridge::from_rom(banked_rom(256, 0x10, 0x05)).unwrap();
+        big.write_rom(0x2000, 0xC5);
+        assert_eq!(big.read_rom(0x4000), 0xC5);
+        mbc3.write_rom(0x2000, 0xC5);
+        assert_eq!(mbc3.read_rom(0x4000), 0x45, "MBC3 ignores bit 7");
     }
 
     #[test]
