@@ -20,7 +20,11 @@ Named after Freki, one of Odin's two wolves.
   its MBC30 variant (Japanese Pokémon Crystal: 64 KiB save RAM), MBC5 with rumble, MBC6
   with its flash chip (Net de Get, which downloads minigames into it), MBC7 with tilt
   sensor (tilted with the D-pad, arrow keys or left stick), Hudson's HuC1 and HuC3 (with
-  real-time clock), and Bandai's TAMA5 (Tamagotchi 3, with its clock)
+  real-time clock), Bandai's TAMA5 (Tamagotchi 3, with its clock), and the **Game Boy
+  Camera** (see below)
+- **Unlicensed cartridges**, recognised from the ROM since their headers don't say: Wisdom
+  Tree (Spiritual Warfare, the NIV Bible, …), Sachen MMC1 and MMC2 (with the trick that
+  gets them past the boot ROM's logo check) and M161 (Mani 4-in-1)
 - **Super Game Boy:** the borders and colours SGB games bring along (Pokémon, Donkey Kong,
   Dragon Warrior Monsters, …), with palettes, colour attributes, screen masking and the
   multiplayer request games use to detect an SGB
@@ -145,9 +149,8 @@ These shortcuts also work while a tool window (debugger, viewers, cheats, printe
 focus, except rewind and fast-forward; the Game Boy buttons only work in the game's window.
 
 The Game Boy buttons and the turbo buttons can be rebound under **Emulation →
-Controls…**. Settings such as the palette, scale, controls, volume, recent ROMs, boot ROMs
-and where the tool windows were are
-remembered between runs.
+Controls…**. Settings such as the palette, scale, controls, volume, recent ROMs, boot ROMs,
+the Game Boy Camera's picture and where the tool windows were are remembered between runs.
 
 ## Files next to the ROM
 
@@ -215,6 +218,17 @@ finished when the game feeds the paper out after printing; pictures printed in s
 end up on one page. **Tear off** finishes the page by hand, for games that never feed the
 paper out. Headless mode prints with `--printer page.png`.
 
+## Game Boy Camera
+
+The camera "sees" a picture you choose: **Emulation → Camera picture…** takes a PNG or JPEG,
+which freki turns grey, crops to the sensor's shape and scales to its 128 × 120 pixels.
+Without one it sees a test pattern (a gradient with a dark disc). The game processes the
+picture like the real cartridge: exposure, the sensor's edge enhancement and the dithering
+the brightness and contrast settings choose, and taking a picture takes as long as on the
+real sensor. Photos are kept in the battery save like on the cartridge. The picture is
+remembered between runs; **Camera: test pattern** goes back to the pattern. Headless mode
+takes one with `--camera picture.png`.
+
 ## Cheats
 
 **Cheats → Cheat manager…** adds, toggles and removes codes, and **Cheats → Memory
@@ -272,9 +286,9 @@ cheat save            # writes game.cht
 sound. It can press buttons at given frames, stop at breakpoints or watchpoints, and log
 every instruction. At the end it can run console commands, print the serial output, and
 save a screenshot, a save state or the battery save, and a Game Boy Printer can save what
-the game prints. A battery save can be loaded as if
-the Game Boy had been off for a while, so the cartridge clock catches up, and a second game
-can run on a link cable. `freki --headless --help` lists the options.
+the game prints. The Game Boy Camera can see a picture (`--camera`). A battery save can be
+loaded as if the Game Boy had been off for a while, so the cartridge clock catches up, and a
+second game can run on a link cable. `freki --headless --help` lists the options.
 
 ```sh
 freki --headless tetris.gb --frames 1200 --press 200:start --screenshot out.png --exec regs
