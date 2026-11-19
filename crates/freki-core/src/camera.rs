@@ -1,8 +1,11 @@
 //! The Game Boy Camera (Pocket Camera, header type $FC): an MBC3-like controller with
 //! 128 KiB RAM, and the M64282FP sensor behind registers at $A000–$A035 (RAM bank $10 and
-//! up). Following Pan Docs' "Game Boy Camera" chapter (Antonio Niño Díaz's research), the
-//! picture is processed like GiiBiiAdvance does: exposure, the sensor's edge modes, then
-//! the controller's 4×4 dithering matrix, and written as 14×16 tiles to RAM at $A100.
+//! up). The picture goes through exposure, the sensor's edge modes and the controller's
+//! 4×4 dithering matrix, and is written as 14×16 tiles to RAM at $A100.
+//!
+//! Source: Pan Docs' "Game Boy Camera" chapter (CC0), compiled by Antonio Niño Díaz from
+//! his reverse engineering (<https://github.com/AntonioND/gbcam-rev-engineer>); the
+//! processing in `process` follows that chapter's sample code for emulators.
 //!
 //! The picture itself comes from the frontend ([`Camera::set_image`]): greyscale, sensor
 //! sized ([`SENSOR_WIDTH`] × [`SENSOR_HEIGHT`]); without one the camera sees a test

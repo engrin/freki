@@ -837,6 +837,7 @@ mod tests {
     /// Game Genie decoding as SameBoy implements it (Core/cheats.c), ported literally:
     /// strip dashes, drop the 8th digit, read "VVAAAA[OO]" as hex, rotate the address
     /// right by 4 and XOR $F000, rotate the compare byte right by 2 and XOR $BA.
+    /// SameBoy: Copyright (c) 2015-2026 Lior Halphon, Expat (MIT) License.
     #[allow(clippy::manual_rotate)] // kept as literal shifts, like the C original
     fn sameboy_game_genie(code: &str) -> Option<(u16, u8, Option<u8>)> {
         let mut digits: String = code.chars().filter(|&c| c != '-').collect();
