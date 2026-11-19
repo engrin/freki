@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::sgb_sound::SgbSound;
+
 use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 /// Size of the SGB picture.
@@ -39,6 +41,8 @@ enum Transfer {
     Palettes,
     /// The 45 attribute files.
     Attributes,
+    /// Code and data for the SNES sound chip (`SOU_TRN`).
+    Sound,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,6 +93,10 @@ pub struct Sgb {
     shown: Vec<u8>,
     #[serde(skip, default = "blank_frame")]
     frame: Vec<u16>,
+    /// The SNES sound chip with the SGB's sound engine, if the frontend gave freki the
+    /// SGB's SNES ROM (not part of save states; kept when one is loaded).
+    #[serde(skip)]
+    sound: Option<Box<SgbSound>>,
 }
 
 fn blank_screen() -> Vec<u8> {
@@ -126,9 +134,34 @@ impl Sgb {
             transfer: None,
             shown: blank_screen(),
             frame: blank_frame(),
+            sound: None,
         };
         sgb.compose();
         sgb
+    }
+
+    /// Gives the SGB its sound (the SNES sound chip running the SGB ROM's engine).
+    pub fn set_sound(&mut self, sound: Option<Box<SgbSound>>) {
+        self.sound = sound;
+    }
+
+    pub fn has_sound(&self) -> bool {
+        self.sound.is_some()
+    }
+
+    pub fn sound_mut(&mut self) -> Option<&mut SgbSound> {
+        self.sound.as_deref_mut()
+    }
+
+    pub(crate) fn take_sound(&mut self) -> Option<Box<SgbSound>> {
+        self.sound.take()
+    }
+
+    /// Runs the sound chip along with `cycles` Game Boy T-cycles.
+    pub fn tick_sound(&mut self, cycles: u32) {
+        if let Some(sound) = self.sound.as_mut() {
+            sound.tick(cycles);
+        }
     }
 
     /// The 256×224 picture in RGB555, row by row.
@@ -266,7 +299,14 @@ impl Sgb {
                     _ => Mask::Color0,
                 }
             }
-            // Sound, SNES memory and program commands: not emulated.
+            // SOUND and SOU_TRN: the SNES sound chip, when the SGB ROM is there.
+            0x08 => {
+                if let Some(sound) = self.sound.as_mut() {
+                    sound.command(&p);
+                }
+            }
+            0x09 => self.transfer = Some((Transfer::Sound, TRANSFER_DELAY)),
+            // SNES memory and program commands: not emulated.
             _ => {}
         }
     }
@@ -452,6 +492,11 @@ impl Sgb {
             }
             Transfer::Palettes => self.system_palettes.copy_from_slice(&words(0..0x1000)),
             Transfer::Attributes => self.attribute_files.copy_from_slice(&data[..0xFD2]),
+            Transfer::Sound => {
+                if let Some(sound) = self.sound.as_mut() {
+                    sound.transfer(&data);
+                }
+            }
         }
     }
 

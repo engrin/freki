@@ -780,6 +780,9 @@ impl Bus {
         self.apu.adopt_output_from(&old.apu);
         self.cheats = std::mem::take(&mut old.cheats);
         self.breaks = std::mem::take(&mut old.breaks);
+        if let (Some(new), Some(old)) = (self.sgb.as_mut(), old.sgb.as_mut()) {
+            new.set_sound(old.take_sound());
+        }
     }
 
     pub fn read_u16(&self, addr: u16) -> u16 {
@@ -814,6 +817,9 @@ impl Bus {
         self.ppu.oam_blocked = self.dma.active.is_some_and(|(src, _)| src & 0xFF >= 2);
         let counter = self.timer.counter() as u32;
         self.apu.tick(video_cycles);
+        if let Some(sgb) = self.sgb.as_mut() {
+            sgb.tick_sound(video_cycles);
+        }
         // Falling edges of counter bit 12 (bit 13 in double speed) step the APU's frame
         // sequencer at 512 Hz.
         if std::mem::take(&mut self.apu_step_due) {

@@ -48,6 +48,7 @@ pub use link::{Link, LinkError, Player};
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use printer::{PAPER_WIDTH, Page, Printer};
 pub use sgb::{SGB_HEIGHT, SGB_WIDTH};
+use sgb_sound::SgbSound;
 pub use state::{Rewind, StateError};
 pub use symbols::{SymbolAddress, Symbols};
 
@@ -651,17 +652,48 @@ impl GameBoy {
     /// called, no samples are generated.
     pub fn set_audio_sample_rate(&mut self, rate: u32) {
         self.bus.apu.set_sample_rate(rate);
+        if let Some(sound) = self.bus.sgb.as_mut().and_then(|s| s.sound_mut()) {
+            sound.set_rate(Some(rate));
+        }
     }
 
     /// Nudges the audio output rate (e.g. ±0.5 %) without a click, so the frontend can keep
     /// audio buffering steady while video runs at the Game Boy's own frame rate.
     pub fn adjust_audio_sample_rate(&mut self, rate: u32) {
         self.bus.apu.adjust_sample_rate(rate);
+        let produced = self.bus.apu.sample_rate();
+        if let Some(sound) = self.bus.sgb.as_mut().and_then(|s| s.sound_mut()) {
+            sound.set_rate(produced);
+        }
     }
 
     /// Moves the audio produced so far into `out` as interleaved stereo `f32` samples.
     pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
+        let start = out.len();
         self.bus.apu.drain_samples(out);
+        // The Super Game Boy's own sound plays along (the SNES mixes both).
+        if let Some(sound) = self.bus.sgb.as_mut().and_then(|s| s.sound_mut()) {
+            sound.mix_into(&mut out[start..]);
+        }
+    }
+
+    /// Gives a Super Game Boy its own sound: `rom` is the SGB cartridge's SNES ROM (e.g.
+    /// `Super Game Boy (World) (Rev 2).sfc`), whose sound engine and samples run on an
+    /// emulated SNES sound chip for the `SOUND`/`SOU_TRN` commands. Not for other models.
+    pub fn set_sgb_sound_rom(&mut self, rom: &[u8]) -> Result<(), String> {
+        let rate = self.bus.apu.sample_rate();
+        let Some(sgb) = self.bus.sgb.as_mut() else {
+            return Err("not a Super Game Boy".into());
+        };
+        let mut sound = SgbSound::new(rom)?;
+        sound.set_rate(rate);
+        sgb.set_sound(Some(Box::new(sound)));
+        Ok(())
+    }
+
+    /// Whether the Super Game Boy has its own sound (see [`GameBoy::set_sgb_sound_rom`]).
+    pub fn has_sgb_sound(&self) -> bool {
+        self.bus.sgb.as_ref().is_some_and(|s| s.has_sound())
     }
 
     /// What each sound channel is doing, for the sound viewer.
