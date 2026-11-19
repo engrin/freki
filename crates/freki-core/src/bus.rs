@@ -320,7 +320,8 @@ impl Bus {
             0x0000..=0x7FFF => {
                 let byte = self.cart.read_rom(addr);
                 if self.cheats.has_rom_patches() {
-                    self.cheats.patch_rom_read(addr, byte)
+                    self.cheats
+                        .patch_rom_read(addr, byte, |at| self.cart.read_rom(at))
                 } else {
                     byte
                 }

@@ -848,7 +848,10 @@ impl FrekiApp {
         self.samples.clear();
         match result {
             Ok(stop) => self.cpu_view.last_stop = stop,
-            Err(e) => self.set_status(format!("emulation stopped: {e}")),
+            Err(e) => {
+                let cheats = gb.cheats().any_active();
+                self.set_status(stopped_message(&e, cheats));
+            }
         }
     }
 
@@ -1061,7 +1064,12 @@ impl FrekiApp {
                 }
                 Err(e) => {
                     self.paused = true;
-                    let msg = format!("emulation stopped: {e}");
+                    let cheats = session.gb.cheats().any_active()
+                        || self
+                            .link
+                            .as_ref()
+                            .is_some_and(|l| l.session.gb.cheats().any_active());
+                    let msg = stopped_message(&e, cheats);
                     eprintln!("freki: {msg}");
                     self.status = Some((msg, Instant::now()));
                     break;
@@ -2551,6 +2559,19 @@ fn picture(
     match link {
         Some(two) => settings::side_by_side(shot(session), shot(&two.session)),
         None => shot(session),
+    }
+}
+
+/// Why emulation stopped. A game that crashes while cheats are on was most likely
+/// crashed by one of them (a code for another version of the game, or a broken one).
+fn stopped_message(error: &dyn std::fmt::Display, cheats_on: bool) -> String {
+    if cheats_on {
+        format!(
+            "emulation stopped: {error}. Cheats are on and may have caused it: switch them \
+             off (F9) and reset (Ctrl+R), then switch them on one at a time"
+        )
+    } else {
+        format!("emulation stopped: {error}")
     }
 }
 

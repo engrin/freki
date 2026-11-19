@@ -237,7 +237,16 @@ cheat databases, such as `metal-gear-solid-usa.cht` next to `Metal Gear Solid (U
 is imported when the game has no `game.cht` yet.
 
 GameShark (`01VVLLHH`; on the GBC also `9xVVLLHH` for work RAM bank `x`) and Game Genie
-(`ABC-DEF` or `ABC-DEF-GHI`) codes are supported. The same tools work from the terminal
+(`ABC-DEF` or `ABC-DEF-GHI`) codes are supported; Xploder codes (`$0D22A281`) are not.
+
+A Game Genie code changes a ROM byte in every bank where that byte has the code's compare
+value. For a cheat whose codes change neighbouring bytes (an instruction and its operands),
+freki only applies them in banks where all of those bytes match: a real Game Genie also
+patches the banks where only some match, which can crash the game (Super Mario Bros.
+Deluxe's "Jump In Midair" on Rev 2 does). If a game stops while cheats are on, freki
+suggests switching them off and trying them one at a time.
+
+The same tools work from the terminal
 freki was started from (`help` lists the commands). For example, to find the lives counter:
 
 ```text

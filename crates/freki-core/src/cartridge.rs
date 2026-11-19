@@ -574,6 +574,23 @@ impl Cartridge {
             .any(|(_, bank)| bank.get(offset) == Some(&byte))
     }
 
+    /// Whether some bank holds all of `bytes` (address, byte) at once; like
+    /// [`Cartridge::rom_has`] for several neighbouring bytes.
+    pub fn rom_has_all(&self, bytes: &[(u16, u8)]) -> bool {
+        let Some(&(first, _)) = bytes.first() else {
+            return true;
+        };
+        self.rom
+            .chunks(ROM_BANK)
+            .enumerate()
+            .filter(|&(bank, _)| first >= 0x4000 || bank % 0x20 == 0)
+            .any(|(_, bank)| {
+                bytes
+                    .iter()
+                    .all(|&(addr, byte)| bank.get(addr as usize & (ROM_BANK - 1)) == Some(&byte))
+            })
+    }
+
     fn rom_byte(&self, bank: usize, addr: u16) -> u8 {
         let banks = (self.rom.len() / ROM_BANK).max(1);
         let offset = (bank % banks) * ROM_BANK + (addr as usize & (ROM_BANK - 1));

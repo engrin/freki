@@ -63,6 +63,9 @@ pub enum CheatError {
     UnsupportedType(u8),
     /// Game Genie address outside ROM ($0000–$7FFF).
     NotRomAddress(u16),
+    /// An Xploder code (`$` and 8 hex digits, as cheat sites list them): another cheat
+    /// device's format, which freki cannot apply.
+    Xploder(String),
 }
 
 impl fmt::Display for CheatError {
@@ -74,6 +77,10 @@ impl fmt::Display for CheatError {
             ),
             Self::UnsupportedType(t) => write!(f, "GameShark code type {t:02X} is not supported"),
             Self::NotRomAddress(a) => write!(f, "Game Genie address ${a:04X} is not in ROM"),
+            Self::Xploder(code) => write!(
+                f,
+                "{code:?} is an Xploder code; freki only supports GameShark and Game Genie codes"
+            ),
         }
     }
 }
@@ -83,6 +90,12 @@ impl std::error::Error for CheatError {}
 impl Code {
     /// Parses a GameShark or Game Genie code. Dashes and spaces are ignored.
     pub fn parse(code: &str) -> Result<Self, CheatError> {
+        if let Some(hex) = code.trim().strip_prefix('$')
+            && hex.len() == 8
+            && hex.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(CheatError::Xploder(code.trim().to_string()));
+        }
         let digits: Vec<u8> = code
             .chars()
             .filter(|c| !matches!(c, '-' | ' '))
@@ -134,6 +147,46 @@ impl Code {
         let kind = location.wram_bank.map_or(0x01, |bank| 0x90 | bank);
         format!("{kind:02X}{value:02X}{lo:02X}{hi:02X}")
     }
+}
+
+/// The Game Genie codes of `codes` with a compare byte whose addresses form an unbroken
+/// run through `address` (e.g. $457D, $457E, $457F for an instruction and its operand), as
+/// (address, compare). Runs stay within $0000–$3FFF or $4000–$7FFF, which can hold
+/// different banks. Empty if no such code is at `address`.
+pub fn genie_run(codes: &[Code], address: u16) -> Vec<(u16, u8)> {
+    let compares_at = |at: u16| -> Vec<u8> {
+        codes
+            .iter()
+            .filter_map(|c| match *c {
+                Code::GameGenie {
+                    address: a,
+                    compare: Some(cmp),
+                    ..
+                } if a == at => Some(cmp),
+                _ => None,
+            })
+            .collect()
+    };
+    let same_area = |at: u16| at & 0x4000 == address & 0x4000;
+    let mut run = Vec::new();
+    if compares_at(address).is_empty() {
+        return run;
+    }
+    let mut low = address;
+    while low > 0 && same_area(low - 1) && !compares_at(low - 1).is_empty() {
+        low -= 1;
+    }
+    let mut at = low;
+    while at <= 0x7FFF && same_area(at) {
+        let compares = compares_at(at);
+        if compares.is_empty() {
+            break;
+        }
+        // Several codes for one byte (versions of a cheat in one): the first counts.
+        run.push((at, compares[0]));
+        at += 1;
+    }
+    run
 }
 
 /// A cheat as entered by the user.
@@ -360,11 +413,17 @@ impl Cheats {
         self.format
     }
 
+    fn active_cheats(&self) -> impl Iterator<Item = &Cheat> {
+        self.list.iter().filter(move |c| self.enabled && c.enabled)
+    }
+
     fn active(&self) -> impl Iterator<Item = &Code> {
-        self.list
-            .iter()
-            .filter(move |c| self.enabled && c.enabled)
-            .flat_map(|c| &c.codes)
+        self.active_cheats().flat_map(|c| &c.codes)
+    }
+
+    /// Whether any cheat is switched on (and the master switch too).
+    pub fn any_active(&self) -> bool {
+        self.active_cheats().next().is_some()
     }
 
     /// GameShark writes to apply this frame.
@@ -375,18 +434,30 @@ impl Cheats {
         })
     }
 
-    /// Applies Game Genie patches to a ROM read of `original` at `address`.
-    pub fn patch_rom_read(&self, address: u16, original: u8) -> u8 {
-        for code in self.active() {
-            if let Code::GameGenie {
-                address: a,
-                value,
-                compare,
-            } = *code
-                && a == address
-                && compare.is_none_or(|c| c == original)
-            {
-                return value;
+    /// Applies Game Genie patches to a ROM read of `original` at `address`; `rom` reads
+    /// the unpatched ROM as mapped now, for the neighbouring bytes.
+    ///
+    /// A real Game Genie checks each code's compare byte on its own, in every bank. A cheat
+    /// whose codes patch neighbouring bytes (an instruction and its operands) can then
+    /// half-apply where only some of the bytes match, which crashes games. freki applies
+    /// such a run of codes only where all of its compare bytes match.
+    pub fn patch_rom_read(&self, address: u16, original: u8, rom: impl Fn(u16) -> u8) -> u8 {
+        for cheat in self.active_cheats() {
+            for code in &cheat.codes {
+                if let Code::GameGenie {
+                    address: a,
+                    value,
+                    compare,
+                } = *code
+                    && a == address
+                    && compare.is_none_or(|c| c == original)
+                    && (compare.is_none()
+                        || genie_run(&cheat.codes, address)
+                            .iter()
+                            .all(|&(at, cmp)| at == address || rom(at) == cmp))
+                {
+                    return value;
+                }
             }
         }
         original
@@ -735,18 +806,69 @@ mod tests {
     fn game_genie_compare_protects_other_banks() {
         let mut cheats = Cheats::new();
         cheats.add("00A-17B-C49", "").unwrap();
-        assert_eq!(cheats.patch_rom_read(0x4A17, 0xC8), 0x00);
+        let rom = |_| 0;
+        assert_eq!(cheats.patch_rom_read(0x4A17, 0xC8, rom), 0x00);
         assert_eq!(
-            cheats.patch_rom_read(0x4A17, 0xC9),
+            cheats.patch_rom_read(0x4A17, 0xC9, rom),
             0xC9,
             "compare mismatch"
         );
         cheats.enabled = false;
         assert_eq!(
-            cheats.patch_rom_read(0x4A17, 0xC8),
+            cheats.patch_rom_read(0x4A17, 0xC8, rom),
             0xC8,
             "master switch off"
         );
+    }
+
+    /// Super Mario Bros. Deluxe (Rev 2), "Jump In Midair": `LD A,($C1C1)` at $457D in bank
+    /// 3 becomes `CALL $5555`. Bank 9 has `LD A,($C408)` there; patching only its opcode
+    /// made `CALL $C408` into RAM and crashed the game.
+    #[test]
+    fn xploder_codes_are_named() {
+        assert_eq!(
+            Code::parse("$0D22A281"),
+            Err(CheatError::Xploder("$0D22A281".into()))
+        );
+        assert!(
+            Code::parse("$0D22A281")
+                .unwrap_err()
+                .to_string()
+                .contains("Xploder")
+        );
+    }
+
+    #[test]
+    fn neighbouring_game_genie_codes_apply_together() {
+        let mut cheats = Cheats::new();
+        cheats
+            .add(
+                "185-4CA-6EA+CD5-7DB-081+555-7EB-E6D+555-7FB-E6D",
+                "Jump In Midair",
+            )
+            .unwrap();
+        assert_eq!(
+            genie_run(&cheats.list()[0].codes, 0x457E),
+            [(0x457D, 0xFA), (0x457E, 0xC1), (0x457F, 0xC1)]
+        );
+        assert_eq!(genie_run(&cheats.list()[0].codes, 0x554C), [(0x554C, 0x20)]);
+        let bank = |bytes: [u8; 3]| {
+            move |at: u16| match at {
+                0x457D..=0x457F => bytes[usize::from(at - 0x457D)],
+                _ => 0,
+            }
+        };
+        let patched = |rom: [u8; 3]| -> Vec<u8> {
+            (0x457D..=0x457F)
+                .map(|at| cheats.patch_rom_read(at, bank(rom)(at), bank(rom)))
+                .collect()
+        };
+        assert_eq!(patched([0xFA, 0xC1, 0xC1]), [0xCD, 0x55, 0x55], "bank 3");
+        assert_eq!(patched([0xFA, 0x08, 0xC4]), [0xFA, 0x08, 0xC4], "bank 9");
+        assert_eq!(patched([0xFA, 0xD3, 0xC1]), [0xFA, 0xD3, 0xC1], "bank 6");
+        assert_eq!(patched([0x21, 0x63, 0xC1]), [0x21, 0x63, 0xC1], "bank 17");
+        // A lone code still applies wherever its compare byte matches, like the real one.
+        assert_eq!(cheats.patch_rom_read(0x554C, 0x20, |_| 0), 0x18);
     }
 
     #[test]

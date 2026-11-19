@@ -703,15 +703,19 @@ impl GameBoy {
     }
 
     /// Whether `cheat` fits this ROM: each of its Game Genie codes with a compare byte
-    /// finds that byte at its address in some bank. A code that does not was made for
-    /// another version of the game and never changes anything.
+    /// finds that byte at its address in some bank, together with the codes for the
+    /// neighbouring bytes (see [`Cheats::patch_rom_read`]). A code that does not was made
+    /// for another version of the game and never changes anything.
     pub fn cheat_fits(&self, cheat: &Cheat) -> bool {
         cheat.codes.iter().all(|code| match *code {
             Code::GameGenie {
                 address,
-                compare: Some(compare),
+                compare: Some(_),
                 ..
-            } => self.bus.cart.rom_has(address, compare),
+            } => self
+                .bus
+                .cart
+                .rom_has_all(&cheats::genie_run(&cheat.codes, address)),
             _ => true,
         })
     }
