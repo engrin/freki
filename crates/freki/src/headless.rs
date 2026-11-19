@@ -71,6 +71,8 @@ run:
                           chosen as by default); it runs in step with ROM
   --link-sav FILE         load this battery save into ROM2
   --press2 FRAME:KEYS[:N] like --press, for ROM2
+  --camera FILE           Game Boy Camera: the picture it sees (PNG or JPEG; default: its
+                          test pattern)
   --printer FILE.png      connect a Game Boy Printer; printed pages are saved as FILE.png,
                           FILE-2.png, … (a page still on the printer at the end too)
   --cheats                load the game's cheat file (ROM.cht, or one named as in cheat
@@ -132,6 +134,7 @@ struct Options {
     frame_blend: bool,
     record: Option<PathBuf>,
     save_state: Option<PathBuf>,
+    camera: Option<PathBuf>,
     write_sav: Option<PathBuf>,
 }
 
@@ -258,6 +261,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--frame-blend" => o.frame_blend = true,
             "--record" => o.record = Some(value(arg)?.into()),
             "--save-state" => o.save_state = Some(value(arg)?.into()),
+            "--camera" => o.camera = Some(value(arg)?.into()),
             "--write-sav" => o.write_sav = Some(value(arg)?.into()),
             a if a.starts_with('-') => return Err(format!("unknown option {a}")),
             _ if o.rom.is_none() => o.rom = Some(arg.into()),
@@ -368,6 +372,13 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         }
     }
     let mut gb = session::power_on(rom.data, &start)?;
+    if let Some(path) = &o.camera {
+        if !gb.has_camera() {
+            return Err("--camera needs the Game Boy Camera cartridge".into());
+        }
+        gb.set_camera_image(Some(&crate::camera_picture::load(path)?));
+        out!("the camera sees {}", path.display());
+    }
     if let Some(count) = session::load_symbols(rom_path, &mut gb) {
         out!("{count} labels from the symbol file");
     }

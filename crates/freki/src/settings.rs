@@ -52,6 +52,8 @@ pub struct Settings {
     pub muted: bool,
     /// Pause while no freki window has focus.
     pub pause_in_background: bool,
+    /// The picture the Game Boy Camera sees (`None`: its test pattern).
+    pub camera_picture: Option<PathBuf>,
 }
 
 /// The settings a game can have for itself (Emulation → Settings for this game).
@@ -117,6 +119,7 @@ impl Default for Settings {
             volume: 100,
             muted: false,
             pause_in_background: true,
+            camera_picture: None,
         }
     }
 }

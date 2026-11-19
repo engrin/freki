@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::CLOCK_HZ;
+use crate::camera::Camera;
 use crate::huc3::HuC3Clock;
 use crate::mbc6::Mbc6;
 use crate::mbc7::{self, Mbc7};
@@ -92,6 +93,9 @@ pub enum Mbc {
     /// MBC6 (Net de Get): ROM and RAM banked in halves, and 1 MiB of flash (see
     /// [`crate::mbc6`]).
     Mbc6(Box<Mbc6>),
+    /// Game Boy Camera: MBC3-like banking, 128 KiB RAM and the camera sensor (see
+    /// [`crate::camera`]).
+    Camera(Box<Camera>),
 }
 
 /// MBC3 real-time clock. It runs on emulated time: one second per [`CLOCK_HZ`] T-cycles.
@@ -347,6 +351,7 @@ impl Cartridge {
                 rom_bank: 1,
                 chip: Mbc7::default(),
             },
+            0xFC => Mbc::Camera(Box::default()),
             0xFD => Mbc::Tama5(Box::default()),
             0xFE => Mbc::HuC3 {
                 mode: 0,
@@ -373,6 +378,7 @@ impl Cartridge {
                 | 0x1E
                 | 0x20
                 | 0x22
+                | 0xFC
                 | 0xFD
                 | 0xFE
                 | 0xFF
@@ -408,6 +414,9 @@ impl Cartridge {
     /// from a state is marked dirty so the save file is brought in line with it.
     pub(crate) fn adopt_rom_from(&mut self, old: &mut Cartridge) {
         self.rom = std::mem::take(&mut old.rom);
+        if let (Mbc::Camera(new), Mbc::Camera(old)) = (&mut self.mbc, &mut old.mbc) {
+            new.adopt_image_from(old);
+        }
         self.ram_dirty = self.battery;
     }
 
@@ -525,6 +534,11 @@ impl Cartridge {
 
     /// Advances time-based hardware (the MBC3 clock) by `cycles` T-cycles.
     pub fn tick(&mut self, cycles: u32) {
+        if let Mbc::Camera(camera) = &mut self.mbc
+            && camera.tick(cycles, &mut self.ram)
+        {
+            self.ram_dirty = true;
+        }
         match &mut self.mbc {
             Mbc::Mbc3 { rtc: Some(rtc), .. } => rtc.tick(cycles),
             Mbc::HuC3 { clock, .. } => clock.tick(cycles),
@@ -667,6 +681,14 @@ impl Cartridge {
             }
             // The EEPROM is reached through registers only.
             Mbc::Mbc7 { .. } | Mbc::Tama5(_) => return None,
+            // RAM is always readable, but not while the registers are mapped or a picture
+            // is being taken.
+            Mbc::Camera(ref camera) => {
+                if camera.registers_selected() || camera.busy() {
+                    return None;
+                }
+                usize::from(camera.ram_bank & 0x0F) * RAM_BANK + local
+            }
         };
         Some(offset % self.ram.len())
     }
@@ -723,6 +745,13 @@ impl Cartridge {
                 if low { bank0 } else { bank }
             }
             Mbc::Mbc6(ref chip) if !low => chip.rom_offset(addr) / ROM_BANK,
+            Mbc::Camera(ref camera) => {
+                if low {
+                    0
+                } else {
+                    camera.rom_bank as usize
+                }
+            }
             Mbc::Mbc6(_) => 0,
             Mbc::Mbc2 { rom_bank, .. } => {
                 if low {
@@ -766,6 +795,21 @@ impl Cartridge {
             && (self.ram.len() > 4 * RAM_BANK || self.rom.len() > 128 * ROM_BANK)
     }
 
+    /// The Game Boy Camera's sensor, if this is the camera cartridge.
+    pub fn camera(&self) -> Option<&Camera> {
+        match &self.mbc {
+            Mbc::Camera(camera) => Some(camera),
+            _ => None,
+        }
+    }
+
+    pub fn camera_mut(&mut self) -> Option<&mut Camera> {
+        match &mut self.mbc {
+            Mbc::Camera(camera) => Some(camera),
+            _ => None,
+        }
+    }
+
     /// Size of the ROM in bytes.
     pub fn rom_len(&self) -> usize {
         self.rom.len()
@@ -782,6 +826,12 @@ impl Cartridge {
         match &mut self.mbc {
             // TAMA5 is driven through $A000/$A001 only.
             Mbc::RomOnly | Mbc::Tama5(_) => {}
+            Mbc::Camera(camera) => match addr {
+                0x0000..=0x1FFF => camera.ram_enabled = value & 0x0F == 0x0A,
+                0x2000..=0x3FFF => camera.rom_bank = value & 0x3F,
+                0x4000..=0x5FFF => camera.ram_bank = value & 0x1F,
+                _ => {}
+            },
             Mbc::Mmm01(m) => m.write(addr, value),
             Mbc::Mbc6(chip) => {
                 if chip.write(addr, value) {
@@ -919,6 +969,10 @@ impl Cartridge {
             } if addr < 0xB000 => return chip.read((addr >> 4) as u8 & 0x0F),
             Mbc::Mbc7 { .. } => return 0xFF,
             Mbc::Tama5(chip) => return chip.read(addr, &self.ram),
+            Mbc::Camera(camera) if camera.registers_selected() => {
+                return camera.read_register(addr);
+            }
+            Mbc::Camera(camera) if camera.busy() => return 0x00,
             _ => {}
         }
         let Some(i) = self.ram_offset(addr) else {
@@ -951,6 +1005,15 @@ impl Cartridge {
                 self.ram_dirty = true;
             }
             return;
+        }
+        if let Mbc::Camera(camera) = &mut self.mbc {
+            if camera.registers_selected() {
+                camera.write_register(addr, value);
+                return;
+            }
+            if !camera.ram_enabled {
+                return;
+            }
         }
         if let Mbc::Mbc7 {
             ram_enable1: true,

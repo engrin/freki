@@ -7,6 +7,7 @@
 pub mod apu;
 pub mod boot;
 pub mod bus;
+pub mod camera;
 pub mod cartridge;
 pub mod cheats;
 pub mod cpu;
@@ -615,6 +616,25 @@ impl GameBoy {
     /// latest 64 KiB, since the machine started or a state was loaded.
     pub fn serial_output(&self) -> &[u8] {
         self.bus.serial.output()
+    }
+
+    /// Whether this is the Game Boy Camera cartridge.
+    pub fn has_camera(&self) -> bool {
+        self.bus.cart.camera().is_some()
+    }
+
+    /// Whether the camera has a picture to see (else it sees a test pattern).
+    pub fn camera_has_image(&self) -> bool {
+        self.bus.cart.camera().is_some_and(|c| c.has_image())
+    }
+
+    /// What the Game Boy Camera sees from now on: [`camera::SENSOR_WIDTH`] ×
+    /// [`camera::SENSOR_HEIGHT`] grey levels (0 black, 255 white), row by row; `None` for
+    /// its test pattern. Does nothing for other cartridges.
+    pub fn set_camera_image(&mut self, image: Option<&[u8]>) {
+        if let Some(camera) = self.bus.cart.camera_mut() {
+            camera.set_image(image);
+        }
     }
 
     /// Whether audio is being produced (see [`GameBoy::set_audio_sample_rate`]).

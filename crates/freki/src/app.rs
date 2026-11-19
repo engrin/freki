@@ -12,6 +12,7 @@ use freki_core::{
 };
 
 use crate::audio::Audio;
+use crate::camera_picture;
 use crate::console::{self, Console};
 use crate::controls;
 use crate::cpu_view::{self, CpuView};
@@ -218,6 +219,10 @@ pub struct FrekiApp {
     printer: bool,
     printer_view: PrinterView,
     sound_view: SoundView,
+    /// The camera picture, decoded (`settings.camera_picture`), for camera cartridges.
+    camera_view: Option<Vec<u8>>,
+    /// Whether the remembered camera picture was loaded (or tried) since the start.
+    camera_loaded: bool,
     state_previews: StatePreviews,
 }
 
@@ -280,6 +285,8 @@ impl FrekiApp {
             printer: false,
             printer_view: PrinterView::default(),
             sound_view: SoundView::default(),
+            camera_view: None,
+            camera_loaded: false,
             state_previews: StatePreviews::default(),
         };
         println!("freki: type `help` here for cheat and memory commands");
@@ -676,6 +683,40 @@ impl FrekiApp {
         }
     }
 
+    /// Lets the player choose the picture the Game Boy Camera sees.
+    fn pick_camera_picture(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Picture for the Game Boy Camera")
+            .add_filter("Picture", &["png", "jpg", "jpeg"]);
+        if let Some(dir) = self
+            .settings
+            .camera_picture
+            .as_ref()
+            .and_then(|p| p.parent())
+        {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(path) = dialog.pick_file() else {
+            return;
+        };
+        match camera_picture::load(&path) {
+            Ok(view) => {
+                self.set_status(format!("the camera sees {}", file_name(&path)));
+                self.settings.camera_picture = Some(path);
+                self.set_camera_view(Some(view));
+            }
+            Err(e) => self.set_status(e.to_string()),
+        }
+    }
+
+    /// Uses `view` (`None`: the test pattern) as the camera's picture from now on.
+    fn set_camera_view(&mut self, view: Option<Vec<u8>>) {
+        self.camera_view = view;
+        if let Some(session) = self.session.as_mut() {
+            session.gb.set_camera_image(self.camera_view.as_deref());
+        }
+    }
+
     fn pick_rom(&mut self, ctx: &egui::Context) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open Game Boy ROM")
@@ -915,6 +956,23 @@ impl FrekiApp {
         // Also after a reset or a new game (a new Game Boy).
         session.gb.set_printer(self.printer && self.link.is_none());
         session.gb.set_muted_channels(self.sound_view.muted);
+        // The camera picture chosen last time, decoded once.
+        if session.gb.has_camera() && !self.camera_loaded {
+            self.camera_loaded = true;
+            if let Some(path) = &self.settings.camera_picture {
+                match camera_picture::load(path) {
+                    Ok(view) => self.camera_view = Some(view),
+                    Err(e) => self.status = Some((e.to_string(), Instant::now())),
+                }
+            }
+        }
+        // Also after a reset or a loaded state (a new Game Boy).
+        if session.gb.has_camera()
+            && !session.gb.camera_has_image()
+            && let Some(view) = &self.camera_view
+        {
+            session.gb.set_camera_image(Some(view));
+        }
         // Without a sound device the game makes no sound; the sound window needs it.
         if self.sound_view.open && !session.gb.produces_audio() {
             session.gb.set_audio_sample_rate(48_000);
@@ -1350,6 +1408,32 @@ impl FrekiApp {
                 if ui.button("Controls…").clicked() {
                     ui.close();
                     self.show_controls = true;
+                }
+                let camera = self.session.as_ref().is_some_and(|s| s.gb.has_camera());
+                if camera {
+                    let current = self
+                        .settings
+                        .camera_picture
+                        .as_deref()
+                        .map_or("its test pattern".to_string(), file_name);
+                    if ui
+                        .button("Camera picture…")
+                        .on_hover_text(format!(
+                            "What the Game Boy Camera sees (now: {current}); a PNG or JPEG"
+                        ))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.pick_camera_picture();
+                    }
+                    if self.settings.camera_picture.is_some()
+                        && ui.button("Camera: test pattern").clicked()
+                    {
+                        ui.close();
+                        self.settings.camera_picture = None;
+                        self.set_camera_view(None);
+                        self.set_status("the camera sees its test pattern");
+                    }
                 }
                 ui.separator();
                 ui.horizontal(|ui| {

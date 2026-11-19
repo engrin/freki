@@ -12,6 +12,7 @@
 
 mod app;
 mod audio;
+mod camera_picture;
 mod console;
 mod controls;
 mod cpu_view;
