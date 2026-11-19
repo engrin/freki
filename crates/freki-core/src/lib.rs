@@ -34,7 +34,7 @@ pub use apu::{ChannelInfo, SCOPE_LEN};
 pub use boot::{BootRom, BootRomError};
 pub use cartridge::{Cartridge, CartridgeError};
 pub use cheats::{
-    Cheat, CheatError, Cheats, Code, Filter, Location, MemorySearch, Template, Unsupported,
+    Added, Cheat, CheatError, Cheats, Code, Filter, Location, MemorySearch, Template, Unsupported,
 };
 pub use cpu::{CpuError, Registers};
 pub use debugger::{Access, Breakpoints, Stop, WatchHit, Watchpoint};

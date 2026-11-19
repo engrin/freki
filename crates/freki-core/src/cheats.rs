@@ -233,6 +233,15 @@ pub struct Unsupported {
     pub reason: String,
 }
 
+/// What [`Cheats::add_or_template`] added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Added {
+    /// A cheat, at this index of the list.
+    Cheat(usize),
+    /// A template (a code with a value to fill in).
+    Template,
+}
+
 /// A cheat as entered by the user.
 #[derive(Debug, Clone)]
 pub struct Cheat {
@@ -408,6 +417,56 @@ impl Cheats {
         Ok(self.list.len() - 1)
     }
 
+    /// Adds `text` as a cheat, or as a template if it has a value to fill in (`01??2CA2`).
+    pub fn add_or_template(&mut self, text: &str, name: &str) -> Result<Added, CheatError> {
+        match self.add(text, name) {
+            Ok(i) => Ok(Added::Cheat(i)),
+            Err(e) => match Template::parse(text, name) {
+                Some(template) => {
+                    self.unparsed.push(Unparsed {
+                        name: template.name,
+                        code: template.code,
+                        enabled: false,
+                    });
+                    self.changed = true;
+                    Ok(Added::Template)
+                }
+                None => Err(e),
+            },
+        }
+    }
+
+    /// Changes cheat `index`'s code and name, keeping whether it is on.
+    pub fn edit(&mut self, index: usize, text: &str, name: &str) -> Result<(), CheatError> {
+        let (codes, text) = parse_codes(text)?;
+        let cheat = self
+            .list
+            .get_mut(index)
+            .ok_or_else(|| CheatError::Format(format!("no cheat {index}")))?;
+        cheat.codes = codes;
+        cheat.text = text;
+        cheat.name = name.trim().to_string();
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Removes template `index` (of [`Cheats::templates`]).
+    pub fn remove_template(&mut self, index: usize) -> bool {
+        let Some(at) = self
+            .unparsed
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| Template::parse(&u.code, &u.name).is_some())
+            .map(|(i, _)| i)
+            .nth(index)
+        else {
+            return false;
+        };
+        self.unparsed.remove(at);
+        self.changed = true;
+        true
+    }
+
     pub fn remove(&mut self, index: usize) -> Option<Cheat> {
         let removed = (index < self.list.len()).then(|| self.list.remove(index));
         self.changed |= removed.is_some();
@@ -461,6 +520,17 @@ impl Cheats {
     /// Adds the cheat that template `index` (of [`Cheats::templates`]) makes with
     /// `value`, enabled and named "name = value". Returns its index in the list.
     pub fn fill_template(&mut self, index: usize, value: u8) -> Result<usize, CheatError> {
+        self.fill_template_as(index, value, &value.to_string())
+    }
+
+    /// [`Cheats::fill_template`], naming the cheat with the value as the player typed it
+    /// (`$98` rather than 152).
+    pub fn fill_template_as(
+        &mut self,
+        index: usize,
+        value: u8,
+        typed: &str,
+    ) -> Result<usize, CheatError> {
         let template = self
             .templates()
             .into_iter()
@@ -473,7 +543,7 @@ impl Cheats {
                 template.max()
             )));
         }
-        let name = format!("{} = {value}", template.name);
+        let name = format!("{} = {}", template.name, typed.trim());
         self.add(&template.filled(value), &name)
     }
 
@@ -589,10 +659,11 @@ impl Cheats {
                 None => (false, line),
             };
             let (code, name) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
-            match self.add(code, name) {
-                Ok(i) => {
+            match self.add_or_template(code, name) {
+                Ok(Added::Cheat(i)) => {
                     self.list[i].enabled = !disabled;
                 }
+                Ok(Added::Template) => {}
                 Err(e) => errors.push((n + 1, e)),
             }
         }
@@ -683,10 +754,15 @@ impl Cheats {
     }
 
     fn to_freki_text(&self) -> String {
-        let mut out = String::from("# freki cheats: CODE [name]; '!' = disabled\n");
+        let mut out = String::from(
+            "# freki cheats: CODE [name]; '!' = disabled; ?? in a code = a value to fill in\n",
+        );
         for c in &self.list {
             let flag = if c.enabled { "" } else { "! " };
             out.push_str(&format!("{flag}{} {}\n", c.text, c.name).replace(" \n", "\n"));
+        }
+        for t in self.templates() {
+            out.push_str(&format!("{} {}\n", t.code, t.name).replace(" \n", "\n"));
         }
         out
     }
@@ -913,6 +989,39 @@ mod tests {
             0xC8,
             "master switch off"
         );
+    }
+
+    #[test]
+    fn templates_and_edits_survive_freki_files() {
+        let mut cheats = Cheats::new();
+        assert_eq!(
+            cheats.add_or_template("01642CA2", "Lives"),
+            Ok(Added::Cheat(0))
+        );
+        assert_eq!(
+            cheats.add_or_template("01??2CA2", "Lives"),
+            Ok(Added::Template)
+        );
+        assert!(cheats.add_or_template("nonsense", "x").is_err());
+        cheats.edit(0, "01992CA2", "Lives 99").unwrap();
+        assert_eq!(cheats.list()[0].text, "01992CA2");
+        assert!(cheats.edit(0, "nonsense", "x").is_err());
+        assert_eq!(
+            cheats.list()[0].name,
+            "Lives 99",
+            "a failed edit changes nothing"
+        );
+
+        let text = cheats.to_text();
+        let mut again = Cheats::new();
+        assert!(again.load_text(&text).is_empty(), "{text}");
+        assert_eq!(again.list().len(), 1);
+        assert_eq!(again.templates().len(), 1);
+        assert_eq!(again.templates()[0].code, "01??2CA2");
+        again.fill_template(0, 0x99).unwrap();
+        assert_eq!(again.list()[1].text, "01992CA2");
+        assert!(again.remove_template(0));
+        assert!(again.templates().is_empty());
     }
 
     #[test]

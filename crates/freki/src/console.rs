@@ -15,7 +15,8 @@ const HELP: &str = "\
 cheats:
   cheat list                   show cheats (also: cheats)
   cheat add CODE [name]        add a GameShark (01VVLLHH, GBC: 9xVVLLHH), Game Genie (ABC-DEF[-GHI])
-                               or Xploder ($0DVVLLHH) code
+                               or Xploder ($0DVVLLHH) code; with ?? (01??2CA2) a template
+  cheat edit N CODE [name]     change cheat N's code and name
   cheat on|off|rm N            enable, disable or remove cheat N
   cheat fill T VALUE           add a cheat from template T (cheat list shows them), e.g. 99
   cheat all on|off             master switch (also F9 in the window)
@@ -173,11 +174,26 @@ impl Console {
     fn cheat(&mut self, args: &[&str], gb: &mut GameBoy) -> Result<String, String> {
         match args {
             ["add", code, name @ ..] => {
-                let i = gb
+                match gb
                     .cheats_mut()
-                    .add(code, &name.join(" "))
+                    .add_or_template(code, &name.join(" "))
+                    .map_err(|e| e.to_string())?
+                {
+                    freki_core::Added::Cheat(i) => {
+                        Ok(format!("added cheat {i}: {}", describe(gb, i)))
+                    }
+                    freki_core::Added::Template => {
+                        let t = gb.cheats().templates().len() - 1;
+                        Ok(format!("added template T{t} (cheat fill {t} VALUE)"))
+                    }
+                }
+            }
+            ["edit", n, code, name @ ..] => {
+                let i = index(n)?;
+                gb.cheats_mut()
+                    .edit(i, code, &name.join(" "))
                     .map_err(|e| e.to_string())?;
-                Ok(format!("added cheat {i}: {}", describe(gb, i)))
+                Ok(format!("cheat {i}: {}", describe(gb, i)))
             }
             [action @ ("on" | "off"), n] => {
                 let i = index(n)?;
@@ -195,12 +211,12 @@ impl Console {
                 gb.cheats_mut().enabled = *state == "on";
                 Ok(format!("all cheats {state}"))
             }
-            ["fill", t, value] => {
+            ["fill", t, typed] => {
                 let t = t.trim_start_matches(['T', 't']);
-                let (t, value) = (index(t)?, byte(value)?);
+                let (t, value, raw) = (index(t)?, byte(typed)?, *typed);
                 let i = gb
                     .cheats_mut()
-                    .fill_template(t, value)
+                    .fill_template_as(t, value, raw)
                     .map_err(|e| e.to_string())?;
                 Ok(format!("added cheat {i}: {}", describe(gb, i)))
             }

@@ -141,6 +141,9 @@ impl Timing {
 #[derive(Default)]
 struct SearchUi {
     search: Option<MemorySearch>,
+    /// Values as the game shows them, stored as BCD (each hex digit one decimal digit:
+    /// 99 lives = $99), as many games keep lives, coins and timers.
+    bcd: bool,
     value: String,
     cheat_value: String,
     cheat_name: String,
@@ -214,6 +217,8 @@ pub struct FrekiApp {
     template_values: Vec<String>,
     new_name: String,
     cheat_error: Option<String>,
+    /// The cheat being edited in the cheat manager: index, code and name as typed.
+    cheat_edit: Option<(usize, String, String)>,
     search_ui: SearchUi,
     /// A Game Boy Printer is plugged into the link cable port (Link cable menu).
     printer: bool,
@@ -281,6 +286,7 @@ impl FrekiApp {
             template_values: Vec::new(),
             new_name: String::new(),
             cheat_error: None,
+            cheat_edit: None,
             search_ui: SearchUi::default(),
             printer: false,
             printer_view: PrinterView::default(),
@@ -1811,6 +1817,9 @@ impl FrekiApp {
         let mut status = None;
         let gb = &mut session.gb;
         let mut remove = None;
+        let mut start_edit = None;
+        let mut remove_template = None;
+        let mut cancel_edit = false;
         let templates = gb.cheats().templates();
         // The list gets the height the rest leaves.
         let reserved = if templates.is_empty() { 95.0 } else { 255.0 };
@@ -1825,9 +1834,35 @@ impl FrekiApp {
                         + CODE_WIDTH
                         + TYPE_WIDTH
                         + WARNING_WIDTH
-                        + BUTTON_WIDTH
+                        + BUTTONS_WIDTH
                         + 5.0 * gap);
+                let mut save_edit = false;
                 for i in 0..gb.cheats().list().len() {
+                    // The cheat being edited: its code and name as fields.
+                    if let Some((at, code, name)) = self.cheat_edit.as_mut()
+                        && *at == i
+                    {
+                        ui.horizontal(|ui| {
+                            fixed(ui, CHECK_WIDTH, |_| {});
+                            let edit = ui.add(
+                                egui::TextEdit::singleline(code)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(CODE_WIDTH + TYPE_WIDTH + WARNING_WIDTH),
+                            );
+                            let edit_name =
+                                ui.add(egui::TextEdit::singleline(name).desired_width(name_width));
+                            let enter = (edit.lost_focus() || edit_name.lost_focus())
+                                && ui.input(|i| i.key_pressed(Key::Enter));
+                            if ui.small_button("✔").on_hover_text("Save (Enter)").clicked() || enter
+                            {
+                                save_edit = true;
+                            }
+                            if ui.small_button("✖").on_hover_text("Cancel").clicked() {
+                                cancel_edit = true;
+                            }
+                        });
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         fixed(ui, CHECK_WIDTH, |ui| {
                             let mut enabled = gb.cheats().list()[i].enabled;
@@ -1850,12 +1885,24 @@ impl FrekiApp {
                             }
                         });
                         cell(ui, name_width, &cheat.name, false);
-                        fixed(ui, BUTTON_WIDTH, |ui| {
+                        fixed(ui, BUTTONS_WIDTH, |ui| {
+                            if ui.small_button("✎").on_hover_text("Edit").clicked() {
+                                start_edit = Some(i);
+                            }
                             if ui.small_button("✖").on_hover_text("Remove").clicked() {
                                 remove = Some(i);
                             }
                         });
                     });
+                }
+                if save_edit && let Some((i, code, name)) = self.cheat_edit.clone() {
+                    match gb.cheats_mut().edit(i, &code, &name) {
+                        Ok(()) => {
+                            self.cheat_edit = None;
+                            self.cheat_error = None;
+                        }
+                        Err(e) => self.cheat_error = Some(e.to_string()),
+                    }
                 }
                 // Entries of the file freki cannot use: shown, greyed out, with the reason.
                 for entry in gb.cheats().unsupported() {
@@ -1877,15 +1924,28 @@ impl FrekiApp {
                     });
                 }
             });
+        if cancel_edit {
+            self.cheat_edit = None;
+            self.cheat_error = None;
+        }
+        if let Some(i) = start_edit {
+            let cheat = &gb.cheats().list()[i];
+            self.cheat_edit = Some((i, cheat.text.clone(), cheat.name.clone()));
+            self.cheat_error = None;
+        }
         if let Some(i) = remove {
             gb.cheats_mut().remove(i);
+            self.cheat_edit = None;
         }
         if gb.cheats().list().is_empty() {
             ui.label("No cheats yet.");
         }
         if !templates.is_empty() {
             ui.separator();
-            ui.label("Templates: enter a value (decimal, or hex with $) to add a cheat");
+            ui.label(
+                "Templates: enter a value (decimal, or hex with $; $99 shows as 99 in games \
+                 that count in BCD) to add a cheat",
+            );
             self.template_values.resize(templates.len(), String::new());
             egui::ScrollArea::vertical()
                 .id_salt("cheat_templates")
@@ -1893,8 +1953,8 @@ impl FrekiApp {
                 .max_height(120.0)
                 .show(ui, |ui| {
                     let gap = ui.spacing().item_spacing.x;
-                    let name_width =
-                        ui.available_width() - (CODE_WIDTH + VALUE_WIDTH + ADD_WIDTH + 3.0 * gap);
+                    let name_width = ui.available_width()
+                        - (CODE_WIDTH + VALUE_WIDTH + ADD_WIDTH + BUTTON_WIDTH + 4.0 * gap);
                     for (t, template) in templates.iter().enumerate() {
                         ui.horizontal(|ui| {
                             cell(ui, CODE_WIDTH, &template.code, true);
@@ -1912,7 +1972,7 @@ impl FrekiApp {
                                     .ok_or("not a number from 0 to 255".to_string())
                                     .and_then(|v| {
                                         gb.cheats_mut()
-                                            .fill_template(t, v)
+                                            .fill_template_as(t, v, &self.template_values[t])
                                             .map_err(|e| e.to_string())
                                     });
                                 match value {
@@ -1923,16 +1983,27 @@ impl FrekiApp {
                                     Err(e) => self.cheat_error = Some(e),
                                 }
                             }
+                            if ui
+                                .small_button("✖")
+                                .on_hover_text("Remove template")
+                                .clicked()
+                            {
+                                remove_template = Some(t);
+                            }
                         });
                     }
                 });
+        }
+        if let Some(t) = remove_template {
+            gb.cheats_mut().remove_template(t);
+            self.template_values.clear();
         }
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Code");
             ui.add(
                 egui::TextEdit::singleline(&mut self.new_code)
-                    .hint_text("01VVLLHH, ABC-DEF-GHI or $0DVVLLHH")
+                    .hint_text("01VVLLHH, ABC-DEF-GHI, $0DVVLLHH; ?? = value")
                     .desired_width(130.0),
             );
             ui.label("Name");
@@ -1943,8 +2014,15 @@ impl FrekiApp {
                 .add_sized([ADD_WIDTH, 18.0], egui::Button::new("Add"))
                 .clicked()
             {
-                match gb.cheats_mut().add(&self.new_code, &self.new_name) {
-                    Ok(_) => {
+                match gb
+                    .cheats_mut()
+                    .add_or_template(&self.new_code, &self.new_name)
+                {
+                    Ok(added) => {
+                        if added == freki_core::Added::Template {
+                            status =
+                                Some("template added: enter a value for it under Templates".into());
+                        }
                         self.new_code.clear();
                         self.new_name.clear();
                         self.cheat_error = None;
@@ -2019,7 +2097,12 @@ impl FrekiApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Value");
                     ui.add(egui::TextEdit::singleline(&mut ui_state.value).desired_width(50.0));
-                    let value = parse_byte(&ui_state.value);
+                    ui.checkbox(&mut ui_state.bcd, "BCD").on_hover_text(
+                        "For values the game keeps in BCD, one decimal digit per hex digit \
+                         (99 lives = $99; then 100 shows as 64): search for and hold the \
+                         number the game shows. $ still means a raw byte.",
+                    );
+                    let value = parse_value(&ui_state.value, ui_state.bcd);
                     let mut apply = |filter| {
                         search.filter(filter, |l| gb.peek_location(l));
                     };
@@ -2057,7 +2140,12 @@ impl FrekiApp {
                         for (i, &(location, _)) in search.candidates().iter().take(200).enumerate()
                         {
                             let v = gb.peek_location(location);
-                            let text = format!("{location:>7} = {v:>3} (${v:02X})");
+                            let shown = if ui_state.bcd {
+                                from_bcd(v).map_or("--".to_string(), |n| n.to_string())
+                            } else {
+                                v.to_string()
+                            };
+                            let text = format!("{location:>7} = {shown:>3} (${v:02X})");
                             if ui
                                 .selectable_label(
                                     ui_state.selected == Some(i),
@@ -2066,7 +2154,11 @@ impl FrekiApp {
                                 .clicked()
                             {
                                 ui_state.selected = Some(i);
-                                ui_state.cheat_value = v.to_string();
+                                ui_state.cheat_value = match (ui_state.bcd, from_bcd(v)) {
+                                    (true, Some(n)) => n.to_string(),
+                                    (true, None) => format!("${v:02X}"),
+                                    (false, _) => v.to_string(),
+                                };
                             }
                         }
                         if search.len() > 200 {
@@ -2088,7 +2180,7 @@ impl FrekiApp {
                             egui::TextEdit::singleline(&mut ui_state.cheat_name)
                                 .desired_width(120.0),
                         );
-                        let value = parse_byte(&ui_state.cheat_value);
+                        let value = parse_value(&ui_state.cheat_value, ui_state.bcd);
                         if ui
                             .add_enabled(value.is_some(), egui::Button::new("Add cheat"))
                             .clicked()
@@ -2096,7 +2188,7 @@ impl FrekiApp {
                             let value = value.unwrap_or(0);
                             let code = Code::gameshark(location, value);
                             let name = if ui_state.cheat_name.is_empty() {
-                                format!("{location} = {value}")
+                                format!("{location} = {}", ui_state.cheat_value.trim())
                             } else {
                                 ui_state.cheat_name.clone()
                             };
@@ -2471,6 +2563,27 @@ fn session_cheat_path(rom_path: &Path) -> PathBuf {
     rom_path.with_extension("cht")
 }
 
+/// A value typed into the memory search: like [`parse_byte`], or with `bcd` a decimal
+/// 0–99 as the game shows it, stored as BCD (99 → $99). `$`/`0x` always mean a raw byte.
+fn parse_value(text: &str, bcd: bool) -> Option<u8> {
+    let text = text.trim();
+    if bcd && !text.starts_with('$') && !text.starts_with("0x") {
+        return to_bcd(text.parse().ok()?);
+    }
+    parse_byte(text)
+}
+
+/// 0–99 as BCD: tens in the high nibble, ones in the low one.
+fn to_bcd(n: u8) -> Option<u8> {
+    (n <= 99).then_some((n / 10) << 4 | (n % 10))
+}
+
+/// A BCD byte as its number, if both nibbles are decimal digits.
+fn from_bcd(b: u8) -> Option<u8> {
+    let (tens, ones) = (b >> 4, b & 0x0F);
+    (tens <= 9 && ones <= 9).then_some(tens * 10 + ones)
+}
+
 /// Parses a byte: decimal, or hex with `$` or `0x`.
 fn parse_byte(s: &str) -> Option<u8> {
     let s = s.trim();
@@ -2631,6 +2744,8 @@ const TYPE_WIDTH: f32 = 72.0;
 /// Add buttons in the cheat manager.
 const CHECK_WIDTH: f32 = 20.0;
 const BUTTON_WIDTH: f32 = 22.0;
+/// Room for the edit and remove buttons of a cheat.
+const BUTTONS_WIDTH: f32 = 2.0 * BUTTON_WIDTH + 6.0;
 const VALUE_WIDTH: f32 = 64.0;
 const ADD_WIDTH: f32 = 40.0;
 
@@ -2719,6 +2834,22 @@ fn set_fullscreen(ctx: &egui::Context, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bcd_values_as_games_show_them() {
+        assert_eq!(to_bcd(99), Some(0x99));
+        assert_eq!(to_bcd(100), None);
+        assert_eq!(
+            from_bcd(0x64),
+            Some(64),
+            "100 lives written plainly show as 64"
+        );
+        assert_eq!(from_bcd(0x6A), None);
+        assert_eq!(parse_value("99", true), Some(0x99));
+        assert_eq!(parse_value("$63", true), Some(0x63), "$ stays a raw byte");
+        assert_eq!(parse_value("100", true), None);
+        assert_eq!(parse_value("100", false), Some(100));
+    }
 
     #[test]
     fn parses_bytes() {

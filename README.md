@@ -231,8 +231,8 @@ takes one with `--camera picture.png`.
 
 ## Cheats
 
-**Cheats → Cheat manager…** adds, toggles and removes codes, and **Cheats → Memory
-search…** finds the address of a value. Both open as windows of their own, so they can sit
+**Cheats → Cheat manager…** adds, toggles, edits (✎) and removes codes, and **Cheats →
+Memory search…** finds the address of a value. Both open as windows of their own, so they can sit
 next to the game or on another screen at any size; long names are cut off and shown in
 full on hover. Codes are kept in `game.cht` and saved as soon as
 the list changes, one per line with an optional name (`#` starts a comment, `!` adds a code
@@ -241,14 +241,19 @@ switched off, `+` joins several codes into one cheat):
 ```text
 010A10C1 Infinite lives
 ! 00A-17B-C49 Start with all items
+01??2CA2 Lives
 ```
+
+A code with `??` (or `X`) where the value goes is a **template**, a cheat whose value you
+choose: enter it like any code, then type a value under **Templates** in the cheat manager
+(or `cheat fill T VALUE`), and the cheat is added, such as "Lives = 99".
 
 RetroArch's cheat files are read too, and saved back in their format. Game Genie codes made
 for another version of the game (their compare byte is not in your ROM, so they do
 nothing) are marked with ⚠ in the cheat manager and in `cheat list`. Codes with a value to
-fill in (`01??B6D7` "MP Modifier", `0X0-64B-219`) are offered as templates: enter a value
-(0–255, or 0–15 for a single `X`; decimal, or hex with `$`) and the cheat is added, such as
-"MP Modifier = 99". Entries without a code (`N/A`, notes) are kept in the file. A file named as in
+fill in (`01??B6D7` "MP Modifier", `0X0-64B-219`) are templates too: enter a value (0–255,
+or 0–15 for a single `X`; decimal, or hex with `$`) and the cheat is added, such as "MP
+Modifier = 99". Entries without a code (`N/A`, notes) are kept in the file. A file named as in
 cheat databases, such as `metal-gear-solid-usa.cht` next to `Metal Gear Solid (USA).gbc`,
 is imported when the game has no `game.cht` yet.
 
@@ -266,6 +271,11 @@ freki only applies them in banks where all of those bytes match: a real Game Gen
 patches the banks where only some match, which can crash the game (Super Mario Bros.
 Deluxe's "Jump In Midair" on Rev 2 does). If a game stops while cheats are on, freki
 suggests switching them off and trying them one at a time.
+
+Many games keep lives, coins or timers in **BCD**, one decimal digit per hex digit: 99 lives
+are the byte `$99`, so a plain 100 (`$64`) shows as "64". Tick **BCD** in the memory search
+to search for and hold the number the game shows; in templates, type such values in hex
+(`$99`).
 
 The same tools work from the terminal
 freki was started from (`help` lists the commands). For example, to find the lives counter:
