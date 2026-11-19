@@ -23,6 +23,7 @@ pub mod ppu;
 pub mod printer;
 pub mod serial;
 pub mod sgb;
+pub mod sgb_sound;
 pub mod snes_dsp;
 pub mod spc700;
 pub mod state;
