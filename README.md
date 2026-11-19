@@ -37,9 +37,11 @@ Named after Freki, one of Odin's two wolves.
   command line or by dropping them on the window
 - **Soft patching:** a `.bps` or `.ips` patch next to the ROM is applied when the game
   loads (translations, romhacks); the ROM file is never changed
-- **Battery saves** written automatically (RetroArch's `.srm` saves work too), **10
-  save-state slots** with previews in the States menu (a picture of the screen and how
-  long ago it was saved; double-click a slot to load it), **rewind** (up to 20 seconds) and **fast-forward** (2×–8×)
+- **Battery saves** written automatically (RetroArch's `.srm` saves work too), **rewind**
+  (up to 20 seconds) and **fast-forward** (2×–8×)
+- **10 save-state slots** with previews: the States menu shows each slot's screen and how
+  long ago it was saved (click to select, double-click to load). State files are PNGs of
+  the screen with the state inside, so image viewers show them too
 - **Fullscreen** and window scales from 2× to 6×, with sharp integer scaling (can be
   switched off)
 - **Settings per game:** a game can keep its own console, palette, colour correction and
