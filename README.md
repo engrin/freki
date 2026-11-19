@@ -26,7 +26,8 @@ Named after Freki, one of Odin's two wolves.
 - **Link cable:** a second game runs next to the first, connected by cable, for trading
   and two-player games (Tetris, Pokémon, …)
 - **Game Boy Printer:** games print onto paper shown in a window, and every page is saved
-  as a PNG (for example the calendars of Super Mario Bros. Deluxe)
+  as a PNG (tested: Super Mario Bros. Deluxe calendars, Link's Awakening DX photos, Pokémon
+  Crystal box lists)
 - **Optional boot ROMs:** start with the real Game Boy or Game Boy Color boot animation, or
   straight into the game
 
