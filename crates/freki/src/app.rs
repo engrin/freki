@@ -18,6 +18,8 @@ use crate::cpu_view::{self, CpuView};
 use crate::debug::{self, DebugViews};
 use crate::gamepad::Gamepads;
 use crate::input;
+use crate::printer_view::PrinterView;
+use crate::printout;
 use crate::record::{self, Recorder};
 use crate::rom_file;
 use crate::session::Start;
@@ -203,6 +205,9 @@ pub struct FrekiApp {
     new_name: String,
     cheat_error: Option<String>,
     search_ui: SearchUi,
+    /// A Game Boy Printer is plugged into the link cable port (Link cable menu).
+    printer: bool,
+    printer_view: PrinterView,
 }
 
 impl FrekiApp {
@@ -258,6 +263,8 @@ impl FrekiApp {
             new_name: String::new(),
             cheat_error: None,
             search_ui: SearchUi::default(),
+            printer: false,
+            printer_view: PrinterView::default(),
         };
         println!("freki: type `help` here for cheat and memory commands");
         if let Some(path) = rom {
@@ -416,6 +423,12 @@ impl FrekiApp {
                     session,
                     cable: Link::new(),
                 });
+                if self.printer {
+                    self.printer = false;
+                    if let Some(first) = self.session.as_mut() {
+                        first.gb.set_printer(false);
+                    }
+                }
                 self.keyboard_second = false;
                 self.update_title(ctx);
                 self.set_status(format!(
@@ -447,6 +460,54 @@ impl FrekiApp {
             self.set_status(format!("save failed: {e}"));
         }
         self.keyboard_second = false;
+    }
+
+    /// Plugs the Game Boy Printer in or out (it shares the port with the link cable).
+    fn set_printer(&mut self, ctx: &egui::Context, on: bool) {
+        if on && self.link.is_some() {
+            self.disconnect_link();
+            self.update_title(ctx);
+        }
+        self.printer = on;
+        if on {
+            self.printer_view.open = true;
+            self.set_status(
+                "Game Boy Printer connected: print from the game; each page is saved as \
+                 a PNG next to the ROM",
+            );
+        } else {
+            if let Some(session) = self.session.as_mut() {
+                session.gb.set_printer(false);
+            }
+            self.set_status("Game Boy Printer disconnected");
+        }
+    }
+
+    /// Saves the pages the printer fed out, next to the ROM; opens the Printer window when
+    /// the game starts printing.
+    fn collect_printouts(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(printer) = session.gb.printer_mut() else {
+            return;
+        };
+        if printer.take_changed() {
+            self.printer_view.open = true;
+        }
+        let pages = printer.take_pages();
+        for page in pages {
+            let saved = session
+                .next_print_file()
+                .ok_or("too many printouts".into())
+                .and_then(|path| printout::save_png(&path, &page.shades).map(|()| path));
+            let message = match &saved {
+                Ok(path) => format!("printed a page: saved {}", file_name(path)),
+                Err(e) => format!("printed a page, but it could not be saved: {e}"),
+            };
+            self.printer_view.page_done(page.shades, saved.ok());
+            self.status = Some((message, Instant::now()));
+        }
     }
 
     /// Save states and rewind would move one Game Boy away from the other: they are off
@@ -774,6 +835,8 @@ impl FrekiApp {
         let Some(session) = self.session.as_mut() else {
             return;
         };
+        // Also after a reset or a new game (a new Game Boy).
+        session.gb.set_printer(self.printer && self.link.is_none());
 
         if self.rewinding {
             self.previous_frame = None;
@@ -1344,6 +1407,23 @@ impl FrekiApp {
             self.disconnect_link();
             self.update_title(&ctx);
             self.set_status("link cable disconnected");
+        }
+        ui.separator();
+        let mut printer = self.printer;
+        if ui
+            .checkbox(&mut printer, "Game Boy Printer")
+            .on_hover_text(
+                "Plugs a Game Boy Printer into the link cable port (in place of a second \
+                 game). Printed pages are saved as ROM-print-001.png, … next to the ROM",
+            )
+            .changed()
+        {
+            ui.close();
+            self.set_printer(&ctx, printer);
+        }
+        if ui.button("Show printout").clicked() {
+            ui.close();
+            self.printer_view.open = true;
         }
     }
 
@@ -2100,6 +2180,7 @@ impl eframe::App for FrekiApp {
             self.set_paused(paused);
         }
         self.emulate(&ctx);
+        self.collect_printouts();
         self.poll_recordings(false);
         // Changes while a game uses its own settings are its own.
         if let (Some(key), Some(_)) = (&self.game_key, &self.general_settings) {
@@ -2128,6 +2209,15 @@ impl eframe::App for FrekiApp {
             && let Some(action) = self.cpu_view.show(&ctx, &mut session.gb, self.paused)
         {
             self.debugger_action(action);
+        }
+        if self.printer_view.open {
+            let printer = self.session.as_ref().and_then(|s| s.gb.printer());
+            if self.printer_view.show(&ctx, printer)
+                && let Some(printer) = self.session.as_mut().and_then(|s| s.gb.printer_mut())
+            {
+                printer.tear_off();
+                self.collect_printouts();
+            }
         }
         if let Some(session) = &self.session {
             let palettes = debug::Palettes::new(

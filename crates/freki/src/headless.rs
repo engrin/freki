@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use freki_core::{BootRom, Button, CLOCK_HZ, CYCLES_PER_FRAME, GameBoy, Link, Model};
 
 use crate::console::{self, Console};
+use crate::printout;
 use crate::record::Recorder;
 use crate::rom_file;
 use crate::session::{self, Start};
@@ -69,6 +70,8 @@ run:
                           chosen as by default); it runs in step with ROM
   --link-sav FILE         load this battery save into ROM2
   --press2 FRAME:KEYS[:N] like --press, for ROM2
+  --printer FILE.png      connect a Game Boy Printer; printed pages are saved as FILE.png,
+                          FILE-2.png, … (a page still on the printer at the end too)
   --cheats                load the game's cheat file (ROM.cht, or one named as in cheat
                           databases) with the cheats switched on as saved there
   --cheat N|CODE          switch on cheat N of that file, or add a GameShark or Game
@@ -112,6 +115,7 @@ struct Options {
     link: Option<PathBuf>,
     link_sav: Option<PathBuf>,
     presses2: Vec<Press>,
+    printer: Option<PathBuf>,
     tilts: Vec<Tilt>,
     load_cheats: bool,
     cheats: Vec<String>,
@@ -229,6 +233,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--link" => o.link = Some(value(arg)?.into()),
             "--link-sav" => o.link_sav = Some(value(arg)?.into()),
             "--press2" => o.presses2.push(parse_press(&value(arg)?)?),
+            "--printer" => o.printer = Some(value(arg)?.into()),
             "--tilt" => o.tilts.push(parse_tilt(&value(arg)?)?),
             "--cheats" => o.load_cheats = true,
             "--cheat" => o.cheats.push(value(arg)?),
@@ -268,6 +273,9 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
     }
     if o.link.is_some() && (o.trace.is_some() || !o.breaks.is_empty() || !o.watches.is_empty()) {
         return Err("--trace, --break and --watch do not work with --link".into());
+    }
+    if o.link.is_some() && o.printer.is_some() {
+        return Err("--link and --printer both need the link cable port".into());
     }
     Ok(Some(o))
 }
@@ -434,6 +442,9 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         None => None,
     };
 
+    gb.set_printer(o.printer.is_some());
+    let mut pages = 0;
+
     let mut status = 0;
     let mut pressed: Vec<Button> = Vec::new();
     let mut pressed2: Vec<Button> = Vec::new();
@@ -511,6 +522,12 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         if let Some(recorder) = recorder.as_mut() {
             record_frame(o, recorder, &mut gb, None, &mut recorded, &mut sound)?;
         }
+        if let (Some(path), Some(printer)) = (&o.printer, gb.printer_mut()) {
+            for page in printer.take_pages() {
+                pages += 1;
+                save_page(path, pages, &page.shades, frame)?;
+            }
+        }
         if let Some(text) = &o.until_serial
             && String::from_utf8_lossy(gb.serial_output()).contains(text.as_str())
         {
@@ -540,6 +557,17 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
             summary.frames,
             summary.bytes / 1024
         );
+    }
+
+    if let (Some(path), Some(printer)) = (&o.printer, gb.printer_mut()) {
+        printer.tear_off();
+        for page in printer.take_pages() {
+            pages += 1;
+            save_page(path, pages, &page.shades, frame)?;
+        }
+        if pages == 0 {
+            out!("nothing was printed");
+        }
     }
 
     for line in &o.exec {
@@ -653,6 +681,24 @@ fn doctor_line(gb: &GameBoy) -> String {
         r.pc,
         mem.join(",")
     )
+}
+
+/// Saves printed page number `n` as `path`, or `path` with `-n` added from the second on.
+fn save_page(path: &Path, n: u32, shades: &[u8], frame: u64) -> Result<(), Box<dyn Error>> {
+    let path = if n == 1 {
+        path.to_path_buf()
+    } else {
+        let stem = path.with_extension("");
+        PathBuf::from(format!("{}-{n}.png", stem.display()))
+    };
+    printout::save_png(&path, shades)?;
+    out!(
+        "frame {frame}: printed a page ({}×{}) to {}",
+        freki_core::PAPER_WIDTH,
+        shades.len() / freki_core::PAPER_WIDTH,
+        path.display()
+    );
+    Ok(())
 }
 
 fn save_png(path: &Path, rgba: &[u8], [width, height]: [usize; 2]) -> Result<(), Box<dyn Error>> {

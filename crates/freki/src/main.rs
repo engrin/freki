@@ -19,6 +19,8 @@ mod debug;
 mod gamepad;
 mod headless;
 mod input;
+mod printer_view;
+mod printout;
 mod record;
 mod rom_file;
 mod session;

@@ -25,6 +25,8 @@ Named after Freki, one of Odin's two wolves.
   multiplayer request games use to detect an SGB
 - **Link cable:** a second game runs next to the first, connected by cable, for trading
   and two-player games (Tetris, Pokémon, …)
+- **Game Boy Printer:** games print onto paper shown in a window, and every page is saved
+  as a PNG (for example the calendars of Super Mario Bros. Deluxe)
 - **Optional boot ROMs:** start with the real Game Boy or Game Boy Color boot animation, or
   straight into the game
 
@@ -176,6 +178,15 @@ Each game keeps its battery save; a game linked with itself saves the second cop
 `game.2.sav`. Save states and rewind are off while linked. Headless mode can link too
 (`--link`, `--link-sav`, `--press2`).
 
+## Game Boy Printer
+
+**Emulation → Link cable → Game Boy Printer** plugs a printer into the link cable port (in
+place of a second game). When a game prints, the Printer window shows the paper coming out,
+and each finished page is saved next to the ROM as `game-print-001.png`, `-002`, … A page is
+finished when the game feeds the paper out after printing; pictures printed in several parts
+end up on one page. **Tear off** finishes the page by hand, for games that never feed the
+paper out. Headless mode prints with `--printer page.png`.
+
 ## Cheats
 
 **Cheats → Cheat manager…** adds, toggles and removes codes, and **Cheats → Memory
@@ -218,7 +229,8 @@ cheat save            # writes game.cht
 `freki --headless ROM [options]` runs a game as fast as possible without a window or
 sound. It can press buttons at given frames, stop at breakpoints or watchpoints, and log
 every instruction. At the end it can run console commands, print the serial output, and
-save a screenshot, a save state or the battery save. A battery save can be loaded as if
+save a screenshot, a save state or the battery save, and a Game Boy Printer can save what
+the game prints. A battery save can be loaded as if
 the Game Boy had been off for a while, so the cartridge clock catches up, and a second game
 can run on a link cable. `freki --headless --help` lists the options.
 
@@ -231,6 +243,7 @@ freki --headless game.gbc --cheats --cheat 3 --cheat 010A10C1   # cheat 3 of gam
 freki --headless tetris.gb --link tetris.gb --press 300:start --press2 300:start --screenshot both.png
 freki --headless game.gbc --frames 400 --frame-blend --screenshot blended.png
 freki --headless game.gbc --frames 1200 --record clip.webm          # 20 seconds of video
+freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # print pages
 ```
 
 ## Development

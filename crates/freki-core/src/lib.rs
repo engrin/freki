@@ -19,6 +19,7 @@ pub mod mbc6;
 pub mod mbc7;
 pub mod mmm01;
 pub mod ppu;
+pub mod printer;
 pub mod serial;
 pub mod sgb;
 pub mod state;
@@ -35,6 +36,7 @@ pub use joypad::Button;
 pub use link::{Link, LinkError, Player};
 
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+pub use printer::{PAPER_WIDTH, Page, Printer};
 pub use sgb::{SGB_HEIGHT, SGB_WIDTH};
 pub use state::{Rewind, StateError};
 
@@ -133,6 +135,8 @@ pub struct GameBoy {
     bus: Bus,
     /// Set after stopping at a breakpoint, so resuming executes that instruction.
     resume_at: Option<u16>,
+    /// A Game Boy Printer on the serial port (not part of save states).
+    printer: Option<Box<Printer>>,
 }
 
 impl GameBoy {
@@ -184,6 +188,7 @@ impl GameBoy {
             cpu,
             bus,
             resume_at: None,
+            printer: None,
         })
     }
 
@@ -213,6 +218,7 @@ impl GameBoy {
             cpu: Cpu::new_power_on(),
             bus,
             resume_at: None,
+            printer: None,
         })
     }
 
@@ -229,7 +235,31 @@ impl GameBoy {
     /// Executes one CPU instruction. The rest of the hardware is advanced during the
     /// instruction, one M-cycle at a time. Returns the number of T-cycles it took.
     pub fn step(&mut self) -> Result<u32, CpuError> {
-        self.cpu.step(&mut self.bus)
+        let cycles = self.cpu.step(&mut self.bus)?;
+        if let Some(printer) = self.printer.as_mut() {
+            printer.tick(cycles >> u32::from(self.bus.double_speed));
+            if let Some(byte) = self.bus.serial.take_started() {
+                let back = printer.exchange(byte);
+                self.bus.serial.set_incoming(back);
+            }
+        }
+        Ok(cycles)
+    }
+
+    /// Plugs a Game Boy Printer into the serial port (`true`) or unplugs it.
+    pub fn set_printer(&mut self, attached: bool) {
+        if attached != self.printer.is_some() {
+            self.printer = attached.then(Box::default);
+        }
+    }
+
+    /// The Game Boy Printer on the serial port, if one is plugged in.
+    pub fn printer(&self) -> Option<&Printer> {
+        self.printer.as_deref()
+    }
+
+    pub fn printer_mut(&mut self) -> Option<&mut Printer> {
+        self.printer.as_deref_mut()
     }
 
     /// Advances everything but the CPU by `cycles` T-cycles, as a real Game Boy does once

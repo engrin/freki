@@ -138,6 +138,15 @@ impl Session {
             .find(|p| !p.exists())
     }
 
+    /// `<rom>-print-NNN.png` next to the ROM, with the first free number (printed pages).
+    pub fn next_print_file(&self) -> Option<PathBuf> {
+        let stem = self.rom_path.with_extension("");
+        let stem = stem.to_string_lossy();
+        (1..10_000)
+            .map(|n| PathBuf::from(format!("{stem}-print-{n:03}.png")))
+            .find(|p| !p.exists())
+    }
+
     pub fn cheat_file(&self) -> PathBuf {
         self.rom_path.with_extension("cht")
     }
