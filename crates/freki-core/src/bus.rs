@@ -307,6 +307,10 @@ impl Bus {
     // Specific I/O registers are matched before the generic $FF00–$FF7F fallback.
     #[allow(clippy::match_overlapping_arm)]
     pub fn read(&self, addr: u16) -> u8 {
+        if addr >= 0xC000 {
+            // Sachen MMC2 cartridges watch these accesses (see `unlicensed`).
+            self.cart.high_access();
+        }
         match addr {
             0x0000..=0x08FF
                 if let Some(byte) = self
@@ -361,6 +365,9 @@ impl Bus {
 
     #[allow(clippy::match_overlapping_arm)]
     pub fn write(&mut self, addr: u16, value: u8) {
+        if (0xC000..=0xDFFF).contains(&addr) {
+            self.cart.high_access();
+        }
         match addr {
             0x0000..=0x7FFF => self.cart.write_rom(addr, value),
             0x8000..=0x9FFF => self.ppu.write_vram(addr, value),

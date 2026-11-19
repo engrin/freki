@@ -13,6 +13,7 @@ use crate::mbc6::Mbc6;
 use crate::mbc7::{self, Mbc7};
 use crate::mmm01::Mmm01;
 use crate::tama5::{self, Tama5};
+use crate::unlicensed::{self, Sachen};
 
 const ROM_BANK: usize = 0x4000;
 const RAM_BANK: usize = 0x2000;
@@ -96,6 +97,13 @@ pub enum Mbc {
     /// Game Boy Camera: MBC3-like banking, 128 KiB RAM and the camera sensor (see
     /// [`crate::camera`]).
     Camera(Box<Camera>),
+    /// Wisdom Tree: the whole 32 KiB, bank chosen by the written address (see
+    /// [`crate::unlicensed`]).
+    WisdomTree { bank: u8 },
+    /// M161 (Mani 4-in-1): the whole 32 KiB, switched once.
+    M161 { bank: u8, locked: bool },
+    /// Sachen MMC1 / MMC2 (see [`crate::unlicensed::Sachen`]).
+    Sachen(Box<Sachen>),
 }
 
 /// MBC3 real-time clock. It runs on emulated time: one second per [`CLOCK_HZ`] T-cycles.
@@ -317,54 +325,68 @@ impl Cartridge {
         let mmm01 = is_mmm01(&rom);
         let header = if mmm01 { rom.len() - 0x8000 } else { 0 };
         let kind = if mmm01 { 0x0B } else { rom[0x147] };
-        let mbc = match kind {
-            0x00 | 0x08 | 0x09 => Mbc::RomOnly,
-            0x01..=0x03 => Mbc::Mbc1 {
-                ram_enabled: false,
-                bank1: 1,
-                bank2: 0,
-                advanced: false,
-                multicart: is_mbc1_multicart(&rom),
+        let unlicensed = if mmm01 {
+            None
+        } else {
+            unlicensed::detect(&rom)
+        };
+        let mbc = match unlicensed {
+            Some(unlicensed::Kind::WisdomTree) => Mbc::WisdomTree { bank: 0 },
+            Some(unlicensed::Kind::M161) => Mbc::M161 {
+                bank: 0,
+                locked: false,
             },
-            0x05 | 0x06 => Mbc::Mbc2 {
-                ram_enabled: false,
-                rom_bank: 1,
+            Some(unlicensed::Kind::SachenMmc1) => Mbc::Sachen(Box::new(Sachen::new(false))),
+            Some(unlicensed::Kind::SachenMmc2) => Mbc::Sachen(Box::new(Sachen::new(true))),
+            None => match kind {
+                0x00 | 0x08 | 0x09 => Mbc::RomOnly,
+                0x01..=0x03 => Mbc::Mbc1 {
+                    ram_enabled: false,
+                    bank1: 1,
+                    bank2: 0,
+                    advanced: false,
+                    multicart: is_mbc1_multicart(&rom),
+                },
+                0x05 | 0x06 => Mbc::Mbc2 {
+                    ram_enabled: false,
+                    rom_bank: 1,
+                },
+                0x0B..=0x0D => Mbc::Mmm01(Mmm01::default()),
+                0x0F..=0x13 => Mbc::Mbc3 {
+                    ram_enabled: false,
+                    rom_bank: 1,
+                    ram_select: 0,
+                    rtc: matches!(kind, 0x0F | 0x10).then(Rtc::default),
+                },
+                0x19..=0x1E => Mbc::Mbc5 {
+                    ram_enabled: false,
+                    rom_bank: 1,
+                    ram_bank: 0,
+                    rumble: kind >= 0x1C,
+                    motor: false,
+                },
+                0x20 => Mbc::Mbc6(Box::default()),
+                0x22 => Mbc::Mbc7 {
+                    ram_enable1: false,
+                    ram_enable2: false,
+                    rom_bank: 1,
+                    chip: Mbc7::default(),
+                },
+                0xFC => Mbc::Camera(Box::default()),
+                0xFD => Mbc::Tama5(Box::default()),
+                0xFE => Mbc::HuC3 {
+                    mode: 0,
+                    rom_bank: 1,
+                    ram_bank: 0,
+                    clock: Box::default(),
+                },
+                0xFF => Mbc::HuC1 {
+                    ir_mode: false,
+                    rom_bank: 1,
+                    ram_bank: 0,
+                },
+                other => return Err(CartridgeError::UnsupportedType(other)),
             },
-            0x0B..=0x0D => Mbc::Mmm01(Mmm01::default()),
-            0x0F..=0x13 => Mbc::Mbc3 {
-                ram_enabled: false,
-                rom_bank: 1,
-                ram_select: 0,
-                rtc: matches!(kind, 0x0F | 0x10).then(Rtc::default),
-            },
-            0x19..=0x1E => Mbc::Mbc5 {
-                ram_enabled: false,
-                rom_bank: 1,
-                ram_bank: 0,
-                rumble: kind >= 0x1C,
-                motor: false,
-            },
-            0x20 => Mbc::Mbc6(Box::default()),
-            0x22 => Mbc::Mbc7 {
-                ram_enable1: false,
-                ram_enable2: false,
-                rom_bank: 1,
-                chip: Mbc7::default(),
-            },
-            0xFC => Mbc::Camera(Box::default()),
-            0xFD => Mbc::Tama5(Box::default()),
-            0xFE => Mbc::HuC3 {
-                mode: 0,
-                rom_bank: 1,
-                ram_bank: 0,
-                clock: Box::default(),
-            },
-            0xFF => Mbc::HuC1 {
-                ir_mode: false,
-                rom_bank: 1,
-                ram_bank: 0,
-            },
-            other => return Err(CartridgeError::UnsupportedType(other)),
         };
         let battery = matches!(
             rom[header + 0x147],
@@ -681,6 +703,7 @@ impl Cartridge {
             }
             // The EEPROM is reached through registers only.
             Mbc::Mbc7 { .. } | Mbc::Tama5(_) => return None,
+            Mbc::WisdomTree { .. } | Mbc::M161 { .. } | Mbc::Sachen(_) => return None,
             // RAM is always readable, but not while the registers are mapped or a picture
             // is being taken.
             Mbc::Camera(ref camera) => {
@@ -695,6 +718,10 @@ impl Cartridge {
 
     /// Read from $0000–$7FFF.
     pub fn read_rom(&self, addr: u16) -> u8 {
+        if let Mbc::Sachen(ref sachen) = self.mbc {
+            let (bank, addr) = sachen.map(addr);
+            return self.rom_byte(bank, addr);
+        }
         match self.mbc {
             Mbc::RomOnly => return self.rom.get(addr as usize).copied().unwrap_or(0xFF),
             Mbc::Mbc6(ref chip) if addr >= 0x4000 => {
@@ -752,6 +779,10 @@ impl Cartridge {
                     camera.rom_bank as usize
                 }
             }
+            Mbc::WisdomTree { bank } | Mbc::M161 { bank, .. } => {
+                unlicensed::bank_of_32k(bank, addr)
+            }
+            Mbc::Sachen(ref sachen) => sachen.bank_at(addr),
             Mbc::Mbc6(_) => 0,
             Mbc::Mbc2 { rom_bank, .. } => {
                 if low {
@@ -795,6 +826,20 @@ impl Cartridge {
             && (self.ram.len() > 4 * RAM_BANK || self.rom.len() > 128 * ROM_BANK)
     }
 
+    /// A CPU access to $C000 and up (Sachen MMC2 watches those).
+    pub(crate) fn high_access(&self) {
+        if let Mbc::Sachen(sachen) = &self.mbc {
+            sachen.high_access();
+        }
+    }
+
+    /// Started without a boot ROM (see [`Sachen::skip_boot`]).
+    pub(crate) fn skip_boot(&mut self) {
+        if let Mbc::Sachen(sachen) = &mut self.mbc {
+            sachen.skip_boot();
+        }
+    }
+
     /// The Game Boy Camera's sensor, if this is the camera cartridge.
     pub fn camera(&self) -> Option<&Camera> {
         match &self.mbc {
@@ -826,6 +871,15 @@ impl Cartridge {
         match &mut self.mbc {
             // TAMA5 is driven through $A000/$A001 only.
             Mbc::RomOnly | Mbc::Tama5(_) => {}
+            // The low byte of the address picks the bank; the value is ignored.
+            Mbc::WisdomTree { bank } => *bank = addr as u8,
+            Mbc::M161 { bank, locked } => {
+                if !*locked {
+                    *bank = value & 0x07;
+                    *locked = true;
+                }
+            }
+            Mbc::Sachen(sachen) => sachen.write(addr, value),
             Mbc::Camera(camera) => match addr {
                 0x0000..=0x1FFF => camera.ram_enabled = value & 0x0F == 0x0A,
                 0x2000..=0x3FFF => camera.rom_bank = value & 0x3F,

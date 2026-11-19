@@ -27,6 +27,7 @@ pub mod state;
 pub mod symbols;
 pub mod tama5;
 pub mod timer;
+pub mod unlicensed;
 pub mod xploder;
 
 pub use apu::{ChannelInfo, SCOPE_LEN};
@@ -171,6 +172,7 @@ impl GameBoy {
         let cgb_game = cart.supports_cgb();
         let logo: [u8; 48] = std::array::from_fn(|i| cart.read_rom(0x104 + i as u16));
         let mut bus = Bus::new(cart);
+        bus.cart.skip_boot();
         bus.ppu.load_boot_logo(&logo);
         bus.ppu.skip_to_post_boot();
         let cpu = if model == Model::Cgb {
