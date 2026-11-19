@@ -740,6 +740,11 @@ impl Cartridge {
         bank % (self.rom.len() / ROM_BANK).max(1)
     }
 
+    /// Size of the ROM in bytes.
+    pub fn rom_len(&self) -> usize {
+        self.rom.len()
+    }
+
     /// The cartridge RAM bank mapped at $A000–$BFFF, if RAM is accessible.
     pub fn ram_bank_at(&self, addr: u16) -> Option<usize> {
         self.ram_offset(addr).map(|offset| offset / RAM_BANK)

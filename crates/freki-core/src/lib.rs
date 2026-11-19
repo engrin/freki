@@ -505,13 +505,29 @@ impl GameBoy {
 
     /// The label at `addr` in the bank mapped there now.
     pub fn label_at(&self, addr: u16) -> Option<&str> {
-        self.symbols.at(self.bank_at(addr), addr)
+        self.symbol_banks(addr)
+            .find_map(|bank| self.symbols.at(bank, addr))
+    }
+
+    /// Banks to look for a label at `addr`: the mapped one, and bank 0 where a game may
+    /// not bank at all, so assemblers list it as bank 0: work RAM at $D000–$DFFF on the
+    /// original Game Boy (RGBDS `-w`) and $4000–$7FFF of a 32 KiB ROM (`-t`).
+    fn symbol_banks(&self, addr: u16) -> impl Iterator<Item = u16> {
+        let bank = self.bank_at(addr);
+        let unbanked = match addr {
+            0x4000..=0x7FFF => self.bus.cart.rom_len() <= 0x8000,
+            0xD000..=0xDFFF => !self.bus.cgb,
+            _ => false,
+        };
+        std::iter::once(bank).chain((unbanked && bank != 0).then_some(0))
     }
 
     /// `addr` as `Label` or `Label+offset` (up to 255 bytes after a label in the same
     /// bank), if the symbol file has a label there.
     pub fn describe_address(&self, addr: u16) -> Option<String> {
-        let (label, offset) = self.symbols.before(self.bank_at(addr), addr, 0xFF)?;
+        let (label, offset) = self
+            .symbol_banks(addr)
+            .find_map(|bank| self.symbols.before(bank, addr, 0xFF))?;
         Some(if offset == 0 {
             label.to_string()
         } else {
@@ -775,6 +791,16 @@ mod tests {
         assert_eq!(gb.disassemble_labeled(0x158).text, "RST Crash");
         assert_eq!(gb.describe_address(0x153).as_deref(), Some("Start+3"));
         assert_eq!(gb.describe_address(0x3000), None);
+    }
+
+    #[test]
+    fn unbanked_memory_also_finds_bank_zero_labels() {
+        // Original Game Boy, 32 KiB ROM: RGBDS with -w and -t lists everything as bank 0.
+        let mut gb = GameBoy::new(test_rom()).unwrap();
+        gb.set_symbols(Symbols::parse("00:4000 HighRom\n00:d122 wSaved\n"));
+        assert_eq!(gb.label_at(0x4000), Some("HighRom"));
+        assert_eq!(gb.label_at(0xD122), Some("wSaved"));
+        assert_eq!(gb.describe_address(0xD124).as_deref(), Some("wSaved+2"));
     }
 
     #[test]
