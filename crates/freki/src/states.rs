@@ -1,5 +1,8 @@
-//! Save state slots on disk, next to the ROM: `<rom>.ss0` … `<rom>.ss9`, each with a
-//! picture of the screen at the time as `<rom>.ssN.png`.
+//! Save state slots on disk, next to the ROM: `<rom>.ss0` … `<rom>.ss9`.
+//!
+//! A state file is a PNG of the screen at the time, with the save state from
+//! [`GameBoy::save_state`] in a private `fkSt` chunk (the way mGBA stores its states), so
+//! image viewers show the picture. Raw states (no PNG around them) still load.
 
 use std::error::Error;
 use std::fs;
@@ -51,18 +54,13 @@ impl StateSlots {
         self.rom_path.with_extension(format!("ss{slot}"))
     }
 
-    fn preview_path(&self, slot: u8) -> PathBuf {
-        self.rom_path.with_extension(format!("ss{slot}.png"))
-    }
-
     /// Saves the state in the current slot, with `picture` (RGBA and its size) as preview.
     pub fn save(
         &self,
         gb: &GameBoy,
         (rgba, size): (&[u8], [usize; 2]),
     ) -> Result<(), Box<dyn Error>> {
-        write_atomic(&self.path(), &gb.save_state())?;
-        write_atomic(&self.preview_path(self.slot), &encode_png(rgba, size)?)
+        write_atomic(&self.path(), &pack(&gb.save_state(), rgba, size)?)
     }
 
     /// When the state in `slot` was saved, or `None` for an empty slot.
@@ -70,15 +68,10 @@ impl StateSlots {
         fs::metadata(self.path_of(slot)).ok()?.modified().ok()
     }
 
-    /// The preview of `slot` as RGBA with its size, if there is one that belongs to the
-    /// state (a state saved without a picture, e.g. headless, leaves an older one behind).
+    /// The picture in `slot`'s state file as RGBA with its size; `None` for an empty slot
+    /// or a raw state.
     pub fn preview(&self, slot: u8) -> Option<(Vec<u8>, [usize; 2])> {
-        let saved = self.saved_at(slot)?;
-        let path = self.preview_path(slot);
-        if fs::metadata(&path).ok()?.modified().ok()? < saved {
-            return None;
-        }
-        decode_png(&fs::read(path).ok()?)
+        decode_png(&fs::read(self.path_of(slot)).ok()?)
     }
 
     /// "slot 3, saved 5 min ago" or "slot 3, empty".
@@ -92,9 +85,62 @@ impl StateSlots {
     pub fn load(&self, gb: &mut GameBoy) -> Result<(), Box<dyn Error>> {
         let path = self.path();
         let data = fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        gb.load_state(&data)?;
+        gb.load_state(unpack(&data)?)?;
         Ok(())
     }
+}
+
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
+
+/// Chunk holding the state: ancillary, private, safe to copy (PNG chunk naming rules).
+const STATE_CHUNK: [u8; 4] = *b"fkSt";
+
+/// A state file: `state` inside a PNG of `rgba` (`width` × `height`).
+pub fn pack(
+    state: &[u8],
+    rgba: &[u8],
+    [width, height]: [usize; 2],
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_chunk(png::chunk::ChunkType(STATE_CHUNK), state)?;
+    writer.write_image_data(rgba)?;
+    writer.finish()?;
+    Ok(out)
+}
+
+/// The save state in a state file: from its `fkSt` chunk, or the whole file for a raw state.
+pub fn unpack(data: &[u8]) -> Result<&[u8], String> {
+    let Some(mut rest) = data.strip_prefix(&PNG_SIGNATURE) else {
+        return Ok(data);
+    };
+    while rest.len() >= 12 {
+        let (head, tail) = rest.split_at(8);
+        let length = u32::from_be_bytes(head[..4].try_into().expect("4 bytes")) as usize;
+        let kind = &head[4..8];
+        if tail.len() < length + 4 {
+            break;
+        }
+        let (body, tail) = tail.split_at(length);
+        if kind == STATE_CHUNK {
+            let crc = u32::from_be_bytes(tail[..4].try_into().expect("4 bytes"));
+            let mut hasher = crc32fast::Hasher::new();
+            hasher.update(kind);
+            hasher.update(body);
+            if hasher.finalize() != crc {
+                return Err("the save state in this file is damaged".into());
+            }
+            return Ok(body);
+        }
+        if kind == b"IEND" {
+            break;
+        }
+        rest = &tail[4..];
+    }
+    Err("this PNG has no freki save state in it".into())
 }
 
 /// How long ago `time` was, in words: "just now", "5 min ago", "3 h ago", "2 days ago".
@@ -151,6 +197,24 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn packed_states_survive_and_damage_is_noticed() {
+        let state = b"some state bytes".to_vec();
+        let mut file = pack(&state, &[1, 2, 3, 4], [1, 1]).unwrap();
+        assert_eq!(unpack(&file).unwrap(), &state[..]);
+        assert_eq!(decode_png(&file), Some((vec![1, 2, 3, 4], [1, 1])));
+        assert_eq!(
+            unpack(&state).unwrap(),
+            &state[..],
+            "raw states pass through"
+        );
+        let at = file.windows(4).position(|w| w == b"fkSt").unwrap() + 4;
+        file[at] ^= 1;
+        assert!(unpack(&file).is_err());
+        let plain = encode_png(&[1, 2, 3, 4], [1, 1]).unwrap();
+        assert!(unpack(&plain).is_err());
+    }
+
     fn rom() -> Vec<u8> {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]); // JP $0150
@@ -175,6 +239,11 @@ mod tests {
         assert!(slots.saved_at(1).is_none());
         let picture = vec![7u8; 4 * 4 * 2];
         slots.save(&gb, (&picture, [4, 2])).unwrap();
+        assert!(
+            fs::read(dir.join("game.ss1"))
+                .unwrap()
+                .starts_with(&PNG_SIGNATURE)
+        );
         assert!(dir.join("game.ss1").exists());
         assert!(slots.saved_at(1).is_some());
         assert_eq!(slots.preview(1), Some((picture, [4, 2])));
@@ -184,6 +253,13 @@ mod tests {
         gb.run_frame().unwrap();
         slots.load(&mut gb).unwrap();
         assert!(gb.save_state() == saved);
+
+        // A raw state, as older versions wrote them, loads too but has no picture.
+        fs::write(dir.join("game.ss1"), &saved).unwrap();
+        gb.run_frame().unwrap();
+        slots.load(&mut gb).unwrap();
+        assert!(gb.save_state() == saved);
+        assert_eq!(slots.preview(1), None);
 
         slots.next();
         assert!(slots.load(&mut gb).is_err(), "empty slot 2 must fail");

@@ -25,6 +25,7 @@ use crate::record::Recorder;
 use crate::rom_file;
 use crate::session::{self, Start};
 use crate::settings::{self, Palette};
+use crate::states;
 
 /// Prints a line to stdout. When stdout is a closed pipe (`freki --headless … | head`),
 /// exits quietly with status 141, as a program killed by SIGPIPE would, instead of
@@ -90,7 +91,7 @@ at the end (in this order):
   --color-correction      GBC colours as the GBC screen shows them (default: raw)
   --frame-blend           mix the screenshot with the frame before, like the real LCD
   --record FILE.webm      record a video (AV1 picture, Opus sound) of the whole run
-  --save-state FILE       save the machine state
+  --save-state FILE       save the machine state (a PNG of the screen with the state in it)
   --write-sav FILE        write the battery save (RAM, then the clock, if any)
 
 clock time: a run starts at the time the --sav file's clock was written (plus --off),
@@ -387,7 +388,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         }
     }
     if let Some(path) = &o.load_state {
-        gb.load_state(&read(path)?)?;
+        gb.load_state(states::unpack(&read(path)?)?)?;
     }
 
     let mut console = Console::detached(rom_path.with_extension("cht"));
@@ -591,7 +592,8 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         out!("screenshot saved to {}", path.display());
     }
     if let Some(path) = &o.save_state {
-        fs::write(path, gb.save_state())
+        let (rgba, size) = picture(o, &gb, None);
+        fs::write(path, states::pack(&gb.save_state(), &rgba, size)?)
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         out!("state saved to {}", path.display());
     }
@@ -702,12 +704,8 @@ fn save_page(path: &Path, n: u32, shades: &[u8], frame: u64) -> Result<(), Box<d
 }
 
 fn save_png(path: &Path, rgba: &[u8], [width, height]: [usize; 2]) -> Result<(), Box<dyn Error>> {
-    let file =
-        fs::File::create(path).map_err(|e| format!("cannot create {}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(BufWriter::new(file), width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(rgba)?;
+    fs::write(path, states::encode_png(rgba, [width, height])?)
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     Ok(())
 }
 
