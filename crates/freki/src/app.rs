@@ -25,6 +25,7 @@ use crate::rom_file;
 use crate::session::Start;
 use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
+use crate::sound_view::SoundView;
 use crate::state_previews::{Pick, StatePreviews};
 use crate::window::{self, take_forwarded_hotkeys, tool_window};
 
@@ -216,6 +217,7 @@ pub struct FrekiApp {
     /// A Game Boy Printer is plugged into the link cable port (Link cable menu).
     printer: bool,
     printer_view: PrinterView,
+    sound_view: SoundView,
     state_previews: StatePreviews,
 }
 
@@ -277,6 +279,7 @@ impl FrekiApp {
             search_ui: SearchUi::default(),
             printer: false,
             printer_view: PrinterView::default(),
+            sound_view: SoundView::default(),
             state_previews: StatePreviews::default(),
         };
         println!("freki: type `help` here for cheat and memory commands");
@@ -908,6 +911,14 @@ impl FrekiApp {
         };
         // Also after a reset or a new game (a new Game Boy).
         session.gb.set_printer(self.printer && self.link.is_none());
+        session.gb.set_muted_channels(self.sound_view.muted);
+        // Without a sound device the game makes no sound; the sound window needs it.
+        if self.sound_view.open && !session.gb.produces_audio() {
+            session.gb.set_audio_sample_rate(48_000);
+        }
+        if let Some(linked) = self.link.as_mut() {
+            linked.session.gb.set_muted_channels(self.sound_view.muted);
+        }
 
         if self.rewinding {
             self.previous_frame = None;
@@ -1463,6 +1474,10 @@ impl FrekiApp {
                 ui.add_enabled(
                     loaded,
                     egui::Checkbox::new(&mut self.cpu_view.open, "Debugger"),
+                );
+                ui.add_enabled(
+                    loaded,
+                    egui::Checkbox::new(&mut self.sound_view.open, "Sound channels"),
                 );
                 ui.add_enabled(
                     loaded,
@@ -2408,6 +2423,9 @@ impl eframe::App for FrekiApp {
                 self.settings.color_correction,
             );
             self.debug.show(&ctx, &session.gb, &palettes);
+            if self.sound_view.open {
+                self.sound_view.show(&ctx, &session.gb);
+            }
         }
 
         if self.background_paused {

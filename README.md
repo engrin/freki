@@ -75,12 +75,15 @@ Named after Freki, one of Odin's two wolves.
   ROM bank that is mapped in, and take labels wherever they take an address
   (`break Main.loop`, `peek wLives`). Resetting reloads the ROM and its labels, so a
   rebuilt game is one Ctrl+R away
+- **Sound channels:** what each of the four channels plays (pitch and note, duty, volume
+  and envelope, sweep, length, left/right), with a live oscilloscope and channel 3's wave
+  RAM; mute or solo channels to hear, or record, one part of the music alone
 - **Video memory viewers:** tiles, tile maps, sprites and palettes, live, for both VRAM
   banks on the GBC
-- The debugger, the viewers, the cheat manager, the memory search and the printer each
-  open as a window of their own, to place next to the game or on another screen. They
-  reopen where they were left, at the same size, and the emulator's hotkeys (function
-  keys, P, Ctrl shortcuts) work in them too
+- The debugger, the viewers, the sound channels, the cheat manager, the memory search and
+  the printer each open as a window of their own, to place next to the game or on another
+  screen. They reopen where they were left, at the same size, and the emulator's hotkeys
+  (function keys, P, M, Ctrl shortcuts) work in them too
 - **Terminal console:** the same debugger, cheat and memory commands, typed while the game
   runs
 - **Headless mode:** run a game without a window for scripts and regression checks,
@@ -136,7 +139,7 @@ cargo run --release -- path/to/game.gb    # or start without a ROM: File → Ope
 | Fullscreen | Alt+Enter (Esc leaves) | |
 | Open ROM / reset / quit | Ctrl+O / Ctrl+R / Ctrl+Q | |
 
-These shortcuts also work while a tool window (debugger, viewers, cheats, printer) has
+These shortcuts also work while a tool window (debugger, viewers, cheats, printer, sound) has
 focus, except rewind and fast-forward; the Game Boy buttons only work in the game's window.
 
 The Game Boy buttons and the turbo buttons can be rebound under **Emulation →

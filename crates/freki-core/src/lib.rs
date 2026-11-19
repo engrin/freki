@@ -27,6 +27,7 @@ pub mod symbols;
 pub mod tama5;
 pub mod timer;
 
+pub use apu::{ChannelInfo, SCOPE_LEN};
 pub use boot::{BootRom, BootRomError};
 pub use cartridge::{Cartridge, CartridgeError};
 pub use cheats::{Cheat, CheatError, Cheats, Code, Filter, Location, MemorySearch, Template};
@@ -588,6 +589,11 @@ impl GameBoy {
         self.bus.serial.output()
     }
 
+    /// Whether audio is being produced (see [`GameBoy::set_audio_sample_rate`]).
+    pub fn produces_audio(&self) -> bool {
+        self.bus.apu.sample_rate().is_some()
+    }
+
     /// Starts producing audio at `rate` Hz (e.g. the output device's rate). Until this is
     /// called, no samples are generated.
     pub fn set_audio_sample_rate(&mut self, rate: u32) {
@@ -603,6 +609,24 @@ impl GameBoy {
     /// Moves the audio produced so far into `out` as interleaved stereo `f32` samples.
     pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
         self.bus.apu.drain_samples(out);
+    }
+
+    /// What each sound channel is doing, for the sound viewer.
+    pub fn sound_channels(&self) -> [ChannelInfo; 4] {
+        self.bus.apu.channels()
+    }
+
+    /// The last [`SCOPE_LEN`] outputs (0–15) of sound channel `channel` (0–3), oldest
+    /// first.
+    pub fn sound_scope(&self, channel: usize) -> impl Iterator<Item = u8> + '_ {
+        self.bus.apu.scope(channel)
+    }
+
+    /// Mutes sound channels (0–3) in the output; kept when a save state is loaded.
+    pub fn set_muted_channels(&mut self, muted: [bool; 4]) {
+        for (channel, &m) in muted.iter().enumerate() {
+            self.bus.apu.set_muted(channel, m);
+        }
     }
 
     /// The save file for a battery-backed cartridge, or `None` without a battery: its

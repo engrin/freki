@@ -385,6 +385,49 @@ pub struct Apu {
     /// High-pass filter state (removes the DC offset, like the real hardware's capacitor).
     capacitor: [f32; 2],
     charge_factor: f32,
+    /// Channels the player muted in the sound viewer (not part of save states).
+    #[serde(skip)]
+    muted: [bool; 4],
+    /// The last [`SCOPE_LEN`] outputs (0–15) of each channel, one per sample, oldest
+    /// first from `scope_pos`; for the sound viewer's oscilloscopes.
+    #[serde(skip, default = "empty_scope")]
+    scope: Box<[[u8; SCOPE_LEN]; 4]>,
+    #[serde(skip)]
+    scope_pos: usize,
+}
+
+/// Outputs kept per channel for the sound viewer.
+pub const SCOPE_LEN: usize = 512;
+
+fn empty_scope() -> Box<[[u8; SCOPE_LEN]; 4]> {
+    Box::new([[0; SCOPE_LEN]; 4])
+}
+
+/// What a channel is doing, for the sound viewer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelInfo {
+    /// Playing (NR52 reports it on).
+    pub on: bool,
+    pub dac_on: bool,
+    /// Routed to the left / right output (NR51).
+    pub left: bool,
+    pub right: bool,
+    /// Pitch in Hz (for noise: how often the shift register steps).
+    pub frequency: f64,
+    /// Current volume 0–15 (channel 3: 15, 7, 3 or 0 for its output level).
+    pub volume: u8,
+    /// Envelope: initial volume, rising, pace (0 = off). Channels 1, 2 and 4.
+    pub envelope: Option<(u8, bool, u8)>,
+    /// Square duty: 0–3 for 12.5 %, 25 %, 50 %, 75 %. Channels 1 and 2.
+    pub duty: Option<u8>,
+    /// Sweep: pace, decreasing, step. Channel 1.
+    pub sweep: Option<(u8, bool, u8)>,
+    /// Length timer: enabled, remaining.
+    pub length: (bool, u16),
+    /// Channel 3: the 32 samples in wave RAM.
+    pub wave: Option<[u8; 32]>,
+    /// Channel 4: 7-bit (short) mode.
+    pub short_noise: Option<bool>,
 }
 
 impl Default for Apu {
@@ -410,6 +453,9 @@ impl Apu {
             samples: Vec::new(),
             capacitor: [0.0; 2],
             charge_factor: 1.0,
+            muted: [false; 4],
+            scope: empty_scope(),
+            scope_pos: 0,
         };
         // Register state after the DMG boot ROM.
         for (addr, value) in [
@@ -442,6 +488,10 @@ impl Apu {
         apu
     }
 
+    pub fn sample_rate(&self) -> Option<u32> {
+        self.sample_rate
+    }
+
     /// Starts producing interleaved stereo samples at `rate` Hz.
     pub fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = Some(rate);
@@ -465,6 +515,93 @@ impl Apu {
         self.sample_clock = old.sample_clock;
         self.charge_factor = old.charge_factor;
         self.samples.clear();
+        self.muted = old.muted;
+    }
+
+    /// Mutes channel `n` (0–3) in the output, or lets it play again.
+    pub fn set_muted(&mut self, channel: usize, muted: bool) {
+        self.muted[channel] = muted;
+    }
+
+    pub fn muted(&self) -> [bool; 4] {
+        self.muted
+    }
+
+    /// The last [`SCOPE_LEN`] outputs (0–15) of `channel`, oldest first.
+    pub fn scope(&self, channel: usize) -> impl Iterator<Item = u8> + '_ {
+        let ring = &self.scope[channel];
+        ring[self.scope_pos..]
+            .iter()
+            .chain(&ring[..self.scope_pos])
+            .copied()
+    }
+
+    /// What each channel is doing now.
+    pub fn channels(&self) -> [ChannelInfo; 4] {
+        let nr51 = self.regs[0x15];
+        let routed = |n: usize| (nr51 & (0x10 << n) != 0, nr51 & (0x01 << n) != 0);
+        let square = |ch: &Square, n: usize| {
+            let (left, right) = routed(n);
+            ChannelInfo {
+                on: ch.on,
+                dac_on: ch.envelope.dac_on(),
+                left,
+                right,
+                frequency: 131_072.0 / f64::from(2048 - u32::from(ch.period)),
+                volume: if ch.on { ch.envelope.volume } else { 0 },
+                envelope: Some((ch.envelope.initial, ch.envelope.increase, ch.envelope.pace)),
+                duty: Some(ch.duty),
+                sweep: (n == 0).then_some((ch.sweep_pace, ch.sweep_decrease, ch.sweep_step)),
+                length: (ch.length.enabled, ch.length.counter),
+                wave: None,
+                short_noise: None,
+            }
+        };
+        let wave = {
+            let ch = &self.ch3;
+            let (left, right) = routed(2);
+            let mut samples = [0; 32];
+            for (i, s) in samples.iter_mut().enumerate() {
+                let byte = ch.ram[i / 2];
+                *s = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F };
+            }
+            ChannelInfo {
+                on: ch.on,
+                dac_on: ch.dac_on,
+                left,
+                right,
+                frequency: 65_536.0 / f64::from(2048 - u32::from(ch.period)),
+                volume: match (ch.on, ch.level) {
+                    (false, _) | (_, 0) => 0,
+                    (_, level) => 15 >> (level - 1),
+                },
+                envelope: None,
+                duty: None,
+                sweep: None,
+                length: (ch.length.enabled, ch.length.counter),
+                wave: Some(samples),
+                short_noise: None,
+            }
+        };
+        let noise = {
+            let ch = &self.ch4;
+            let (left, right) = routed(3);
+            ChannelInfo {
+                on: ch.on,
+                dac_on: ch.envelope.dac_on(),
+                left,
+                right,
+                frequency: f64::from(CLOCK_HZ) / f64::from(ch.timer_period()),
+                volume: if ch.on { ch.envelope.volume } else { 0 },
+                envelope: Some((ch.envelope.initial, ch.envelope.increase, ch.envelope.pace)),
+                duty: None,
+                sweep: None,
+                length: (ch.length.enabled, ch.length.counter),
+                wave: None,
+                short_noise: Some(ch.short_mode),
+            }
+        };
+        [square(&self.ch1, 0), square(&self.ch2, 1), wave, noise]
     }
 
     /// Switches to the Game Boy Color's sound hardware. Its wave RAM powers on as
@@ -542,6 +679,9 @@ impl Apu {
                     samples: std::mem::take(&mut self.samples),
                     capacitor: self.capacitor,
                     charge_factor: self.charge_factor,
+                    muted: self.muted,
+                    scope_pos: self.scope_pos,
+                    scope: std::mem::replace(&mut self.scope, empty_scope()),
                     ..Self::powered_off()
                 };
                 self.ch3.ram = ram;
@@ -689,6 +829,9 @@ impl Apu {
             samples: Vec::new(),
             capacitor: [0.0; 2],
             charge_factor: 1.0,
+            muted: [false; 4],
+            scope: empty_scope(),
+            scope_pos: 0,
         }
     }
 
@@ -766,12 +909,25 @@ impl Apu {
     }
 
     fn push_sample(&mut self) {
-        let channels = [
-            Self::dac(self.ch1.envelope.dac_on(), self.ch1.output()),
-            Self::dac(self.ch2.envelope.dac_on(), self.ch2.output()),
-            Self::dac(self.ch3.dac_on, self.ch3.output()),
-            Self::dac(self.ch4.envelope.dac_on(), self.ch4.output()),
+        let outputs = [
+            self.ch1.output(),
+            self.ch2.output(),
+            self.ch3.output(),
+            self.ch4.output(),
         ];
+        for (ring, &out) in self.scope.iter_mut().zip(&outputs) {
+            ring[self.scope_pos] = out;
+        }
+        self.scope_pos = (self.scope_pos + 1) % SCOPE_LEN;
+        let dacs = [
+            self.ch1.envelope.dac_on(),
+            self.ch2.envelope.dac_on(),
+            self.ch3.dac_on,
+            self.ch4.envelope.dac_on(),
+        ];
+        // A muted channel sounds like one whose DAC is off.
+        let channels: [f32; 4] =
+            std::array::from_fn(|i| Self::dac(dacs[i] && !self.muted[i], outputs[i]));
         let nr50 = self.regs[0x14];
         let nr51 = self.regs[0x15];
         for side in 0..2 {
@@ -797,6 +953,48 @@ impl Apu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_info_and_muting() {
+        let mut apu = Apu::new();
+        apu.set_sample_rate(48_000);
+        apu.write(0xFF25, 0x22); // channel 2 to both sides
+        apu.write(0xFF16, 0x80); // 50 % duty
+        apu.write(0xFF17, 0xF3); // volume 15, falling, pace 3
+        // Period 1750: 131072 / 298 = 439.8 Hz (A4).
+        apu.write(0xFF18, (1750 & 0xFF) as u8);
+        apu.write(0xFF19, 0x80 | (1750 >> 8) as u8);
+        let ch2 = &apu.channels()[1];
+        assert!(ch2.on && ch2.dac_on && ch2.left && ch2.right);
+        assert!((ch2.frequency - 439.8).abs() < 0.1, "{}", ch2.frequency);
+        assert_eq!(
+            (ch2.volume, ch2.duty, ch2.envelope),
+            (15, Some(2), Some((15, false, 3)))
+        );
+        assert!(apu.channels()[0].sweep.is_some());
+        assert_eq!(apu.channels()[1].sweep, None);
+
+        let mut loud = Vec::new();
+        apu.tick(20_000);
+        apu.drain_samples(&mut loud);
+        assert!(loud.iter().any(|s| s.abs() > 0.05));
+        assert!(
+            apu.scope(1).any(|v| v == 15),
+            "the scope saw the square wave"
+        );
+
+        apu.set_muted(1, true);
+        let mut quiet = Vec::new();
+        apu.tick(200_000); // let the high-pass filter settle
+        apu.drain_samples(&mut Vec::new());
+        apu.tick(20_000);
+        apu.drain_samples(&mut quiet);
+        assert!(quiet.iter().all(|s| s.abs() < 0.01), "muted");
+        assert!(
+            apu.scope(1).any(|v| v == 15),
+            "the scope still shows a muted channel"
+        );
+    }
 
     #[test]
     fn nr52_reports_triggered_channel_and_length_expiry() {
