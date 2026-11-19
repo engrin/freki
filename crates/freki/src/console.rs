@@ -507,7 +507,7 @@ fn describe(gb: &GameBoy, i: usize) -> String {
     } else {
         "  [made for another version of the game]"
     };
-    format!("{state} {} {}", c.text, c.name)
+    format!("{state} {:<22} {} {}", c.kind(), c.text, c.name)
         .trim_end()
         .to_string()
         + other
@@ -515,7 +515,8 @@ fn describe(gb: &GameBoy, i: usize) -> String {
 
 fn list_cheats(gb: &GameBoy) -> String {
     let cheats = gb.cheats();
-    if cheats.list().is_empty() && cheats.templates().is_empty() {
+    let unsupported = cheats.unsupported();
+    if cheats.list().is_empty() && cheats.templates().is_empty() && unsupported.is_empty() {
         return "no cheats (cheat add CODE [name])".into();
     }
     let mut out = format!(
@@ -528,6 +529,15 @@ fn list_cheats(gb: &GameBoy) -> String {
     );
     for i in 0..cheats.list().len() {
         out.push_str(&format!("\n  {i:>2}  {}", describe(gb, i)));
+    }
+    if !unsupported.is_empty() {
+        out.push_str("\nnot supported (kept in the file, they do nothing):");
+        for entry in &unsupported {
+            out.push_str(&format!(
+                "\n   –  --- {:<22} {} {}",
+                entry.kind, entry.code, entry.name
+            ));
+        }
     }
     let templates = cheats.templates();
     if !templates.is_empty() {

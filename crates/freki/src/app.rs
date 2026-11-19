@@ -1737,7 +1737,12 @@ impl FrekiApp {
             .show(ui, |ui| {
                 let gap = ui.spacing().item_spacing.x;
                 let name_width = ui.available_width()
-                    - (CHECK_WIDTH + CODE_WIDTH + WARNING_WIDTH + BUTTON_WIDTH + 4.0 * gap);
+                    - (CHECK_WIDTH
+                        + CODE_WIDTH
+                        + TYPE_WIDTH
+                        + WARNING_WIDTH
+                        + BUTTON_WIDTH
+                        + 5.0 * gap);
                 for i in 0..gb.cheats().list().len() {
                     ui.horizontal(|ui| {
                         fixed(ui, CHECK_WIDTH, |ui| {
@@ -1748,6 +1753,7 @@ impl FrekiApp {
                         });
                         let cheat = &gb.cheats().list()[i];
                         cell(ui, CODE_WIDTH, &cheat.text, true);
+                        kind_cell(ui, cheat.kind(), false);
                         let fits = gb.cheat_fits(cheat);
                         fixed(ui, WARNING_WIDTH, |ui| {
                             if !fits {
@@ -1765,6 +1771,25 @@ impl FrekiApp {
                                 remove = Some(i);
                             }
                         });
+                    });
+                }
+                // Entries of the file freki cannot use: shown, greyed out, with the reason.
+                for entry in gb.cheats().unsupported() {
+                    ui.horizontal(|ui| {
+                        fixed(ui, CHECK_WIDTH, |ui| {
+                            ui.add_enabled(false, egui::Checkbox::without_text(&mut false));
+                        });
+                        ui.add_enabled_ui(false, |ui| cell(ui, CODE_WIDTH, &entry.code, true));
+                        kind_cell(ui, entry.kind, true);
+                        fixed(ui, WARNING_WIDTH, |ui| {
+                            ui.colored_label(ui.visuals().warn_fg_color, "⚠")
+                                .on_hover_text(format!(
+                                    "Not supported, so it does nothing: {}. It stays in \
+                                     the cheat file.",
+                                    entry.reason
+                                ));
+                        });
+                        ui.add_enabled_ui(false, |ui| cell(ui, name_width, &entry.name, false));
                     });
                 }
             });
@@ -2516,6 +2541,8 @@ impl eframe::App for FrekiApp {
 const CODE_WIDTH: f32 = 190.0;
 /// Width of the ⚠ column in the cheat manager.
 const WARNING_WIDTH: f32 = 16.0;
+/// Width of the cheat type column ("GameShark", "Game Genie", "GS + GG", "Xploder").
+const TYPE_WIDTH: f32 = 72.0;
 /// Widths of the checkbox and remove-button columns, the template value field and the
 /// Add buttons in the cheat manager.
 const CHECK_WIDTH: f32 = 20.0;
@@ -2533,6 +2560,25 @@ fn fixed(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) {
             contents(ui);
         },
     );
+}
+
+/// The type column of the cheat list; `unsupported` ones in the warning colour.
+fn kind_cell(ui: &mut egui::Ui, kind: &str, unsupported: bool) {
+    let short = if kind == "GameShark + Game Genie" {
+        "GS + GG"
+    } else {
+        kind
+    };
+    fixed(ui, TYPE_WIDTH, |ui| {
+        let text = egui::RichText::new(short).small();
+        let text = if unsupported {
+            text.color(ui.visuals().warn_fg_color)
+        } else {
+            text.weak()
+        };
+        ui.add(egui::Label::new(text).truncate())
+            .on_hover_text(kind);
+    });
 }
 
 /// A table cell `width` wide: `text` cut off with "…" when longer, shown whole on hover.

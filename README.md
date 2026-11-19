@@ -237,7 +237,9 @@ cheat databases, such as `metal-gear-solid-usa.cht` next to `Metal Gear Solid (U
 is imported when the game has no `game.cht` yet.
 
 GameShark (`01VVLLHH`; on the GBC also `9xVVLLHH` for work RAM bank `x`) and Game Genie
-(`ABC-DEF` or `ABC-DEF-GHI`) codes are supported; Xploder codes (`$0D22A281`) are not.
+(`ABC-DEF` or `ABC-DEF-GHI`) codes are supported; Xploder codes (`$0D22A281`) are not. The
+cheat manager and `cheat list` show each cheat's type; entries of the file freki cannot use
+are listed greyed out with the reason, and stay in the file.
 
 A Game Genie code changes a ROM byte in every bank where that byte has the code's compare
 value. For a cheat whose codes change neighbouring bytes (an instruction and its operands),

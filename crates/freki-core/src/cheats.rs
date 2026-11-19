@@ -189,6 +189,28 @@ pub fn genie_run(codes: &[Code], address: u16) -> Vec<(u16, u8)> {
     run
 }
 
+impl Code {
+    /// "GameShark" or "Game Genie".
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Code::GameShark { .. } => "GameShark",
+            Code::GameGenie { .. } => "Game Genie",
+        }
+    }
+}
+
+/// An entry of the cheat file freki cannot use (another device's code, or garbage); kept
+/// in the file and listed so the player sees why it does nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unsupported {
+    pub name: String,
+    pub code: String,
+    /// What the code looks like: "Xploder", or "unknown".
+    pub kind: &'static str,
+    /// Why freki cannot use it.
+    pub reason: String,
+}
+
 /// A cheat as entered by the user.
 #[derive(Debug, Clone)]
 pub struct Cheat {
@@ -198,6 +220,25 @@ pub struct Cheat {
     pub text: String,
     pub name: String,
     pub enabled: bool,
+}
+
+impl Cheat {
+    /// The kind of its codes: "GameShark", "Game Genie", or both when mixed.
+    pub fn kind(&self) -> &'static str {
+        let shark = self
+            .codes
+            .iter()
+            .any(|c| matches!(c, Code::GameShark { .. }));
+        let genie = self
+            .codes
+            .iter()
+            .any(|c| matches!(c, Code::GameGenie { .. }));
+        match (shark, genie) {
+            (true, true) => "GameShark + Game Genie",
+            (false, true) => "Game Genie",
+            _ => "GameShark",
+        }
+    }
 }
 
 /// Parses a cheat's codes: `+`-separated, and within each part either one code or several
@@ -366,6 +407,27 @@ impl Cheats {
 
     pub fn list(&self) -> &[Cheat] {
         &self.list
+    }
+
+    /// The entries of the cheat file freki cannot use (not templates or notes).
+    pub fn unsupported(&self) -> Vec<Unsupported> {
+        self.unparsed
+            .iter()
+            .filter(|u| Template::parse(&u.code, &u.name).is_none() && !is_note(&u.code))
+            .filter_map(|u| {
+                let error = parse_codes(&u.code).err()?;
+                let kind = match error {
+                    CheatError::Xploder(_) => "Xploder",
+                    _ => "unknown",
+                };
+                Some(Unsupported {
+                    name: u.name.clone(),
+                    code: u.code.clone(),
+                    kind,
+                    reason: error.to_string(),
+                })
+            })
+            .collect()
     }
 
     /// The cheats of the file that need a value filled in (see [`Template`]).
@@ -824,6 +886,31 @@ mod tests {
     /// Super Mario Bros. Deluxe (Rev 2), "Jump In Midair": `LD A,($C1C1)` at $457D in bank
     /// 3 becomes `CALL $5555`. Bank 9 has `LD A,($C408)` there; patching only its opcode
     /// made `CALL $C408` into RAM and crashed the game.
+    #[test]
+    fn kinds_and_unsupported_entries() {
+        let mut cheats = Cheats::new();
+        let errors = cheats.load_text(
+            "cheats = 4\n\
+             cheat0_desc = \"Lives\"\ncheat0_code = \"90097FC1\"\ncheat0_enable = true\n\
+             cheat1_desc = \"Fire\"\ncheat1_code = \"006-1AA-7F2\"\ncheat1_enable = false\n\
+             cheat2_desc = \"Both\"\ncheat2_code = \"010A10C1+00A-17B-C49\"\ncheat2_enable = false\n\
+             cheat3_desc = \"Invincible\"\ncheat3_code = \"$0D22A281\"\ncheat3_enable = true\n",
+        );
+        assert_eq!(errors.len(), 1);
+        let kinds: Vec<&str> = cheats.list().iter().map(Cheat::kind).collect();
+        assert_eq!(kinds, ["GameShark", "Game Genie", "GameShark + Game Genie"]);
+        let unsupported = cheats.unsupported();
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(
+            (
+                unsupported[0].name.as_str(),
+                unsupported[0].code.as_str(),
+                unsupported[0].kind
+            ),
+            ("Invincible", "$0D22A281", "Xploder")
+        );
+    }
+
     #[test]
     fn xploder_codes_are_named() {
         assert_eq!(
