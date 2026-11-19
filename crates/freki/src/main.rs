@@ -25,6 +25,7 @@ mod record;
 mod rom_file;
 mod session;
 mod settings;
+mod state_previews;
 mod states;
 mod window;
 

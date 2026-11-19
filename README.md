@@ -38,7 +38,8 @@ Named after Freki, one of Odin's two wolves.
 - **Soft patching:** a `.bps` or `.ips` patch next to the ROM is applied when the game
   loads (translations, romhacks); the ROM file is never changed
 - **Battery saves** written automatically (RetroArch's `.srm` saves work too), **10
-  save-state slots**, **rewind** (up to 20 seconds) and **fast-forward** (2×–8×)
+  save-state slots** with previews in the States menu (a picture of the screen and how
+  long ago it was saved; double-click a slot to load it), **rewind** (up to 20 seconds) and **fast-forward** (2×–8×)
 - **Fullscreen** and window scales from 2× to 6×, with sharp integer scaling (can be
   switched off)
 - **Settings per game:** a game can keep its own console, palette, colour correction and
@@ -129,6 +130,7 @@ palette, scale, controls, recent ROMs and boot ROMs are remembered between runs.
 |---|---|
 | `game.sav` | Battery save, written about once a second while the game saves, and on exit. A cartridge clock is stored at the end in the format VBA-M, BGB and mGBA use for MBC3 |
 | `game.ss0` … `game.ss9` | Save states (about 150 KB each; they load only into the same game and freki state format) |
+| `game.ss0.png` … | The screen when the state was saved, shown in the States menu |
 | `game.srm` | RetroArch's battery save, used (and saved to) when there is no `game.sav` |
 | `game.2.sav` | Battery save of the second copy when a game is linked with itself |
 | `game.cht` | Cheats, saved whenever one is added, removed or switched on or off |

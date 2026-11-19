@@ -25,7 +25,7 @@ use crate::rom_file;
 use crate::session::Start;
 use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
-use crate::states::SLOTS;
+use crate::state_previews::{Pick, StatePreviews};
 use crate::window::tool_window;
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
@@ -208,6 +208,7 @@ pub struct FrekiApp {
     /// A Game Boy Printer is plugged into the link cable port (Link cable menu).
     printer: bool,
     printer_view: PrinterView,
+    state_previews: StatePreviews,
 }
 
 impl FrekiApp {
@@ -265,6 +266,7 @@ impl FrekiApp {
             search_ui: SearchUi::default(),
             printer: false,
             printer_view: PrinterView::default(),
+            state_previews: StatePreviews::default(),
         };
         println!("freki: type `help` here for cheat and memory commands");
         if let Some(path) = rom {
@@ -512,6 +514,24 @@ impl FrekiApp {
 
     /// Save states and rewind would move one Game Boy away from the other: they are off
     /// while linked. Returns whether they are (and says so).
+    /// Saves the state in the current slot, with the screen as shown as its preview.
+    fn save_state(&mut self) {
+        if self.link_blocks_states() {
+            return;
+        }
+        let (palette, correct) = (self.settings.palette, self.settings.color_correction);
+        self.with_session(|s| {
+            let (rgba, size) = settings::screen_rgba(s.gb.screen(), palette, correct);
+            s.save_state((&rgba, size))
+        });
+    }
+
+    fn load_state(&mut self) {
+        if !self.link_blocks_states() {
+            self.with_session(|s| s.load_state());
+        }
+    }
+
     fn link_blocks_states(&mut self) -> bool {
         if self.link.is_some() {
             self.set_status("save states and rewind are off while two Game Boys are linked");
@@ -700,11 +720,11 @@ impl FrekiApp {
             return;
         }
         let pressed = |key| ctx.input(|i| i.key_pressed(key));
-        if pressed(Key::F5) && !self.link_blocks_states() {
-            self.with_session(|s| s.save_state());
+        if pressed(Key::F5) {
+            self.save_state();
         }
-        if pressed(Key::F8) && !self.link_blocks_states() {
-            self.with_session(|s| s.load_state());
+        if pressed(Key::F8) {
+            self.load_state();
         }
         if pressed(Key::F4) && self.link.is_some() {
             self.keyboard_second = !self.keyboard_second;
@@ -723,7 +743,7 @@ impl FrekiApp {
                 } else {
                     s.slots.previous();
                 }
-                Ok(format!("slot {}", s.slots.slot()))
+                Ok(s.slots.describe(s.slots.slot()))
             });
         }
         if pressed(Key::F9) {
@@ -1232,39 +1252,48 @@ impl FrekiApp {
                 });
             });
 
-            ui.menu_button("States", |ui| {
-                if ui
-                    .add_enabled(loaded, egui::Button::new("Save state").shortcut_text("F5"))
-                    .clicked()
-                {
-                    ui.close();
-                    if !self.link_blocks_states() {
-                        self.with_session(|s| s.save_state());
+            // Clicks on the slot grid keep the menu open, so a slot can be double-clicked.
+            let states_menu = egui::containers::menu::MenuConfig::new()
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+            egui::containers::menu::MenuButton::new("States")
+                .config(states_menu)
+                .ui(ui, |ui| {
+                    if ui
+                        .add_enabled(loaded, egui::Button::new("Save state").shortcut_text("F5"))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.save_state();
                     }
-                }
-                if ui
-                    .add_enabled(loaded, egui::Button::new("Load state").shortcut_text("F8"))
-                    .clicked()
-                {
-                    ui.close();
-                    if !self.link_blocks_states() {
-                        self.with_session(|s| s.load_state());
+                    if ui
+                        .add_enabled(loaded, egui::Button::new("Load state").shortcut_text("F8"))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.load_state();
                     }
-                }
-                ui.separator();
-                ui.label("Slot (F6 / F7)");
-                if let Some(session) = self.session.as_mut() {
-                    let mut slot = session.slots.slot();
-                    ui.horizontal_wrapped(|ui| {
-                        for n in 0..SLOTS {
-                            ui.radio_value(&mut slot, n, n.to_string());
+                    ui.separator();
+                    ui.label("Slot (F6 / F7)");
+                    let pick = match self.session.as_ref() {
+                        Some(session) => self.state_previews.grid(ui, &session.slots),
+                        None => None,
+                    };
+                    match pick {
+                        Some(Pick::Select(slot)) => {
+                            if let Some(session) = self.session.as_mut() {
+                                session.slots.select(slot);
+                            }
                         }
-                    });
-                    while session.slots.slot() != slot {
-                        session.slots.next();
+                        Some(Pick::Load(slot)) => {
+                            if let Some(session) = self.session.as_mut() {
+                                session.slots.select(slot);
+                            }
+                            ui.close();
+                            self.load_state();
+                        }
+                        None => {}
                     }
-                }
-            });
+                });
 
             ui.menu_button("Cheats", |ui| {
                 if let Some(session) = self.session.as_mut() {

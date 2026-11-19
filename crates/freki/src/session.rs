@@ -119,12 +119,7 @@ impl Session {
         [width, height]: [usize; 2],
     ) -> Result<PathBuf, Box<dyn Error>> {
         let path = self.next_file("png").ok_or("too many screenshots")?;
-        let file = fs::File::create(&path)?;
-        let mut encoder =
-            png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header()?.write_image_data(rgba)?;
+        fs::write(&path, crate::states::encode_png(rgba, [width, height])?)?;
         Ok(path)
     }
 
@@ -191,8 +186,9 @@ impl Session {
         Ok(())
     }
 
-    pub fn save_state(&self) -> Result<String, Box<dyn Error>> {
-        self.slots.save(&self.gb)?;
+    /// Saves the state in the current slot, with `picture` (the screen as shown) as preview.
+    pub fn save_state(&self, picture: (&[u8], [usize; 2])) -> Result<String, Box<dyn Error>> {
+        self.slots.save(&self.gb, picture)?;
         Ok(format!("saved state {}", self.slots.slot()))
     }
 

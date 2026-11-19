@@ -1,8 +1,10 @@
-//! Save state slots on disk, next to the ROM: `<rom>.ss0` … `<rom>.ss9`.
+//! Save state slots on disk, next to the ROM: `<rom>.ss0` … `<rom>.ss9`, each with a
+//! picture of the screen at the time as `<rom>.ssN.png`.
 
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use freki_core::GameBoy;
 
@@ -33,12 +35,58 @@ impl StateSlots {
         self.slot = (self.slot + SLOTS - 1) % SLOTS;
     }
 
-    fn path(&self) -> PathBuf {
-        self.rom_path.with_extension(format!("ss{}", self.slot))
+    pub fn select(&mut self, slot: u8) {
+        self.slot = slot % SLOTS;
     }
 
-    pub fn save(&self, gb: &GameBoy) -> Result<(), Box<dyn Error>> {
-        write_atomic(&self.path(), &gb.save_state())
+    pub fn rom_path(&self) -> &Path {
+        &self.rom_path
+    }
+
+    fn path(&self) -> PathBuf {
+        self.path_of(self.slot)
+    }
+
+    fn path_of(&self, slot: u8) -> PathBuf {
+        self.rom_path.with_extension(format!("ss{slot}"))
+    }
+
+    fn preview_path(&self, slot: u8) -> PathBuf {
+        self.rom_path.with_extension(format!("ss{slot}.png"))
+    }
+
+    /// Saves the state in the current slot, with `picture` (RGBA and its size) as preview.
+    pub fn save(
+        &self,
+        gb: &GameBoy,
+        (rgba, size): (&[u8], [usize; 2]),
+    ) -> Result<(), Box<dyn Error>> {
+        write_atomic(&self.path(), &gb.save_state())?;
+        write_atomic(&self.preview_path(self.slot), &encode_png(rgba, size)?)
+    }
+
+    /// When the state in `slot` was saved, or `None` for an empty slot.
+    pub fn saved_at(&self, slot: u8) -> Option<SystemTime> {
+        fs::metadata(self.path_of(slot)).ok()?.modified().ok()
+    }
+
+    /// The preview of `slot` as RGBA with its size, if there is one that belongs to the
+    /// state (a state saved without a picture, e.g. headless, leaves an older one behind).
+    pub fn preview(&self, slot: u8) -> Option<(Vec<u8>, [usize; 2])> {
+        let saved = self.saved_at(slot)?;
+        let path = self.preview_path(slot);
+        if fs::metadata(&path).ok()?.modified().ok()? < saved {
+            return None;
+        }
+        decode_png(&fs::read(path).ok()?)
+    }
+
+    /// "slot 3, saved 5 min ago" or "slot 3, empty".
+    pub fn describe(&self, slot: u8) -> String {
+        match self.saved_at(slot) {
+            Some(time) => format!("slot {slot}, saved {}", age(time)),
+            None => format!("slot {slot}, empty"),
+        }
     }
 
     pub fn load(&self, gb: &mut GameBoy) -> Result<(), Box<dyn Error>> {
@@ -47,6 +95,45 @@ impl StateSlots {
         gb.load_state(&data)?;
         Ok(())
     }
+}
+
+/// How long ago `time` was, in words: "just now", "5 min ago", "3 h ago", "2 days ago".
+pub fn age(time: SystemTime) -> String {
+    let secs = SystemTime::now()
+        .duration_since(time)
+        .unwrap_or(Duration::ZERO)
+        .as_secs();
+    match secs {
+        0..60 => "just now".to_string(),
+        60..3_600 => format!("{} min ago", secs / 60),
+        3_600..86_400 => format!("{} h ago", secs / 3_600),
+        86_400..172_800 => "yesterday".to_string(),
+        _ => format!("{} days ago", secs / 86_400),
+    }
+}
+
+/// `rgba` (`width` × `height`) as a PNG file.
+pub fn encode_png(rgba: &[u8], [width, height]: [usize; 2]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header()?.write_image_data(rgba)?;
+    Ok(out)
+}
+
+/// An 8-bit RGBA PNG (as [`encode_png`] writes them) back to pixels and size.
+fn decode_png(data: &[u8]) -> Option<(Vec<u8>, [usize; 2])> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(data))
+        .read_info()
+        .ok()?;
+    let mut rgba = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut rgba).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    rgba.truncate(info.buffer_size());
+    Some((rgba, [info.width as usize, info.height as usize]))
 }
 
 /// Writes to a temporary file and renames it, so a crash never leaves a half-written file.
@@ -85,8 +172,14 @@ mod tests {
 
         let mut gb = GameBoy::new(rom()).unwrap();
         gb.run_frame().unwrap();
-        slots.save(&gb).unwrap();
+        assert!(slots.saved_at(1).is_none());
+        let picture = vec![7u8; 4 * 4 * 2];
+        slots.save(&gb, (&picture, [4, 2])).unwrap();
         assert!(dir.join("game.ss1").exists());
+        assert!(slots.saved_at(1).is_some());
+        assert_eq!(slots.preview(1), Some((picture, [4, 2])));
+        assert_eq!(slots.describe(1), "slot 1, saved just now");
+        assert_eq!(slots.describe(2), "slot 2, empty");
         let saved = gb.save_state();
         gb.run_frame().unwrap();
         slots.load(&mut gb).unwrap();
