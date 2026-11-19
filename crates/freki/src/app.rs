@@ -26,7 +26,7 @@ use crate::session::Start;
 use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
 use crate::state_previews::{Pick, StatePreviews};
-use crate::window::tool_window;
+use crate::window::{take_forwarded_hotkeys, tool_window};
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
@@ -700,13 +700,17 @@ impl FrekiApp {
     // ---- input and emulation ---------------------------------------------------------
 
     fn handle_hotkeys(&mut self, ctx: &egui::Context) {
-        if ctx.input_mut(|i| i.consume_shortcut(&OPEN)) {
+        // Hotkeys pressed while a tool window had focus count as pressed here.
+        let forwarded = take_forwarded_hotkeys(ctx);
+        let tool_command = |key| forwarded.iter().any(|&(m, k)| k == key && m.command);
+        let tool_key = |key| forwarded.iter().any(|&(m, k)| k == key && !m.command);
+        if ctx.input_mut(|i| i.consume_shortcut(&OPEN)) || tool_command(OPEN.logical_key) {
             self.pick_rom(ctx);
         }
-        if ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
+        if ctx.input_mut(|i| i.consume_shortcut(&QUIT)) || tool_command(QUIT.logical_key) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if ctx.input_mut(|i| i.consume_shortcut(&RESET)) {
+        if ctx.input_mut(|i| i.consume_shortcut(&RESET)) || tool_command(RESET.logical_key) {
             self.reset(ctx);
         }
         if ctx.input_mut(|i| i.consume_shortcut(&FULLSCREEN)) {
@@ -719,7 +723,7 @@ impl FrekiApp {
         if ctx.text_edit_focused() {
             return;
         }
-        let pressed = |key| ctx.input(|i| i.key_pressed(key));
+        let pressed = |key| ctx.input(|i| i.key_pressed(key)) || tool_key(key);
         if pressed(Key::F5) {
             self.save_state();
         }
@@ -750,7 +754,10 @@ impl FrekiApp {
             self.toggle_cheats();
         }
         // Shift+F12 records video; F12 alone takes a screenshot.
-        if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F12)) {
+        let tool_shift_f12 = forwarded
+            .iter()
+            .any(|&(m, k)| k == Key::F12 && m.shift && !m.command);
+        if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F12)) || tool_shift_f12 {
             self.toggle_recording();
         } else if pressed(Key::F12) {
             self.screenshot();
@@ -2162,6 +2169,10 @@ impl FrekiApp {
                     ui.end_row();
                 }
             });
+            ui.label(
+                "The function keys, P and the Ctrl shortcuts also work while a tool window \
+                 (debugger, viewers, cheats, printer) has focus.",
+            );
             ui.label("The terminal freki was started from also accepts commands (type help).");
         });
     }
