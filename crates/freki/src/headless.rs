@@ -75,8 +75,9 @@ run:
                           FILE-2.png, … (a page still on the printer at the end too)
   --cheats                load the game's cheat file (ROM.cht, or one named as in cheat
                           databases) with the cheats switched on as saved there
-  --cheat N|CODE          switch on cheat N of that file, or add a GameShark or Game
-                          Genie code (A+B for several); repeatable; active from frame 0
+  --cheat N|CODE          switch on cheat N of that file, or add a GameShark, Game
+                          Genie or Xploder code (A+B for several); repeatable; active
+                          from frame 0
 debugging:
   --break ADDR            stop when PC reaches ADDR; repeatable
   --watch 'ADDR [END] [r|w|rw]'

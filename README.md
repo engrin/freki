@@ -242,9 +242,8 @@ GameShark (`01VVLLHH`; on the GBC also `9xVVLLHH` for work RAM bank `x`) and Gam
 for Blaze's Xploder GB, as German cheat sites and RetroArch's "(Xploder)" files list them).
 Those are encrypted RAM writes; freki decrypts them the way the device's firmware does. The
 rare type `$Ex` is a condition: while the address holds the value, no cheat writes anything,
-as on the device. The
-cheat manager and `cheat list` show each cheat's type; entries of the file freki cannot use
-are listed greyed out with the reason, and stay in the file.
+as on the device. The cheat manager and `cheat list` show each cheat's type; entries of the
+file freki cannot use are listed greyed out with the reason, and stay in the file.
 
 A Game Genie code changes a ROM byte in every bank where that byte has the code's compare
 value. For a cheat whose codes change neighbouring bytes (an instruction and its operands),
