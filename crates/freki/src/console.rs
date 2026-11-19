@@ -14,7 +14,8 @@ use freki_core::{Code, Filter, GameBoy, MemorySearch};
 const HELP: &str = "\
 cheats:
   cheat list                   show cheats (also: cheats)
-  cheat add CODE [name]        add a GameShark (01VVLLHH, GBC: 9xVVLLHH) or Game Genie (ABC-DEF[-GHI]) code
+  cheat add CODE [name]        add a GameShark (01VVLLHH, GBC: 9xVVLLHH), Game Genie (ABC-DEF[-GHI])
+                               or Xploder ($0DVVLLHH) code
   cheat on|off|rm N            enable, disable or remove cheat N
   cheat fill T VALUE           add a cheat from template T (cheat list shows them), e.g. 99
   cheat all on|off             master switch (also F9 in the window)

@@ -1848,7 +1848,7 @@ impl FrekiApp {
             ui.label("Code");
             ui.add(
                 egui::TextEdit::singleline(&mut self.new_code)
-                    .hint_text("01VVLLHH, 9xVVLLHH or ABC-DEF-GHI")
+                    .hint_text("01VVLLHH, ABC-DEF-GHI or $0DVVLLHH")
                     .desired_width(130.0),
             );
             ui.label("Name");
@@ -2541,7 +2541,7 @@ impl eframe::App for FrekiApp {
 const CODE_WIDTH: f32 = 190.0;
 /// Width of the ⚠ column in the cheat manager.
 const WARNING_WIDTH: f32 = 16.0;
-/// Width of the cheat type column ("GameShark", "Game Genie", "GS + GG", "Xploder").
+/// Width of the cheat type column ("GameShark", "Game Genie", "Xploder", "GS + GG").
 const TYPE_WIDTH: f32 = 72.0;
 /// Widths of the checkbox and remove-button columns, the template value field and the
 /// Add buttons in the cheat manager.
@@ -2564,10 +2564,13 @@ fn fixed(ui: &mut egui::Ui, width: f32, contents: impl FnOnce(&mut egui::Ui)) {
 
 /// The type column of the cheat list; `unsupported` ones in the warning colour.
 fn kind_cell(ui: &mut egui::Ui, kind: &str, unsupported: bool) {
-    let short = if kind == "GameShark + Game Genie" {
-        "GS + GG"
+    // Mixed kinds are abbreviated: "GS + GG", "GS + XP".
+    let short = if kind.contains('+') {
+        kind.replace("GameShark", "GS")
+            .replace("Game Genie", "GG")
+            .replace("Xploder", "XP")
     } else {
-        kind
+        kind.to_string()
     };
     fixed(ui, TYPE_WIDTH, |ui| {
         let text = egui::RichText::new(short).small();

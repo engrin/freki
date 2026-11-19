@@ -6,6 +6,8 @@
 //! - **Game Genie** codes (`ABC-DEF` or `ABC-DEF-GHI`) patch what the CPU reads from ROM.
 //!   The 9-digit form only applies when the original byte equals the compare value, which
 //!   keeps a patch from hitting other ROM banks mapped at the same address.
+//! - **Xploder** codes (`$0D22A281`, Blaze's Xploder GB) are encrypted RAM writes, applied
+//!   like GameShark codes once decrypted (see [`xploder`]).
 //!
 //! One cheat can hold several codes joined with `+` (or, as in RetroArch's files, 8-digit
 //! GameShark codes separated by spaces). Cheat files are read in freki's own format or in
@@ -13,6 +15,8 @@
 //! back in the format they were read in.
 
 use std::fmt;
+
+use crate::xploder;
 
 /// A RAM location: an address, plus the work RAM bank for $D000–$DFFF on the Game Boy
 /// Color (`None`: whichever bank is selected, or not banked).
@@ -53,6 +57,11 @@ pub enum Code {
         value: u8,
         compare: Option<u8>,
     },
+    /// An Xploder code, decrypted: writes `value` to `location` once per frame.
+    Xploder {
+        location: Location,
+        value: u8,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,8 +72,7 @@ pub enum CheatError {
     UnsupportedType(u8),
     /// Game Genie address outside ROM ($0000–$7FFF).
     NotRomAddress(u16),
-    /// An Xploder code (`$` and 8 hex digits, as cheat sites list them): another cheat
-    /// device's format, which freki cannot apply.
+    /// An Xploder code of a type freki does not know (only RAM writes are supported).
     Xploder(String),
 }
 
@@ -73,13 +81,14 @@ impl fmt::Display for CheatError {
         match self {
             Self::Format(code) => write!(
                 f,
-                "{code:?} is not a GameShark (01VVLLHH) or Game Genie (ABC-DEF[-GHI]) code"
+                "{code:?} is not a GameShark (01VVLLHH), Game Genie (ABC-DEF[-GHI]) or Xploder \
+                 ($0DVVLLHH) code"
             ),
             Self::UnsupportedType(t) => write!(f, "GameShark code type {t:02X} is not supported"),
             Self::NotRomAddress(a) => write!(f, "Game Genie address ${a:04X} is not in ROM"),
             Self::Xploder(code) => write!(
                 f,
-                "{code:?} is an Xploder code; freki only supports GameShark and Game Genie codes"
+                "{code:?} is an Xploder code of a type freki does not support (only RAM writes)"
             ),
         }
     }
@@ -94,7 +103,7 @@ impl Code {
             && hex.len() == 8
             && hex.chars().all(|c| c.is_ascii_hexdigit())
         {
-            return Err(CheatError::Xploder(code.trim().to_string()));
+            return xploder::decode(hex).ok_or_else(|| CheatError::Xploder(code.trim().into()));
         }
         let digits: Vec<u8> = code
             .chars()
@@ -106,6 +115,12 @@ impl Code {
         match digits.len() {
             8 => {
                 let kind = byte(0);
+                // Encrypted Xploder types, also written without the `$`.
+                if (0x04..=0x0F).contains(&kind) {
+                    let hex: String = digits.iter().map(|d| format!("{d:X}")).collect();
+                    return xploder::decode(&hex)
+                        .ok_or_else(|| CheatError::Xploder(code.trim().into()));
+                }
                 let wram_bank = match kind {
                     0x01 => None,
                     // Bank 0 cannot be mapped at $D000: selecting it gives bank 1.
@@ -195,6 +210,7 @@ impl Code {
         match self {
             Code::GameShark { .. } => "GameShark",
             Code::GameGenie { .. } => "Game Genie",
+            Code::Xploder { .. } => "Xploder",
         }
     }
 }
@@ -223,20 +239,18 @@ pub struct Cheat {
 }
 
 impl Cheat {
-    /// The kind of its codes: "GameShark", "Game Genie", or both when mixed.
+    /// The kind of its codes: "GameShark", "Game Genie", "Xploder", or the kinds joined
+    /// with " + " when mixed.
     pub fn kind(&self) -> &'static str {
-        let shark = self
-            .codes
-            .iter()
-            .any(|c| matches!(c, Code::GameShark { .. }));
-        let genie = self
-            .codes
-            .iter()
-            .any(|c| matches!(c, Code::GameGenie { .. }));
-        match (shark, genie) {
-            (true, true) => "GameShark + Game Genie",
-            (false, true) => "Game Genie",
-            _ => "GameShark",
+        let has = |kind: &str| self.codes.iter().any(|c| c.kind() == kind);
+        match (has("GameShark"), has("Game Genie"), has("Xploder")) {
+            (true, false, false) => "GameShark",
+            (false, true, false) => "Game Genie",
+            (false, false, true) => "Xploder",
+            (true, true, false) => "GameShark + Game Genie",
+            (true, false, true) => "GameShark + Xploder",
+            (false, true, true) => "Game Genie + Xploder",
+            _ => "GameShark + Game Genie + Xploder",
         }
     }
 }
@@ -491,7 +505,9 @@ impl Cheats {
     /// GameShark writes to apply this frame.
     pub fn frame_writes(&self) -> impl Iterator<Item = (Location, u8)> + '_ {
         self.active().filter_map(|c| match *c {
-            Code::GameShark { location, value } => Some((location, value)),
+            Code::GameShark { location, value } | Code::Xploder { location, value } => {
+                Some((location, value))
+            }
             Code::GameGenie { .. } => None,
         })
     }
@@ -855,7 +871,7 @@ mod tests {
                         value,
                         compare,
                     } => (address, value, compare),
-                    Code::GameShark { .. } => panic!("{code} parsed as GameShark"),
+                    other => panic!("{code} parsed as {}", other.kind()),
                 });
                 assert_eq!(ours, sameboy_game_genie(code), "code {code}");
                 checked += 1;
@@ -883,9 +899,6 @@ mod tests {
         );
     }
 
-    /// Super Mario Bros. Deluxe (Rev 2), "Jump In Midair": `LD A,($C1C1)` at $457D in bank
-    /// 3 becomes `CALL $5555`. Bank 9 has `LD A,($C408)` there; patching only its opcode
-    /// made `CALL $C408` into RAM and crashed the game.
     #[test]
     fn kinds_and_unsupported_entries() {
         let mut cheats = Cheats::new();
@@ -894,11 +907,20 @@ mod tests {
              cheat0_desc = \"Lives\"\ncheat0_code = \"90097FC1\"\ncheat0_enable = true\n\
              cheat1_desc = \"Fire\"\ncheat1_code = \"006-1AA-7F2\"\ncheat1_enable = false\n\
              cheat2_desc = \"Both\"\ncheat2_code = \"010A10C1+00A-17B-C49\"\ncheat2_enable = false\n\
-             cheat3_desc = \"Invincible\"\ncheat3_code = \"$0D22A281\"\ncheat3_enable = true\n",
+             cheat3_desc = \"Invincible\"\ncheat3_code = \"$0D22A281\"\ncheat3_enable = true\n\
+             cheat4_desc = \"Odd\"\ncheat4_code = \"$E0123456\"\ncheat4_enable = true\n",
         );
         assert_eq!(errors.len(), 1);
         let kinds: Vec<&str> = cheats.list().iter().map(Cheat::kind).collect();
-        assert_eq!(kinds, ["GameShark", "Game Genie", "GameShark + Game Genie"]);
+        assert_eq!(
+            kinds,
+            [
+                "GameShark",
+                "Game Genie",
+                "GameShark + Game Genie",
+                "Xploder"
+            ]
+        );
         let unsupported = cheats.unsupported();
         assert_eq!(unsupported.len(), 1);
         assert_eq!(
@@ -907,24 +929,13 @@ mod tests {
                 unsupported[0].code.as_str(),
                 unsupported[0].kind
             ),
-            ("Invincible", "$0D22A281", "Xploder")
+            ("Odd", "$E0123456", "Xploder")
         );
     }
 
-    #[test]
-    fn xploder_codes_are_named() {
-        assert_eq!(
-            Code::parse("$0D22A281"),
-            Err(CheatError::Xploder("$0D22A281".into()))
-        );
-        assert!(
-            Code::parse("$0D22A281")
-                .unwrap_err()
-                .to_string()
-                .contains("Xploder")
-        );
-    }
-
+    /// Super Mario Bros. Deluxe (Rev 2), "Jump In Midair": `LD A,($C1C1)` at $457D in bank
+    /// 3 becomes `CALL $5555`. Bank 9 has `LD A,($C408)` there; patching only its opcode
+    /// made `CALL $C408` into RAM and crashed the game.
     #[test]
     fn neighbouring_game_genie_codes_apply_together() {
         let mut cheats = Cheats::new();

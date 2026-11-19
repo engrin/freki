@@ -26,6 +26,7 @@ pub mod state;
 pub mod symbols;
 pub mod tama5;
 pub mod timer;
+pub mod xploder;
 
 pub use apu::{ChannelInfo, SCOPE_LEN};
 pub use boot::{BootRom, BootRomError};

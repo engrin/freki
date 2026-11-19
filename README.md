@@ -59,9 +59,10 @@ Named after Freki, one of Odin's two wolves.
   Switch Pro controllers are recognised and shown with their own buttons (Ⓐ, ✕, Options,
   Menu, …)
 - **Rumble:** rumble cartridges shake your gamepad
-- **Cheats:** GameShark and Game Genie codes, a cheat manager, and a memory search that
-  finds values such as lives or money and turns them into cheats. RetroArch cheat files
-  are read and written, and codes made for another version of the game are marked
+- **Cheats:** GameShark, Game Genie and Xploder codes, a cheat manager, and a memory
+  search that finds values such as lives or money and turns them into cheats. RetroArch
+  cheat files are read and written, and codes made for another version of the game are
+  marked
 - **Screenshots** of the screen as shown, and **video recording** with sound (WebM: AV1
   picture, Opus sound), encoded inside freki without external tools
 
@@ -237,7 +238,9 @@ cheat databases, such as `metal-gear-solid-usa.cht` next to `Metal Gear Solid (U
 is imported when the game has no `game.cht` yet.
 
 GameShark (`01VVLLHH`; on the GBC also `9xVVLLHH` for work RAM bank `x`) and Game Genie
-(`ABC-DEF` or `ABC-DEF-GHI`) codes are supported; Xploder codes (`$0D22A281`) are not. The
+(`ABC-DEF` or `ABC-DEF-GHI`) codes are supported, and so are Xploder codes (`$0D22A281`,
+for Blaze's Xploder GB, as German cheat sites and RetroArch's "(Xploder)" files list them).
+Those are encrypted RAM writes; freki decrypts them the way the device's firmware does. The
 cheat manager and `cheat list` show each cheat's type; entries of the file freki cannot use
 are listed greyed out with the reason, and stay in the file.
 
