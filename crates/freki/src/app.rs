@@ -349,6 +349,25 @@ impl FrekiApp {
         }
     }
 
+    /// Lets the user pick the Super Game Boy's SNES ROM, for the SGB's own sound.
+    fn pick_sgb_rom(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose the Super Game Boy's SNES ROM")
+            .add_filter("SNES ROM", &["sfc", "smc", "bin"])
+            .pick_file()
+        else {
+            return;
+        };
+        match settings::read_sgb_rom(&path) {
+            Ok(_) => {
+                let name = file_name(&path);
+                self.settings.sgb_rom_path = Some(path);
+                self.start_changed(&format!("Super Game Boy sound: {name}"));
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
     /// Applies the console and boot ROM settings to the running game from its next reset.
     fn start_changed(&mut self, what: &str) {
         let start = self.start();
@@ -1714,6 +1733,30 @@ impl FrekiApp {
             ui.weak(format!("{console}: {file}"));
         }
         ui.weak("Dumps of the consoles' boot ROMs (not included).");
+        ui.separator();
+        if ui
+            .button("Super Game Boy sound ROM…")
+            .on_hover_text(
+                "The Super Game Boy cartridge's SNES ROM (e.g. Super Game Boy (World) \
+                 (Rev 2).sfc): its sound engine plays the SGB sound effects and music games \
+                 ask for",
+            )
+            .clicked()
+        {
+            ui.close();
+            self.pick_sgb_rom();
+        }
+        if self.settings.sgb_rom_path.is_some() && ui.button("No Super Game Boy sound").clicked() {
+            ui.close();
+            self.settings.sgb_rom_path = None;
+            self.start_changed("Super Game Boy sound off");
+        }
+        let file = self
+            .settings
+            .sgb_rom_path
+            .as_deref()
+            .map_or("no file chosen".into(), file_name);
+        ui.weak(format!("Super Game Boy sound: {file}"));
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {

@@ -25,6 +25,8 @@ pub struct Settings {
     pub boot_rom_path: Option<PathBuf>,
     /// Game Boy Color boot ROM file chosen by the user.
     pub cgb_boot_rom_path: Option<PathBuf>,
+    /// The Super Game Boy cartridge's SNES ROM, for the SGB's own sound.
+    pub sgb_rom_path: Option<PathBuf>,
     /// Whether games start with the boot ROM (of the console they run on).
     pub use_boot_rom: bool,
     pub palette: Palette,
@@ -105,6 +107,7 @@ impl Default for Settings {
             console: ConsoleModel::Auto,
             boot_rom_path: None,
             cgb_boot_rom_path: None,
+            sgb_rom_path: None,
             use_boot_rom: false,
             palette: Palette::default(),
             scale: 4,
@@ -167,13 +170,33 @@ impl Settings {
                 .map_err(|e| problems.push(format!("boot ROM not used: {e}")))
                 .ok()
         };
+        let dmg_boot_rom = load(&self.boot_rom_path);
+        let cgb_boot_rom = load(&self.cgb_boot_rom_path);
+        let sgb_rom = self.sgb_rom_path.as_ref().and_then(|path| {
+            read_sgb_rom(path)
+                .map_err(|e| problems.push(format!("Super Game Boy sound off: {e}")))
+                .ok()
+        });
         let start = Start {
             model: self.console.model(),
-            dmg_boot_rom: load(&self.boot_rom_path),
-            cgb_boot_rom: load(&self.cgb_boot_rom_path),
+            dmg_boot_rom,
+            cgb_boot_rom,
+            sgb_rom,
         };
         (start, problems)
     }
+}
+
+/// Reads the Super Game Boy's SNES ROM, checking that it holds the sound engine.
+pub fn read_sgb_rom(path: &Path) -> Result<std::sync::Arc<Vec<u8>>, String> {
+    let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if freki_core::sgb_sound::find_engine(&bytes).is_none() {
+        return Err(format!(
+            "{} is not a Super Game Boy SNES ROM (no sound engine in it)",
+            path.display()
+        ));
+    }
+    Ok(std::sync::Arc::new(bytes))
 }
 
 /// Which console games run on.

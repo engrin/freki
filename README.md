@@ -27,7 +27,9 @@ Named after Freki, one of Odin's two wolves.
   gets them past the boot ROM's logo check) and M161 (Mani 4-in-1)
 - **Super Game Boy:** the borders and colours SGB games bring along (Pokémon, Donkey Kong,
   Dragon Warrior Monsters, …), with palettes, colour attributes, screen masking and the
-  multiplayer request games use to detect an SGB
+  multiplayer request games use to detect an SGB; with the SGB cartridge's SNES ROM also
+  the **SGB's own sound** (sound effects and music games play on the SNES sound chip, such
+  as Donkey Kong's)
 - **Link cable:** a second game runs next to the first, connected by cable, for trading
   and two-player games (Tetris, Pokémon, …)
 - **Game Boy Printer:** games print onto paper shown in a window, and every page is saved
@@ -173,8 +175,17 @@ games with Super Game Boy features on an SGB, and everything else on a Game Boy.
 Color** also runs original Game Boy games on a GBC, in colour as on the real thing. **Super
 Game Boy** also runs games made for both the GBC and the SGB (such as Dragon Warrior Monsters)
 with their SGB border; the window grows to the SGB's 256×224 picture. Games without SGB
-features get a plain border in the SGB's default colours. SGB sound and the SGB's own boot
-ROM are not emulated.
+features get a plain border in the SGB's default colours. The SGB's own boot ROM is not
+emulated.
+
+**Super Game Boy sound.** Some SGB games play sound effects (applause, explosions, wind, …)
+or their own music on the SNES's sound chip, through the `SOUND` and `SOU_TRN` commands.
+For that, choose the Super Game Boy cartridge's SNES ROM under **Emulation → Boot ROM →
+Super Game Boy sound ROM…** (a dump such as `Super Game Boy (World) (Rev 2).sfc`, 256 KiB;
+Nintendo's code, not included). freki runs the sound engine and samples from it on an
+emulated SNES sound chip (SPC700 and S-DSP) and mixes it into the Game Boy's sound; the
+SNES CPU itself is not emulated, freki passes the commands on the way the SGB's SNES
+program does. Headless mode takes the ROM with `--sgb-rom`.
 
 **Emulation → Settings for this game** keeps the console, palette, colour correction and
 frame blending chosen while it is ticked for the loaded game only, for example Dragon
@@ -296,7 +307,8 @@ cheat save            # writes game.cht
 sound. It can press buttons at given frames, stop at breakpoints or watchpoints, and log
 every instruction. At the end it can run console commands, print the serial output, and
 save a screenshot, a save state or the battery save, and a Game Boy Printer can save what
-the game prints. The Game Boy Camera can see a picture (`--camera`). A battery save can be
+the game prints. The Game Boy Camera can see a picture (`--camera`), and Super Game Boy
+games get their SGB sound with `--sgb-rom`. A battery save can be
 loaded as if the Game Boy had been off for a while, so the cartridge clock catches up, and a
 second game can run on a link cable. `freki --headless --help` lists the options.
 
@@ -353,6 +365,9 @@ Tests whose ROMs have not been fetched are skipped. ROM files are never committe
   compares freki's Game Genie decoding with a port of SameBoy's (with its MIT notice).
   Gambatte's test programs are only downloaded for local test runs and are not part of the
   repository.
+- The SNES sound chip (SPC700 and S-DSP) follows nocash's
+  [fullsnes](https://problemkaputt.de/fullsnes.htm) documentation; how the SGB passes on
+  its sound commands was read from the SGB's own SNES program.
 - The Game Boy Camera's picture processing follows the sample code in Pan Docs (CC0), from
   [Antonio Niño Díaz's research](https://github.com/AntonioND/gbcam-rev-engineer) on the
   camera.

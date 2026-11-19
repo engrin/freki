@@ -24,6 +24,8 @@ pub struct Start {
     pub model: Option<Model>,
     pub dmg_boot_rom: Option<BootRom>,
     pub cgb_boot_rom: Option<BootRom>,
+    /// The Super Game Boy cartridge's SNES ROM, for the SGB's own sound.
+    pub sgb_rom: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// A machine with `rom` inserted: started by the console's boot ROM if there is one,
@@ -36,10 +38,17 @@ pub fn power_on(rom: Vec<u8>, start: &Start) -> Result<GameBoy, CartridgeError> 
         // The SGB's own boot ROM is not supported: start in its post-boot state.
         Model::Sgb => &None,
     };
-    match boot_rom {
+    let mut gb = match boot_rom {
         Some(boot) => GameBoy::with_boot_rom(rom, boot.clone()),
         None => GameBoy::with_model(rom, model),
+    }?;
+    if model == Model::Sgb
+        && let Some(sgb_rom) = &start.sgb_rom
+    {
+        // Checked when it was chosen; a game runs without the SGB's sound otherwise.
+        let _ = gb.set_sgb_sound_rom(sgb_rom);
     }
+    Ok(gb)
 }
 
 pub struct Session {

@@ -57,6 +57,8 @@ run:
   --model dmg|cgb|sgb     console (default: GBC for colour games, SGB for SGB games,
                           else Game Boy)
   --boot FILE             start with this boot ROM (DMG or GBC, by size)
+  --sgb-rom FILE          the Super Game Boy cartridge's SNES ROM: SGB games get its sound
+                          effects and music (SOUND, SOU_TRN)
   --patch FILE            apply this IPS or BPS patch (default: ROM.bps or ROM.ips if present)
   --sav FILE              load this battery save (never written back; see --write-sav)
   --off DURATION          with --sav: the Game Boy was off this long, so a cartridge
@@ -135,6 +137,7 @@ struct Options {
     record: Option<PathBuf>,
     save_state: Option<PathBuf>,
     camera: Option<PathBuf>,
+    sgb_rom: Option<PathBuf>,
     write_sav: Option<PathBuf>,
 }
 
@@ -262,6 +265,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--record" => o.record = Some(value(arg)?.into()),
             "--save-state" => o.save_state = Some(value(arg)?.into()),
             "--camera" => o.camera = Some(value(arg)?.into()),
+            "--sgb-rom" => o.sgb_rom = Some(value(arg)?.into()),
             "--write-sav" => o.write_sav = Some(value(arg)?.into()),
             a if a.starts_with('-') => return Err(format!("unknown option {a}")),
             _ if o.rom.is_none() => o.rom = Some(arg.into()),
@@ -362,6 +366,9 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         model: o.model,
         ..Default::default()
     };
+    if let Some(path) = &o.sgb_rom {
+        start.sgb_rom = Some(settings::read_sgb_rom(path)?);
+    }
     if let Some(path) = &o.boot {
         let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let boot = BootRom::new(&bytes)?;
