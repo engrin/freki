@@ -367,6 +367,9 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         }
     }
     let mut gb = session::power_on(rom.data, &start)?;
+    if let Some(count) = session::load_symbols(rom_path, &mut gb) {
+        out!("{count} labels from the symbol file");
+    }
     // Unix time at the start of the run; see USAGE.
     let mut start_time = 0;
     if let Some(path) = &o.sav {
@@ -505,7 +508,7 @@ fn run(o: &Options) -> Result<i32, Box<dyn Error>> {
         };
         match result {
             Ok(Some(stop)) => {
-                out!("frame {frame}: {}", console::describe_stop(&stop));
+                out!("frame {frame}: {}", console::describe_stop(&stop, &gb));
                 out!("{}", console::registers(&gb));
                 out!("{}", console.execute("dis", &mut gb));
                 status = 2;

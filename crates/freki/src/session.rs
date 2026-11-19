@@ -87,6 +87,9 @@ impl Session {
             gb.load_save_data(&data, Some(unix_now()));
             message.push_str(&format!(" with {}", file_name(&save_path)));
         }
+        if let Some(count) = load_symbols(rom_path, &mut gb) {
+            message.push_str(&format!(" and {count} labels"));
+        }
         let title = gb.cartridge().title();
         let capacity = (REWIND_SECONDS * FRAMES_PER_SECOND / REWIND_INTERVAL as f64) as usize;
         Ok((
@@ -181,6 +184,8 @@ impl Session {
             gb.load_save_data(&data, None);
         }
         *gb.cheats_mut() = self.gb.cheats().clone();
+        // A rebuilt game comes with new labels.
+        load_symbols(&self.rom_path, &mut gb);
         self.gb = gb;
         self.rewind.clear();
         Ok(())
@@ -238,6 +243,16 @@ pub fn battery_save_path(rom_path: &Path) -> PathBuf {
 /// The battery save of the second Game Boy on a link cable, playing `rom_path` while the
 /// first one plays `first_rom`: the game's own save, or `game.2.sav` when both play the
 /// same ROM file (so each keeps its own save, as two cartridges would).
+/// Loads the labels of `game.sym` next to the ROM into the debugger, if there is such a
+/// file. Returns how many there are.
+pub fn load_symbols(rom_path: &Path, gb: &mut GameBoy) -> Option<usize> {
+    let text = fs::read(rom_path.with_extension("sym")).ok()?;
+    let symbols = freki_core::Symbols::parse(&String::from_utf8_lossy(&text));
+    let count = symbols.len();
+    gb.set_symbols(symbols);
+    Some(count)
+}
+
 pub fn linked_save_path(rom_path: &Path, first_rom: &Path) -> PathBuf {
     let same = match (fs::canonicalize(rom_path), fs::canonicalize(first_rom)) {
         (Ok(a), Ok(b)) => a == b,

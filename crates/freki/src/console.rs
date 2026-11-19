@@ -36,10 +36,12 @@ debugger (also View → Debugger):
   break ADDR | unbreak ADDR    set / remove a breakpoint
   watch ADDR [END] [r|w|rw]    stop when the CPU reads/writes ADDR..END (default w)
   unwatch N | breaks           remove watchpoint N / list all
+  labels [TEXT]                list the symbol file's labels (containing TEXT)
 other:
   pause | resume               pause emulation (also P in the window)
   help
-numbers: decimal, or hex with $ or 0x (e.g. $C0A0)";
+numbers: decimal, or hex with $ or 0x (e.g. $C0A0)
+addresses: a number or a label from game.sym next to the ROM (e.g. break Main.loop)";
 
 pub struct Console {
     lines: Receiver<String>,
@@ -124,23 +126,24 @@ impl Console {
             }
             ["regs"] => Ok(registers(gb)),
             ["dis"] => Ok(disassembly(gb, gb.pc(), 10)),
-            ["dis", addr] => Ok(disassembly(gb, parse(addr)?, 10)),
-            ["dis", addr, n] => Ok(disassembly(gb, parse(addr)?, index(n)?.min(100))),
+            ["dis", addr] => Ok(disassembly(gb, address(gb, addr)?, 10)),
+            ["dis", addr, n] => Ok(disassembly(gb, address(gb, addr)?, index(n)?.min(100))),
             ["step"] => step(gb, 1),
             ["step", n] => step(gb, index(n)?.min(100_000)),
             ["break", addr] => {
-                let addr = parse(addr)?;
+                let addr = address(gb, addr)?;
                 gb.breakpoints_mut().pc.insert(addr);
-                Ok(format!("breakpoint at ${addr:04X}"))
+                Ok(format!("breakpoint at {}", show_address(gb, addr)))
             }
             ["unbreak", addr] => {
-                let addr = parse(addr)?;
+                let addr = address(gb, addr)?;
                 if gb.breakpoints_mut().pc.remove(&addr) {
-                    Ok(format!("removed breakpoint at ${addr:04X}"))
+                    Ok(format!("removed breakpoint at {}", show_address(gb, addr)))
                 } else {
-                    Err(format!("no breakpoint at ${addr:04X}"))
+                    Err(format!("no breakpoint at {}", show_address(gb, addr)))
                 }
             }
+            ["labels", filter @ ..] => Ok(list_labels(gb, filter.first().copied())),
             ["watch", rest @ ..] => watch(gb, rest),
             ["unwatch", n] => {
                 let i = index(n)?;
@@ -155,10 +158,10 @@ impl Console {
             ["cheats"] | ["cheat", "list"] => Ok(list_cheats(gb)),
             ["cheat", rest @ ..] => self.cheat(rest, gb),
             ["search", rest @ ..] => self.search(rest, gb),
-            ["peek", addr] => peek(gb, parse(addr)?, 1),
-            ["peek", addr, count] => peek(gb, parse(addr)?, parse(count)?),
+            ["peek", addr] => peek(gb, address(gb, addr)?, 1),
+            ["peek", addr, count] => peek(gb, address(gb, addr)?, parse(count)?),
             ["poke", addr, value] => {
-                let (addr, value) = (parse(addr)?, byte(value)?);
+                let (addr, value) = (address(gb, addr)?, byte(value)?);
                 gb.poke(addr, value);
                 Ok(format!("${addr:04X} = ${value:02X}"))
             }
@@ -289,12 +292,27 @@ pub fn registers(gb: &GameBoy) -> String {
     )
     .trim_end()
     .to_string()
+        + &gb
+            .describe_address(r.pc)
+            .map(|label| format!(" ({label})"))
+            .unwrap_or_default()
+}
+
+/// `$4003 (Main.loop)`, or just `$4003` without a label nearby.
+pub fn show_address(gb: &GameBoy, addr: u16) -> String {
+    match gb.describe_address(addr) {
+        Some(label) => format!("${addr:04X} ({label})"),
+        None => format!("${addr:04X}"),
+    }
 }
 
 fn disassembly(gb: &GameBoy, mut addr: u16, count: usize) -> String {
     let mut out = Vec::new();
     for _ in 0..count {
-        let ins = gb.disassemble(addr);
+        if let Some(label) = gb.label_at(addr) {
+            out.push(format!("{label}:"));
+        }
+        let ins = gb.disassemble_labeled(addr);
         let marker = if addr == gb.pc() { '>' } else { ' ' };
         let bp = if gb.breakpoints().pc.contains(&addr) {
             '*'
@@ -323,7 +341,7 @@ fn step(gb: &mut GameBoy, count: usize) -> Result<String, String> {
         if let Some(stop) = stop {
             return Ok(format!(
                 "{}\n{}",
-                describe_stop(&stop),
+                describe_stop(&stop, gb),
                 disassembly(gb, gb.pc(), 1)
             ));
         }
@@ -335,18 +353,20 @@ fn step(gb: &mut GameBoy, count: usize) -> Result<String, String> {
     ))
 }
 
-/// Human-readable reason for a debugger stop.
-pub fn describe_stop(stop: &freki_core::Stop) -> String {
+/// Human-readable reason for a debugger stop, with labels from the symbol file.
+pub fn describe_stop(stop: &freki_core::Stop, gb: &GameBoy) -> String {
     match stop {
-        freki_core::Stop::Breakpoint { pc } => format!("breakpoint at ${pc:04X}"),
+        freki_core::Stop::Breakpoint { pc } => format!("breakpoint at {}", show_address(gb, *pc)),
         freki_core::Stop::Watch { pc, hit } => {
             let kind = match hit.access {
                 freki_core::Access::Read => "read",
                 freki_core::Access::Write => "write",
             };
             format!(
-                "{kind} ${:04X} = ${:02X} by instruction at ${pc:04X}",
-                hit.addr, hit.value
+                "{kind} {} = ${:02X} by instruction at {}",
+                show_address(gb, hit.addr),
+                hit.value,
+                show_address(gb, *pc)
             )
         }
     }
@@ -358,8 +378,8 @@ fn watch(gb: &mut GameBoy, args: &[&str]) -> Result<String, String> {
         _ => ("w", args.to_vec()),
     };
     let (start, end) = match addrs.as_slice() {
-        [a] => (parse(a)?, parse(a)?),
-        [a, b] => (parse(a)?, parse(b)?),
+        [a] => (address(gb, a)?, address(gb, a)?),
+        [a, b] => (address(gb, a)?, address(gb, b)?),
         _ => return Err("usage: watch ADDR [END] [r|w|rw]".into()),
     };
     let w = freki_core::Watchpoint::new(start, end, mode.contains('r'), mode.contains('w'));
@@ -390,7 +410,7 @@ fn list_breaks(gb: &GameBoy) -> String {
     }
     let mut out = Vec::new();
     for pc in &b.pc {
-        out.push(format!("  break ${pc:04X}"));
+        out.push(format!("  break {}", show_address(gb, *pc)));
     }
     for (i, w) in b.watches.iter().enumerate() {
         out.push(format!("  watch {i}: {}", describe_watch(w)));
@@ -547,6 +567,43 @@ fn peek(gb: &GameBoy, addr: u16, count: u16) -> Result<String, String> {
         out.push('\n');
     }
     Ok(out.trim_end().to_string())
+}
+
+/// Parses an address: a number like [`parse`] takes, or a label from the symbol file.
+fn address(gb: &GameBoy, s: &str) -> Result<u16, String> {
+    parse(s).or_else(|_| {
+        gb.symbols()
+            .find(s)
+            .map(|at| at.addr)
+            .ok_or_else(|| format!("{s:?} is neither a number nor a label"))
+    })
+}
+
+/// The labels from the symbol file whose names contain `filter` (any case), at most 50.
+fn list_labels(gb: &GameBoy, filter: Option<&str>) -> String {
+    let symbols = gb.symbols();
+    if symbols.is_empty() {
+        return "no labels (put the assembler's game.sym next to the ROM)".into();
+    }
+    let filter = filter.map(str::to_lowercase);
+    let matches: Vec<String> = symbols
+        .iter()
+        .filter(|(_, name)| {
+            filter
+                .as_ref()
+                .is_none_or(|f| name.to_lowercase().contains(f.as_str()))
+        })
+        .map(|(at, name)| format!("  {:02X}:{:04X} {name}", at.bank, at.addr))
+        .collect();
+    let shown = matches.len().min(50);
+    let mut out = matches[..shown].join("\n");
+    if matches.len() > shown {
+        out.push_str(&format!("\n  … and {} more", matches.len() - shown));
+    }
+    if out.is_empty() {
+        out = "no matching labels".into();
+    }
+    out
 }
 
 /// Parses a 16-bit number: decimal, or hex with `$` or `0x`.

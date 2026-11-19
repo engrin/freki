@@ -23,6 +23,7 @@ pub mod printer;
 pub mod serial;
 pub mod sgb;
 pub mod state;
+pub mod symbols;
 pub mod tama5;
 pub mod timer;
 
@@ -39,6 +40,7 @@ pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use printer::{PAPER_WIDTH, Page, Printer};
 pub use sgb::{SGB_HEIGHT, SGB_WIDTH};
 pub use state::{Rewind, StateError};
+pub use symbols::{SymbolAddress, Symbols};
 
 use bus::Bus;
 use cpu::Cpu;
@@ -137,6 +139,8 @@ pub struct GameBoy {
     resume_at: Option<u16>,
     /// A Game Boy Printer on the serial port (not part of save states).
     printer: Option<Box<Printer>>,
+    /// Labels from the game's symbol file, for the debugger (not part of save states).
+    symbols: Symbols,
 }
 
 impl GameBoy {
@@ -189,6 +193,7 @@ impl GameBoy {
             bus,
             resume_at: None,
             printer: None,
+            symbols: Symbols::default(),
         })
     }
 
@@ -219,6 +224,7 @@ impl GameBoy {
             bus,
             resume_at: None,
             printer: None,
+            symbols: Symbols::default(),
         })
     }
 
@@ -446,6 +452,72 @@ impl GameBoy {
         disassemble(addr, |a| self.peek(a))
     }
 
+    /// Like [`GameBoy::disassemble`], with jump targets and memory operands shown by their
+    /// labels from the symbol file (`CALL UpdateSprites`, `LD A,(wCounter)`).
+    pub fn disassemble_labeled(&self, addr: u16) -> Instruction {
+        let mut ins = self.disassemble(addr);
+        if self.symbols.is_empty() {
+            return ins;
+        }
+        let operand = ins.target().or_else(|| match ins.len {
+            // n16 operands that are addresses: ($a16) loads and stores.
+            3 if ins.text.contains("($") => Some(u16::from_le_bytes([ins.bytes[1], ins.bytes[2]])),
+            // LDH ($FFn8).
+            2 if matches!(ins.bytes[0], 0xE0 | 0xF0) => Some(0xFF00 | u16::from(ins.bytes[1])),
+            _ => None,
+        });
+        if let Some(target) = operand
+            && let Some(label) = self.label_at(target)
+        {
+            let label = label.to_string();
+            ins.text = ins.text.replace(&format!("${target:04X}"), &label);
+            // RST $38 and friends show the vector as two digits.
+            if ins.target().is_some() && target < 0x100 {
+                ins.text = ins.text.replace(&format!("${target:02X}"), &label);
+            }
+        }
+        ins
+    }
+
+    /// Uses `symbols` for the debugger's labels.
+    pub fn set_symbols(&mut self, symbols: Symbols) {
+        self.symbols = symbols;
+    }
+
+    pub fn symbols(&self) -> &Symbols {
+        &self.symbols
+    }
+
+    /// The bank mapped at `addr` now, counted the way symbol files count them: the ROM
+    /// bank at $0000–$7FFF, the VRAM bank, the cartridge RAM bank, the work RAM bank at
+    /// $D000–$DFFF (1 on the original Game Boy); 0 elsewhere.
+    pub fn bank_at(&self, addr: u16) -> u16 {
+        let bank = match addr {
+            0x0000..=0x7FFF => self.bus.cart.rom_bank_at(addr),
+            0x8000..=0x9FFF => self.bus.ppu.vram_bank(),
+            0xA000..=0xBFFF => self.bus.cart.ram_bank_at(addr).unwrap_or(0),
+            0xD000..=0xDFFF => self.bus.wram_bank(),
+            _ => 0,
+        };
+        bank as u16
+    }
+
+    /// The label at `addr` in the bank mapped there now.
+    pub fn label_at(&self, addr: u16) -> Option<&str> {
+        self.symbols.at(self.bank_at(addr), addr)
+    }
+
+    /// `addr` as `Label` or `Label+offset` (up to 255 bytes after a label in the same
+    /// bank), if the symbol file has a label there.
+    pub fn describe_address(&self, addr: u16) -> Option<String> {
+        let (label, offset) = self.symbols.before(self.bank_at(addr), addr, 0xFF)?;
+        Some(if offset == 0 {
+            label.to_string()
+        } else {
+            format!("{label}+{offset}")
+        })
+    }
+
     /// Reads a byte from the memory map without side effects (for debuggers and tests).
     pub fn peek(&self, addr: u16) -> u8 {
         self.bus.read(addr)
@@ -653,6 +725,32 @@ mod tests {
         rom[0x149] = 0x00; // no RAM
         rom[0x150..0x152].copy_from_slice(&[0x18, 0xFE]); // JR -2
         rom
+    }
+
+    #[test]
+    fn labels_follow_the_mapped_bank() {
+        let mut rom = vec![0u8; 0x10000]; // 64 KiB, MBC1: banks 0–3
+        rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]);
+        rom[0x147] = 0x01;
+        rom[0x148] = 0x01;
+        // $0150: CALL $4000; LD A,($C000); LDH ($80),A; RST $38
+        rom[0x150..0x159].copy_from_slice(&[0xCD, 0x00, 0x40, 0xFA, 0x00, 0xC0, 0xE0, 0x80, 0xFF]);
+        let mut gb = GameBoy::new(rom).unwrap();
+        gb.set_symbols(Symbols::parse(
+            "00:0038 Crash\n00:0150 Start\n01:4000 InBankOne\n02:4000 InBankTwo\n\
+             00:c000 wCounter\n00:ff80 hFlag\n",
+        ));
+        assert_eq!(gb.label_at(0x4000), Some("InBankOne"));
+        assert_eq!(gb.disassemble_labeled(0x150).text, "CALL InBankOne");
+        gb.poke(0x2000, 2); // switch to ROM bank 2
+        assert_eq!(gb.bank_at(0x4000), 2);
+        assert_eq!(gb.label_at(0x4000), Some("InBankTwo"));
+        assert_eq!(gb.disassemble_labeled(0x150).text, "CALL InBankTwo");
+        assert_eq!(gb.disassemble_labeled(0x153).text, "LD A,(wCounter)");
+        assert_eq!(gb.disassemble_labeled(0x156).text, "LDH (hFlag),A");
+        assert_eq!(gb.disassemble_labeled(0x158).text, "RST Crash");
+        assert_eq!(gb.describe_address(0x153).as_deref(), Some("Start+3"));
+        assert_eq!(gb.describe_address(0x3000), None);
     }
 
     #[test]

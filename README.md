@@ -69,6 +69,12 @@ Named after Freki, one of Odin's two wolves.
 
 - **Debugger:** pause, step by instruction, scanline or frame; registers, disassembly,
   memory and stack; breakpoints and read/write watchpoints
+- **Symbol files:** with the assembler's `game.sym` next to the ROM (RGBDS, WLA-DX and
+  others write them), the debugger and console show labels instead of addresses
+  (`CALL UpdateSprites`, `LD A,(wLives)`, `breakpoint at $4003 (Main.loop)`), in the
+  ROM bank that is mapped in, and take labels wherever they take an address
+  (`break Main.loop`, `peek wLives`). Resetting reloads the ROM and its labels, so a
+  rebuilt game is one Ctrl+R away
 - **Video memory viewers:** tiles, tile maps, sprites and palettes, live, for both VRAM
   banks on the GBC
 - The debugger, the viewers, the cheat manager, the memory search and the printer each
@@ -148,6 +154,7 @@ remembered between runs.
 | `game.2.sav` | Battery save of the second copy when a game is linked with itself |
 | `game.cht` | Cheats, saved whenever one is added, removed or switched on or off |
 | `game.bps`, `game.ips` | Patch applied when the game loads |
+| `game.sym` | Labels for the debugger, from the assembler (read only) |
 | `game-001.png`, … | Screenshots |
 | `game-001.webm`, … | Videos (File → Record video) |
 

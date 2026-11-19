@@ -1041,7 +1041,7 @@ impl FrekiApp {
                 Ok(Some(stop)) => {
                     // Breakpoint or watchpoint: pause and show the debugger.
                     self.paused = true;
-                    let msg = console::describe_stop(&stop);
+                    let msg = console::describe_stop(&stop, &session.gb);
                     eprintln!("freki: {msg}");
                     self.status = Some((msg, Instant::now()));
                     self.cpu_view.last_stop = Some(stop);

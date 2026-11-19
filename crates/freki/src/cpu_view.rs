@@ -5,7 +5,7 @@ use crate::window::tool_window;
 use eframe::egui::{self, Color32, RichText};
 use freki_core::{GameBoy, Stop, Watchpoint};
 
-use crate::console::{describe_stop, describe_watch};
+use crate::console::{describe_stop, describe_watch, show_address};
 
 /// What the debugger wants the app to do after drawing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +56,7 @@ impl CpuView {
     pub fn show(&mut self, ctx: &egui::Context, gb: &mut GameBoy, paused: bool) -> Option<Action> {
         let mut action = None;
         self.open = tool_window(ctx, "debugger", "freki — Debugger", [780.0, 720.0], |ui| {
-            action = self.toolbar(ui, paused);
+            action = self.toolbar(ui, gb, paused);
             ui.separator();
             // Everything below the toolbar scrolls when the window is smaller than it.
             egui::ScrollArea::vertical()
@@ -77,7 +77,7 @@ impl CpuView {
         action
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui, paused: bool) -> Option<Action> {
+    fn toolbar(&mut self, ui: &mut egui::Ui, gb: &GameBoy, paused: bool) -> Option<Action> {
         let mut action = None;
         ui.horizontal(|ui| {
             if paused {
@@ -113,7 +113,7 @@ impl CpuView {
             ui.separator();
             match (&self.last_stop, paused) {
                 (Some(stop), true) => {
-                    ui.colored_label(Color32::from_rgb(0xFF, 0xB0, 0x40), describe_stop(stop));
+                    ui.colored_label(Color32::from_rgb(0xFF, 0xB0, 0x40), describe_stop(stop, gb));
                 }
                 (_, true) => {
                     ui.label("paused");
@@ -178,18 +178,25 @@ impl CpuView {
             }
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.disasm_input)
-                    .hint_text("addr")
-                    .desired_width(48.0),
+                    .hint_text("addr or label")
+                    .desired_width(110.0),
             );
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.disasm_at = parse_addr(&self.disasm_input);
+                self.disasm_at = parse_addr(gb, &self.disasm_input);
             }
         });
         let mut addr = self.disasm_at.unwrap_or_else(|| gb.pc());
         let pc = gb.pc();
         let mut toggle = None;
         for _ in 0..18 {
-            let ins = gb.disassemble(addr);
+            let ins = gb.disassemble_labeled(addr);
+            if let Some(label) = gb.label_at(addr) {
+                ui.label(
+                    RichText::new(format!("{label}:"))
+                        .monospace()
+                        .color(Color32::from_rgb(0xE8, 0xC0, 0x60)),
+                );
+            }
             ui.horizontal(|ui| {
                 let has_bp = gb.breakpoints().pc.contains(&addr);
                 let dot = if has_bp {
@@ -231,12 +238,12 @@ impl CpuView {
             ui.strong("Memory");
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.memory_input)
-                    .hint_text("addr")
-                    .desired_width(48.0),
+                    .hint_text("addr or label")
+                    .desired_width(110.0),
             );
             if edit.lost_focus()
                 && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                && let Some(addr) = parse_addr(&self.memory_input)
+                && let Some(addr) = parse_addr(gb, &self.memory_input)
             {
                 self.memory_at = addr & 0xFFF0;
             }
@@ -266,11 +273,11 @@ impl CpuView {
             ui.strong("Breakpoint");
             ui.add(
                 egui::TextEdit::singleline(&mut self.break_input)
-                    .hint_text("addr")
-                    .desired_width(48.0),
+                    .hint_text("addr or label")
+                    .desired_width(110.0),
             );
             if ui.button("Add").clicked() {
-                match parse_addr(&self.break_input) {
+                match parse_addr(gb, &self.break_input) {
                     Some(addr) => {
                         gb.breakpoints_mut().pc.insert(addr);
                         self.break_input.clear();
@@ -283,8 +290,8 @@ impl CpuView {
             ui.strong("Watch");
             ui.add(
                 egui::TextEdit::singleline(&mut self.watch_start)
-                    .hint_text("addr")
-                    .desired_width(48.0),
+                    .hint_text("addr or label")
+                    .desired_width(110.0),
             );
             ui.label("–");
             ui.add(
@@ -295,11 +302,11 @@ impl CpuView {
             ui.checkbox(&mut self.watch_read, "read");
             ui.checkbox(&mut self.watch_write, "write");
             if ui.button("Add").clicked() {
-                let start = parse_addr(&self.watch_start);
+                let start = parse_addr(gb, &self.watch_start);
                 let end = if self.watch_end.trim().is_empty() {
                     start
                 } else {
-                    parse_addr(&self.watch_end)
+                    parse_addr(gb, &self.watch_end)
                 };
                 match (start, end, self.watch_read || self.watch_write) {
                     (Some(s), Some(e), true) => {
@@ -326,7 +333,7 @@ impl CpuView {
         ui.horizontal_wrapped(|ui| {
             for &pc in &gb.breakpoints().pc {
                 if ui
-                    .button(format!("break ${pc:04X} ✖"))
+                    .button(format!("break {} ✖", show_address(gb, pc)))
                     .on_hover_text("remove")
                     .clicked()
                 {
@@ -362,18 +369,33 @@ fn stack(ui: &mut egui::Ui, gb: &GameBoy) {
         let addr = sp.wrapping_add(i * 2);
         let value = u16::from_le_bytes([gb.peek(addr), gb.peek(addr.wrapping_add(1))]);
         let marker = if i == 0 { "SP→" } else { "   " };
-        ui.monospace(format!("{marker} ${addr:04X}  ${value:04X}"));
+        // Return addresses into the code get their label.
+        let label = match value {
+            0x0000..=0x7FFF => gb
+                .describe_address(value)
+                .map(|l| format!("  {l}"))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        ui.monospace(format!("{marker} ${addr:04X}  ${value:04X}{label}"));
     }
 }
 
-/// Parses an address: hex, with or without `$` / `0x`.
-fn parse_addr(s: &str) -> Option<u16> {
+/// Parses an address: a label from the symbol file (exactly as written), hex with or
+/// without `$` / `0x`, or a label in any case.
+fn parse_addr(gb: &GameBoy, s: &str) -> Option<u16> {
     let s = s.trim();
+    let symbols = gb.symbols();
+    if let Some(at) = symbols.find(s).filter(|_| symbols.at_name(s)) {
+        return Some(at.addr);
+    }
     let hex = s
         .strip_prefix('$')
         .or_else(|| s.strip_prefix("0x"))
         .unwrap_or(s);
-    u16::from_str_radix(hex, 16).ok()
+    u16::from_str_radix(hex, 16)
+        .ok()
+        .or_else(|| symbols.find(s).map(|at| at.addr))
 }
 
 #[cfg(test)]
@@ -381,10 +403,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn addresses_are_hex() {
-        assert_eq!(parse_addr("C000"), Some(0xC000));
-        assert_eq!(parse_addr("$ff80"), Some(0xFF80));
-        assert_eq!(parse_addr("0x150"), Some(0x150));
-        assert_eq!(parse_addr("zz"), None);
+    fn addresses_are_hex_or_labels() {
+        let mut gb = GameBoy::new(vec![0; 0x8000]).unwrap();
+        assert_eq!(parse_addr(&gb, "C000"), Some(0xC000));
+        assert_eq!(parse_addr(&gb, "$ff80"), Some(0xFF80));
+        assert_eq!(parse_addr(&gb, "0x150"), Some(0x150));
+        assert_eq!(parse_addr(&gb, "zz"), None);
+        gb.set_symbols(freki_core::Symbols::parse(
+            "00:0150 Bad\n00:c000 wCounter\n",
+        ));
+        assert_eq!(
+            parse_addr(&gb, "Bad"),
+            Some(0x150),
+            "an exact label beats hex"
+        );
+        assert_eq!(parse_addr(&gb, "bad"), Some(0xBAD), "otherwise hex wins");
+        assert_eq!(parse_addr(&gb, "WCOUNTER"), Some(0xC000));
     }
 }

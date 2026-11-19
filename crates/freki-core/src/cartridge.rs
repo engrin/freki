@@ -655,9 +655,26 @@ impl Cartridge {
 
     /// Read from $0000–$7FFF.
     pub fn read_rom(&self, addr: u16) -> u8 {
+        match self.mbc {
+            Mbc::RomOnly => return self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            Mbc::Mbc6(ref chip) if addr >= 0x4000 => {
+                if let Some(value) = chip.read_flash(addr) {
+                    return value;
+                }
+                let offset = chip.rom_offset(addr) % self.rom.len().next_power_of_two();
+                return self.rom.get(offset).copied().unwrap_or(0xFF);
+            }
+            _ => {}
+        }
+        self.rom_byte(self.rom_bank_at(addr), addr)
+    }
+
+    /// The ROM bank mapped at `addr` ($0000–$7FFF), as debuggers and symbol files count
+    /// them (wrapped to the ROM's size).
+    pub fn rom_bank_at(&self, addr: u16) -> usize {
         let low = addr < 0x4000;
         let bank = match self.mbc {
-            Mbc::RomOnly => return self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            Mbc::RomOnly => usize::from(!low),
             Mbc::Mbc1 {
                 bank1,
                 bank2,
@@ -687,13 +704,7 @@ impl Cartridge {
                 let (bank0, bank) = m.rom_banks(self.rom.len() / ROM_BANK);
                 if low { bank0 } else { bank }
             }
-            Mbc::Mbc6(ref chip) if !low => {
-                if let Some(value) = chip.read_flash(addr) {
-                    return value;
-                }
-                let offset = chip.rom_offset(addr) % self.rom.len().next_power_of_two();
-                return self.rom.get(offset).copied().unwrap_or(0xFF);
-            }
+            Mbc::Mbc6(ref chip) if !low => chip.rom_offset(addr) / ROM_BANK,
             Mbc::Mbc6(_) => 0,
             Mbc::Mbc2 { rom_bank, .. } => {
                 if low {
@@ -726,7 +737,12 @@ impl Cartridge {
                 }
             }
         };
-        self.rom_byte(bank, addr)
+        bank % (self.rom.len() / ROM_BANK).max(1)
+    }
+
+    /// The cartridge RAM bank mapped at $A000–$BFFF, if RAM is accessible.
+    pub fn ram_bank_at(&self, addr: u16) -> Option<usize> {
+        self.ram_offset(addr).map(|offset| offset / RAM_BANK)
     }
 
     /// Write to $0000–$7FFF (MBC control registers).

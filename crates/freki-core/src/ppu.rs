@@ -595,6 +595,11 @@ impl Ppu {
         self.cgb || self.dmg_compat
     }
 
+    /// The VRAM bank the CPU sees at $8000–$9FFF (always 0 on the original Game Boy).
+    pub fn vram_bank(&self) -> usize {
+        usize::from(self.vbk & 1)
+    }
+
     fn vram_index(&self, addr: u16) -> usize {
         (self.vbk as usize & 1) * 0x2000 + (addr as usize - 0x8000)
     }

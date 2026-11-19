@@ -261,6 +261,15 @@ impl Bus {
         }
     }
 
+    /// The work RAM bank at $D000–$DFFF (1 on the original Game Boy).
+    pub fn wram_bank(&self) -> usize {
+        if self.cgb {
+            usize::from((self.svbk & 7).max(1))
+        } else {
+            1
+        }
+    }
+
     /// Work RAM byte at `addr` ($D000–$DFFF) in `bank` (1–7), whatever SVBK selects.
     pub fn wram_in_bank(&self, bank: u8, addr: u16) -> u8 {
         self.wram[(bank as usize & 7).max(1) * 0x1000 + (addr as usize & 0x0FFF)]
