@@ -62,6 +62,12 @@ pub enum Code {
         location: Location,
         value: u8,
     },
+    /// An Xploder condition (type `$Ex`): while `location` holds `value`, no cheat writes
+    /// anything, as the device stops going through its code list then.
+    XploderIf {
+        location: Location,
+        value: u8,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +78,7 @@ pub enum CheatError {
     UnsupportedType(u8),
     /// Game Genie address outside ROM ($0000–$7FFF).
     NotRomAddress(u16),
-    /// An Xploder code of a type freki does not know (only RAM writes are supported).
+    /// An Xploder code that does not decrypt to a RAM address.
     Xploder(String),
 }
 
@@ -88,7 +94,7 @@ impl fmt::Display for CheatError {
             Self::NotRomAddress(a) => write!(f, "Game Genie address ${a:04X} is not in ROM"),
             Self::Xploder(code) => write!(
                 f,
-                "{code:?} is an Xploder code of a type freki does not support (only RAM writes)"
+                "{code:?} is an Xploder code, but it does not decrypt to a RAM address"
             ),
         }
     }
@@ -210,7 +216,7 @@ impl Code {
         match self {
             Code::GameShark { .. } => "GameShark",
             Code::GameGenie { .. } => "Game Genie",
-            Code::Xploder { .. } => "Xploder",
+            Code::Xploder { .. } | Code::XploderIf { .. } => "Xploder",
         }
     }
 }
@@ -508,7 +514,16 @@ impl Cheats {
             Code::GameShark { location, value } | Code::Xploder { location, value } => {
                 Some((location, value))
             }
-            Code::GameGenie { .. } => None,
+            Code::GameGenie { .. } | Code::XploderIf { .. } => None,
+        })
+    }
+
+    /// Xploder conditions: while any `location` holds its value, [`Cheats::frame_writes`]
+    /// are skipped.
+    pub fn frame_conditions(&self) -> impl Iterator<Item = (Location, u8)> + '_ {
+        self.active().filter_map(|c| match *c {
+            Code::XploderIf { location, value } => Some((location, value)),
+            _ => None,
         })
     }
 

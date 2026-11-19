@@ -1,10 +1,13 @@
 //! Codes for Blaze's Xploder GB (Xplorer GB), as cheat sites list them: `$0D22A281`.
 //!
 //! An Xploder code is four bytes, `TT VV LL HH` like a GameShark code (type, value,
-//! address), with the value and address encrypted. Bits 2–3 of the type pick the
-//! encryption; the high nibble is a flag (0 or 8, the same RAM write either way). How it
-//! works comes from the device's firmware (the routine at $41xx in bank 6 that decodes
-//! the code list):
+//! address), with the value and address encrypted. How it works comes from the device's
+//! firmware: the routine at $411F in bank 6 decodes the code list, the one at $3423 in
+//! bank 0 applies it, one code per interrupt.
+//!
+//! The type's high nibble says what a code does: `E` is a condition (while the address
+//! holds the value, the device applies no codes at all: it stays on that entry), anything
+//! else writes the value to the address. Bits 2–3 pick the encryption:
 //!
 //! | Type bits 2–3 | e.g.         | value    | low address byte  | high address byte |
 //! |---------------|--------------|----------|-------------------|-------------------|
@@ -67,17 +70,14 @@ const UNTABLE: [u8; 256] = {
     out
 };
 
-/// Decrypts an Xploder code given as 8 hex digits (without the `$`). `None` for a type
-/// freki does not know or an address outside RAM.
+/// Decrypts an Xploder code given as 8 hex digits (without the `$`). `None` if it does
+/// not decrypt to a RAM address (garbage, or a typo).
 pub fn decode(hex: &str) -> Option<Code> {
     if hex.len() != 8 {
         return None;
     }
     let byte = |i: usize| u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok();
     let (kind, value, lo, hi) = (byte(0)?, byte(1)?, byte(2)?, byte(3)?);
-    if !matches!(kind & 0xF0, 0x00 | 0x80) {
-        return None;
-    }
     let (value, lo, hi) = match (kind >> 2) & 3 {
         0 => (value, lo, hi),
         1 => (value, lo ^ 0x19, hi ^ 0x73),
@@ -89,9 +89,14 @@ pub fn decode(hex: &str) -> Option<Code> {
         ),
     };
     let address = u16::from_le_bytes([lo, hi]);
-    (address >= 0x8000).then_some(Code::Xploder {
-        location: Location::new(address),
-        value,
+    if address < 0x8000 {
+        return None;
+    }
+    let location = Location::new(address);
+    Some(if kind & 0xF0 == 0xE0 {
+        Code::XploderIf { location, value }
+    } else {
+        Code::Xploder { location, value }
     })
 }
 
@@ -136,8 +141,47 @@ mod tests {
     }
 
     #[test]
-    fn unknown_types_are_refused() {
-        assert_eq!(decode("E0123456"), None);
-        assert!(Code::parse("$E0123456").is_err());
+    fn every_type_is_a_write_or_a_condition() {
+        let location = Location::new(0xC0DE);
+        // Unencrypted (bits 2–3 clear): the high nibble alone decides.
+        for kind in ["00", "10", "70", "80", "90", "D0", "F0"] {
+            assert_eq!(
+                decode(&format!("{kind}2ADEC0")),
+                Some(Code::Xploder {
+                    location,
+                    value: 0x2A
+                }),
+                "type {kind}"
+            );
+        }
+        assert_eq!(
+            decode("E02ADEC0"),
+            Some(Code::XploderIf {
+                location,
+                value: 0x2A
+            })
+        );
+        // Encrypted like the others: type 1 (XOR), type 2 (swap and XOR).
+        assert_eq!(
+            decode(&format!("E42A{:02X}{:02X}", 0xDE ^ 0x19, 0xC0 ^ 0x73)),
+            Some(Code::XploderIf {
+                location,
+                value: 0x2A
+            })
+        );
+        assert_eq!(
+            decode(&format!(
+                "08{:02X}{:02X}{:02X}",
+                0x2A + 0x1B,
+                0xC0 ^ 0x3B,
+                0xDE ^ 0x15
+            )),
+            Some(Code::Xploder {
+                location,
+                value: 0x2A
+            })
+        );
+        // Not RAM.
+        assert_eq!(decode("00001234"), None);
     }
 }

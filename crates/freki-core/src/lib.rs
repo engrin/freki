@@ -310,6 +310,15 @@ impl GameBoy {
     }
 
     fn apply_frame_cheats(&mut self) {
+        // An Xploder condition that holds stops all cheat writes, as on the device.
+        let paused = self
+            .bus
+            .cheats
+            .frame_conditions()
+            .any(|(location, value)| self.peek_location(location) == value);
+        if paused {
+            return;
+        }
         let writes: Vec<(Location, u8)> = self.bus.cheats.frame_writes().collect();
         for (location, value) in writes {
             self.write_location(location, value);
@@ -772,6 +781,22 @@ mod tests {
         rom[0x149] = 0x00; // no RAM
         rom[0x150..0x152].copy_from_slice(&[0x18, 0xFE]); // JR -2
         rom
+    }
+
+    #[test]
+    fn an_xploder_condition_pauses_all_cheat_writes() {
+        let mut gb = GameBoy::new(test_rom()).unwrap();
+        gb.cheats_mut().add("0142C0C0", "write").unwrap(); // $C0C0 = $42
+        gb.cheats_mut().add("$E00701C0", "pause").unwrap(); // while $C001 == $07
+        gb.run_frame().unwrap();
+        assert_eq!(gb.peek(0xC0C0), 0x42);
+        gb.poke(0xC001, 0x07);
+        gb.poke(0xC0C0, 0x00);
+        gb.run_frame().unwrap();
+        assert_eq!(gb.peek(0xC0C0), 0x00, "condition holds: no writes");
+        gb.poke(0xC001, 0x08);
+        gb.run_frame().unwrap();
+        assert_eq!(gb.peek(0xC0C0), 0x42, "condition gone: writes again");
     }
 
     #[test]
