@@ -1548,6 +1548,12 @@ impl Ppu {
             self.wx_triggered = true;
             self.fetch = Fetch::Tile1;
             self.window_being_fetched = true;
+            if self.wx == 166 && !self.dmg_hardware() {
+                // CGB: a window started on the last pixel raises the mode 0 interrupt when
+                // mode 3 would have ended without it (SameBoy's wx_166_interrupt_glitch;
+                // Gambatte's hwtests, window/m2int_wxA6_m0irq*).
+                self.irq_mode = Mode::HBlank;
+            }
             if self.wx == 0 && self.scx & 7 != 0 {
                 // DMG: starting the window at WX = 0 with fine scroll costs one extra dot.
                 self.window_stall = true;
