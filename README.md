@@ -1,13 +1,51 @@
-# freki
+<h1 align="center">freki</h1>
 
-A Game Boy, Game Boy Color and Super Game Boy emulator written in Rust, for Windows, Linux
-and macOS.
+<p align="center">
+A Game Boy, Game Boy Color and Super Game Boy emulator written in Rust,<br>
+for Windows, Linux and macOS. Named after Freki, one of Odin's two wolves.
+</p>
 
-Named after Freki, one of Odin's two wolves.
+<p align="center">
+<img src="https://img.shields.io/badge/rust-nightly-555?logo=rust" alt="Rust nightly">
+<img src="https://img.shields.io/badge/platforms-windows%20%7C%20linux%20%7C%20macos-2f6db5" alt="Windows, Linux, macOS">
+<img src="https://img.shields.io/badge/mooneye-152%20%2F%20152-3d7a3d" alt="Mooneye 152 / 152">
+<img src="https://img.shields.io/badge/acid2-pixel--perfect-3d7a3d" alt="acid2 pixel-perfect">
+<img src="https://img.shields.io/badge/license-MIT-b5592f" alt="MIT license">
+</p>
+
+<p align="center">
+<a href="#features">Features</a> ·
+<a href="#getting-started">Getting started</a> ·
+<a href="#controls">Controls</a> ·
+<a href="#accuracy">Accuracy</a> ·
+<a href="#guide">Guide</a> ·
+<a href="#development">Development</a>
+</p>
+
+<p align="center">
+<img src="docs/images/desktop.png" alt="freki running The Legend of Zelda: Link's Awakening DX, with the debugger window next to it">
+</p>
+
+<table align="center">
+<tr>
+<td align="center"><img src="docs/images/zelda-dx.png" width="200" alt="Link's Awakening DX intro"><br>Game Boy Color</td>
+<td align="center"><img src="docs/images/pokemon-sgb.png" width="204" alt="Pokémon Blue with its Super Game Boy border"><br>Super Game Boy borders</td>
+<td align="center"><img src="docs/images/donkey-kong-sgb.png" width="204" alt="Donkey Kong with its Super Game Boy border"><br>SGB colour and sound</td>
+<td align="center"><img src="docs/images/camera.png" width="200" alt="Game Boy Camera title screen"><br>Game Boy Camera</td>
+</tr>
+</table>
 
 ## Features
 
-### Emulation
+| | |
+|---|---|
+| **Accurate**<br>cycle-timed CPU, timer and DMA, and a pixel-by-pixel PPU for mid-scanline effects | **Every console**<br>Game Boy, Game Boy Color and Super Game Boy, with SGB borders, palettes and the SNES's own sound |
+| **Every cartridge**<br>MBC1–7, MMM01, HuC1/HuC3, TAMA5, clocks, rumble, tilt, and unlicensed carts | **Accessories**<br>link cable and infrared between two Game Boys, Game Boy Printer, Game Boy Camera with a webcam |
+| **Comfortable play**<br>rewind, fast-forward, 10 save states with previews, soft patching, gamepads with their own button labels | **Cheats**<br>GameShark, Game Genie and Xploder codes, a cheat manager and a memory search |
+| **For developers**<br>debugger with labels from `.sym` files, VRAM and sound viewers, a terminal console | **Headless mode**<br>scripted runs with button presses, traces, screenshots and save states |
+
+<details>
+<summary><b>Emulation in detail</b></summary>
 
 - **Game Boy and Game Boy Color**, including double speed, VRAM DMA, colour palettes and
   tile attributes, and original Game Boy games colourised by the GBC's boot ROM
@@ -40,7 +78,10 @@ Named after Freki, one of Odin's two wolves.
 - **Optional boot ROMs:** start with the real Game Boy or Game Boy Color boot animation, or
   straight into the game
 
-### Playing
+</details>
+
+<details>
+<summary><b>Playing in detail</b></summary>
 
 - **Open ROMs your way:** `.gb`, `.gbc` or `.zip`, from the menu, the recent list, the
   command line or by dropping them on the window
@@ -75,7 +116,10 @@ Named after Freki, one of Odin's two wolves.
 - **Screenshots** of the screen as shown, and **video recording** with sound (WebM: AV1
   picture, Opus sound), encoded inside freki without external tools
 
-### Debugging
+</details>
+
+<details>
+<summary><b>Debugging in detail</b></summary>
 
 - **Debugger:** pause, step by instruction, scanline or frame; registers, disassembly,
   memory and stack; breakpoints and read/write watchpoints
@@ -100,23 +144,7 @@ Named after Freki, one of Odin's two wolves.
   with scripted button presses, cheats, linked games, instruction traces in Gameboy
   Doctor's format, screenshots and save states
 
-## Accuracy
-
-| Test suite | Result |
-|---|---|
-| Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`, `dmg_sound`, `cgb_sound` | all pass |
-| `dmg-acid2`, `cgb-acid2` | pixel-perfect |
-| Mooneye acceptance and MBC tests (DMG) | 94 / 94 |
-| Mooneye tests for all models or the CGB, with or without the boot ROM | 58 / 58 |
-| mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
-| mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
-| Gambatte hardware tests | DMG 1522 / 1651, GBC 2582 / 3023 |
-| SameSuite (GBC and SGB; mostly sound, sample-exact) | 31 / 78 |
-| AGE test ROMs (DMG, GBC and GBC in DMG mode) | 15 / 59 |
-
-The failures are listed in `crates/freki-core/tests/gambatte_failures.txt` and
-`same_age_failures.txt`. Some AGE tests exist once per hardware revision, so not all of them
-can pass on one emulated console.
+</details>
 
 ## Getting started
 
@@ -157,7 +185,51 @@ The Game Boy buttons and the turbo buttons can be rebound under **Emulation →
 Controls…**. Settings such as the palette, scale, controls, volume, recent ROMs, boot ROMs,
 the Game Boy Camera's picture and where the tool windows were are remembered between runs.
 
-## Files next to the ROM
+## Two Game Boys, one window
+
+<p align="center">
+<img src="docs/images/mystery-gift.png" alt="Two linked Game Boys after a Mystery Gift in Pokémon Crystal">
+</p>
+
+**Emulation → Link cable → Connect a second game…** starts a second Game Boy to the right of
+the first, connected by a link cable (or from the command line: `freki red.gb --link
+blue.gb`). Both run in step, so trades and two-player games work as on two real Game Boys.
+The keyboard and the first gamepad play the left Game Boy and the second gamepad the right
+one; F4 moves the keyboard to the other side. You hear the Game Boy the keyboard plays.
+The two also face each other with their infrared ports: the GBC's (Pokémon Gold, Silver
+and Crystal's Mystery Gift, …) and those of Hudson's HuC1 and HuC3 cartridges; as on the
+real console, each one also sees its own LED.
+Each game keeps its battery save; a game linked with itself saves the second copy in
+`game.2.sav`. Save states and rewind are off while linked. Headless mode can link too
+(`--link`, `--link-sav`, `--press2`).
+
+## Accuracy
+
+<p align="center">
+<img src="docs/images/dmg-acid2.png" width="240" alt="dmg-acid2 as freki draws it">
+<img src="docs/images/cgb-acid2.png" width="240" alt="cgb-acid2 as freki draws it">
+</p>
+
+| Test suite | Result |
+|---|---|
+| Blargg's `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`, `dmg_sound`, `cgb_sound` | all pass |
+| `dmg-acid2`, `cgb-acid2` | pixel-perfect |
+| Mooneye acceptance and MBC tests (DMG) | 94 / 94 |
+| Mooneye tests for all models or the CGB, with or without the boot ROM | 58 / 58 |
+| mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
+| mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
+| Gambatte hardware tests | DMG 1522 / 1651, GBC 2582 / 3023 |
+| SameSuite (GBC and SGB; mostly sound, sample-exact) | 31 / 78 |
+| AGE test ROMs (DMG, GBC and GBC in DMG mode) | 15 / 59 |
+
+The failures are listed in `crates/freki-core/tests/gambatte_failures.txt` and
+`same_age_failures.txt`. Some AGE tests exist once per hardware revision, so not all of them
+can pass on one emulated console.
+
+## Guide
+
+<details>
+<summary><b>Files next to the ROM</b></summary>
 
 | File | What |
 |---|---|
@@ -171,7 +243,10 @@ the Game Boy Camera's picture and where the tool windows were are remembered bet
 | `game-001.png`, … | Screenshots |
 | `game-001.webm`, … | Videos (File → Record video) |
 
-## Consoles and boot ROMs
+</details>
+
+<details>
+<summary><b>Consoles, boot ROMs and Super Game Boy sound</b></summary>
 
 **Emulation → Console** chooses the hardware. **Auto** runs Game Boy Color games on a GBC,
 games with Super Game Boy features on an SGB, and everything else on a Game Boy. **Game Boy
@@ -204,31 +279,10 @@ sound, choose your own boot ROM dumps under **Emulation → Boot ROM → Choose 
 not included. The GBC boot ROM also picks the colours for original Game Boy games; without
 it they are shown in grey.
 
-## Recording video
+</details>
 
-**File → Record video** (Shift+F12) records the screen as shown (Super Game Boy border,
-linked games and frame blending included) with its sound, until you stop it; the video is
-saved next to the ROM as `game-001.webm`. The picture is doubled in size without
-smoothing, so pixels stay sharp, and encoded as AV1; the sound as Opus. Both encoders are
-pure Rust and part of freki. Encoding runs on all CPU cores in the background, so the game
-does not slow down. The files play in Chrome, Firefox, VLC and mpv; Safari plays AV1 only
-on recent Apple hardware.
-
-## Link cable
-
-**Emulation → Link cable → Connect a second game…** starts a second Game Boy to the right of
-the first, connected by a link cable (or from the command line: `freki red.gb --link
-blue.gb`). Both run in step, so trades and two-player games work as on two real Game Boys.
-The keyboard and the first gamepad play the left Game Boy and the second gamepad the right
-one; F4 moves the keyboard to the other side. You hear the Game Boy the keyboard plays.
-The two also face each other with their infrared ports: the GBC's (Pokémon Gold, Silver
-and Crystal's Mystery Gift, …) and those of Hudson's HuC1 and HuC3 cartridges; as on the
-real console, each one also sees its own LED.
-Each game keeps its battery save; a game linked with itself saves the second copy in
-`game.2.sav`. Save states and rewind are off while linked. Headless mode can link too
-(`--link`, `--link-sav`, `--press2`).
-
-## Game Boy Printer
+<details>
+<summary><b>Game Boy Printer</b></summary>
 
 **Emulation → Link cable → Game Boy Printer** plugs a printer into the link cable port (in
 place of a second game). When a game prints, the Printer window shows the paper coming out,
@@ -237,7 +291,10 @@ finished when the game feeds the paper out after printing; pictures printed in s
 end up on one page. **Tear off** finishes the page by hand, for games that never feed the
 paper out. Headless mode prints with `--printer page.png`.
 
-## Game Boy Camera
+</details>
+
+<details>
+<summary><b>Game Boy Camera</b></summary>
 
 The camera "sees" a picture you choose: **Emulation → Camera picture…** takes a PNG or JPEG,
 which freki turns grey, crops to the sensor's shape and scales to its 128 × 120 pixels.
@@ -252,7 +309,10 @@ only runs while a camera cartridge is in. The picture or webcam is remembered be
 **Camera: test pattern** goes back to the pattern. Headless mode takes a picture with
 `--camera picture.png`.
 
-## Cheats
+</details>
+
+<details>
+<summary><b>Cheats and memory search</b></summary>
 
 **Cheats → Cheat manager…** adds, toggles, edits (✎) and removes codes, and **Cheats →
 Memory search…** finds the address of a value. Both open as windows of their own, so they can sit
@@ -313,7 +373,23 @@ search add 0 9 Lives  # candidate 0 becomes GameShark code 0109xxxx
 cheat save            # writes game.cht
 ```
 
-## Headless mode
+</details>
+
+<details>
+<summary><b>Recording video</b></summary>
+
+**File → Record video** (Shift+F12) records the screen as shown (Super Game Boy border,
+linked games and frame blending included) with its sound, until you stop it; the video is
+saved next to the ROM as `game-001.webm`. The picture is doubled in size without
+smoothing, so pixels stay sharp, and encoded as AV1; the sound as Opus. Both encoders are
+pure Rust and part of freki. Encoding runs on all CPU cores in the background, so the game
+does not slow down. The files play in Chrome, Firefox, VLC and mpv; Safari plays AV1 only
+on recent Apple hardware.
+
+</details>
+
+<details>
+<summary><b>Headless mode</b></summary>
 
 `freki --headless ROM [options]` runs a game as fast as possible without a window or
 sound. It can press buttons at given frames, stop at breakpoints or watchpoints, and log
@@ -335,6 +411,8 @@ freki --headless game.gbc --frames 400 --frame-blend --screenshot blended.png
 freki --headless game.gbc --frames 1200 --record clip.webm          # 20 seconds of video
 freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # print pages
 ```
+
+</details>
 
 ## Development
 
