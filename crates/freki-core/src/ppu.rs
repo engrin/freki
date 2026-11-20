@@ -39,6 +39,9 @@ const MODE3_STAT_DOT: u32 = 79;
 const SPRITE_SORT_DOT: u32 = 81;
 /// First dot of the pixel pipeline.
 const PIPELINE_START_DOT: u32 = 86;
+/// CGB at normal speed: dots before the line ends that an LY = LYC match with the next line
+/// raises its interrupt.
+const CGB_LYC_IRQ_LEAD: u32 = 2;
 /// CGB: dot of line 143 at which entering VBlank triggers the OAM STAT interrupt
 /// (Mooneye's vblank_stat_intr-C allows 448–451; the DMG fires it at line 144, dot 0).
 const CGB_VBLANK_OAM_INT_DOT: u32 = 450;
@@ -258,6 +261,10 @@ pub struct Ppu {
     /// freki does (see `take_early_irq`).
     #[serde(skip)]
     early_irq: u8,
+    /// The coming line's LY = LYC interrupt was raised early (`CGB_LYC_IRQ_LEAD`), so the
+    /// match starting with the line is no new edge.
+    #[serde(default)]
+    lyc_irq_early: bool,
     /// Previous level of the combined STAT interrupt line (interrupts fire on rising edges).
     stat_line: bool,
     /// Dots until a STAT interrupt raised by a register write is requested (0: none).
@@ -410,6 +417,7 @@ impl Ppu {
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
             early_irq: 0,
+            lyc_irq_early: false,
             stat_line: false,
             write_irq_in: 0,
             palette_unlock_in: 0,
@@ -1212,6 +1220,27 @@ impl Ppu {
             && self.irq_stat & stat::OAM_INT != 0
             && !self.oam_int_armed
         {
+            self.stat_line = true;
+        }
+        // CGB at normal speed: an LY = LYC match with the next line raises the interrupt
+        // 2 dots before the line ends (if nothing holds the STAT line high then); the match
+        // itself (flag, blocking) still starts with the line. At an M-cycle boundary this
+        // looks the same, but the LCD can run 1–3 dots off the CPU's M-cycle after speed
+        // switches (Gambatte's hwtests, lcd_offset/*lyc98int_ly_count*, cgbpal_m3, vram_m3).
+        if !self.dmg_hardware()
+            && !self.double_speed
+            && self.ly < LINES_PER_FRAME - 1
+            && self.dot == DOTS_PER_LINE - CGB_LYC_IRQ_LEAD
+            && self.ly + 1 == self.irq_lyc
+            && self.irq_stat & stat::LYC_INT != 0
+            && !self.exclude_lyc_source
+            && !self.stat_line
+            && !self.stat_sources()
+        {
+            irq |= interrupt::STAT;
+            self.lyc_irq_early = true;
+        }
+        if lyc_line_start && std::mem::take(&mut self.lyc_irq_early) {
             self.stat_line = true;
         }
         // STAT interrupt fires on a rising edge of the OR of all enabled sources.
