@@ -108,7 +108,7 @@ Named after Freki, one of Odin's two wolves.
 | Mooneye tests for all models or the CGB, with or without the boot ROM | 58 / 58 |
 | mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
 | mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
-| Gambatte hardware tests | DMG 1518 / 1651, GBC 2530 / 3023 |
+| Gambatte hardware tests | DMG 1522 / 1651, GBC 2530 / 3023 |
 | SameSuite (GBC and SGB; mostly sound, sample-exact) | 31 / 78 |
 | AGE test ROMs (DMG, GBC and GBC in DMG mode) | 15 / 59 |
 

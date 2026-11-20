@@ -621,7 +621,10 @@ impl Cpu {
         let early = bus.take_early_irq() & bus.interrupt_enable & 0x1F;
         if cgb {
             self.early_seen = early;
-        } else {
+        } else if !just_halted {
+            // An edge in HALT's first halted M-cycle wakes the DMG an M-cycle later, as the
+            // CGB always does (Gambatte's hwtests, halt/late_m0i*_halt_m0stat_scx3_2b; found
+            // by Cartouche, phmatray/cartouche#321).
             requested |= early != 0;
         }
         if self.speed_switch_halt > 0 {
