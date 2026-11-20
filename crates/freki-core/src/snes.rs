@@ -28,11 +28,19 @@ pub const GB_DIVIDER: u32 = 5;
 enum Ipl {
     /// Waiting for $CC in port 0 (ports 0/1 show $AA/$BB).
     WaitKick,
+    /// A block was announced: waiting for port 0 to become 0 (the first index).
+    WaitZero { addr: u16 },
     /// Receiving a block: the next byte goes to `addr + index`.
     Transfer { addr: u16, index: u8 },
     /// The uploaded program runs.
     Running,
+    /// The boot ROM starts over (its zero-fill loop) for this many more SPC700 cycles,
+    /// leaving the ports as they are.
+    Restarting(u32),
 }
+
+/// SPC700 cycles of the boot ROM's RAM zero-fill before it signals $AA/$BB again.
+const IPL_RESTART_CYCLES: u32 = 2400;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]
 struct DmaChannel {
@@ -70,7 +78,7 @@ pub struct SnesBus {
     apu_debt: u64,
     pub audio: Vec<(i16, i16)>,
     open_bus: u8,
-    nmitimen: u8,
+    pub nmitimen: u8,
     nmi_flag: bool,
     nmi_line: bool,
     irq_flag: bool,
@@ -210,6 +218,9 @@ impl SnesBus {
 
     fn new_line(&mut self) {
         self.v += 1;
+        if (1..=224).contains(&self.v) {
+            self.ppu.draw_line(self.v as usize - 1);
+        }
         if self.v == LINES {
             self.v = 0;
             self.nmi_flag = false;
@@ -248,8 +259,16 @@ impl SnesBus {
         self.ipl_poll();
         if self.ipl == Ipl::Running {
             self.smp.run(cycles, &mut self.audio);
-            if self.smp.halted() {
+            if self.smp.in_boot_rom() {
                 // The program jumped back into the boot ROM.
+                self.ipl = Ipl::Restarting(IPL_RESTART_CYCLES);
+            }
+        } else if let Ipl::Restarting(left) = self.ipl {
+            self.smp.run(cycles, &mut self.audio);
+            if left > cycles {
+                self.ipl = Ipl::Restarting(left - cycles);
+            } else {
+                self.smp.enter_boot_rom();
                 self.ipl = Ipl::WaitKick;
                 self.smp.output[0] = 0xAA;
                 self.smp.output[1] = 0xBB;
@@ -271,6 +290,12 @@ impl SnesBus {
                     self.ipl_command();
                 }
             }
+            Ipl::WaitZero { addr } => {
+                if input[0] == 0 {
+                    self.ipl = Ipl::Transfer { addr, index: 0 };
+                    self.ipl_poll();
+                }
+            }
             Ipl::Transfer { addr, index } => {
                 let diff = input[0].wrapping_sub(index) as i8;
                 if diff == 0 {
@@ -288,7 +313,7 @@ impl SnesBus {
                     self.ipl_command();
                 }
             }
-            Ipl::Running => {}
+            Ipl::Running | Ipl::Restarting(_) => {}
         }
     }
 
@@ -296,11 +321,14 @@ impl SnesBus {
         let input = self.smp.input;
         let addr = u16::from_le_bytes([input[2], input[3]]);
         self.smp.output[0] = input[0];
-        if input[1] == 0 {
+        if input[1] == 0 && addr >= 0xFFC0 {
+            // Into the boot ROM itself: it starts over.
+            self.ipl = Ipl::Restarting(IPL_RESTART_CYCLES);
+        } else if input[1] == 0 {
             self.smp.jump(addr);
             self.ipl = Ipl::Running;
         } else {
-            self.ipl = Ipl::Transfer { addr, index: 0 };
+            self.ipl = Ipl::WaitZero { addr };
         }
     }
 

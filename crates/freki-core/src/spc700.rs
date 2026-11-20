@@ -142,11 +142,28 @@ impl Smp {
         self.halted = false;
     }
 
-    /// Jumps to `entry` as the boot ROM does at the end of an upload (without the clearing
-    /// of [`Smp::start`], which the boot ROM only does at reset).
+    /// Jumps to `entry` as the boot ROM does at the end of an upload: the address is left
+    /// at $0000, A=X=Y=0, SP=$EF, PSW=$02 (fullsnes, "Boot ROM Disassembly").
     pub fn jump(&mut self, entry: u16) {
+        self.ram[0..2].copy_from_slice(&entry.to_le_bytes());
+        self.a = 0;
+        self.x = 0;
+        self.y = 0;
+        self.sp = 0xEF;
+        self.psw = Z;
         self.pc = entry;
         self.halted = false;
+    }
+
+    /// Whether the CPU is in the boot ROM (waiting for an upload).
+    pub fn in_boot_rom(&self) -> bool {
+        self.halted && self.rom_enabled && self.pc >= 0xFFC0
+    }
+
+    /// What the boot ROM does on entry: $0001–$00EF zero-filled, SP=$EF.
+    pub fn enter_boot_rom(&mut self) {
+        self.ram[0x0001..0x00F0].fill(0);
+        self.sp = 0xEF;
     }
 
     pub fn halted(&self) -> bool {

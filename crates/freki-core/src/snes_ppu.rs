@@ -77,7 +77,27 @@ pub struct SnesPpu {
     /// Open bus of PPU1 and PPU2 reads.
     ppu1_bus: u8,
     ppu2_bus: u8,
+    /// The picture, 256 × 224 BGR555, as drawn line by line.
+    #[serde(skip, default = "blank_frame")]
+    pub frame: Vec<u16>,
 }
+
+fn blank_frame() -> Vec<u16> {
+    vec![0; WIDTH * HEIGHT]
+}
+
+/// One layer's pixel: colour (CGRAM index or, for direct colour, unused), priority, and
+/// whether colour math applies (OBJ palettes 4–7).
+#[derive(Clone, Copy, Default)]
+struct Px {
+    color: u8,
+    priority: u8,
+    opaque: bool,
+    obj_math: bool,
+}
+
+/// Layers in the order of the priority tables: 0–3 BG1–4, 4 OBJ.
+const OBJ: usize = 4;
 
 impl Default for SnesPpu {
     fn default() -> Self {
@@ -137,6 +157,7 @@ impl SnesPpu {
             counters_latched: false,
             ppu1_bus: 0,
             ppu2_bus: 0,
+            frame: blank_frame(),
         }
     }
 
@@ -366,5 +387,426 @@ impl SnesPpu {
         if self.inidisp & 0x80 == 0 {
             self.oam_addr = self.oam_reload << 1;
         }
+    }
+
+    // ---- drawing -------------------------------------------------------------------------
+
+    /// Bits per pixel of each BG in the current mode (0: not present).
+    fn bg_bpp(&self) -> [u8; 4] {
+        match self.bgmode & 7 {
+            0 => [2, 2, 2, 2],
+            1 => [4, 4, 2, 0],
+            2 => [4, 4, 0, 0],
+            3 => [8, 4, 0, 0],
+            4 => [8, 2, 0, 0],
+            5 => [4, 2, 0, 0],
+            6 => [4, 0, 0, 0],
+            _ => [8, 0, 0, 0],
+        }
+    }
+
+    /// One BG line: 256 pixels.
+    fn bg_line(&self, bg: usize, bpp: u8, y: u16, out: &mut [Px; WIDTH]) {
+        let big = self.bgmode & (0x10 << bg) != 0;
+        let tile_px: u16 = if big { 16 } else { 8 };
+        let sc = self.bg_sc[bg];
+        let map_base = ((sc as u16 >> 2) << 10) & 0x7FFF;
+        let (wide, tall) = (sc & 1 != 0, sc & 2 != 0);
+        let nba = self.bg_nba[bg / 2] >> ((bg & 1) * 4) & 0x0F;
+        let char_base = (nba as u16) << 12;
+        let hofs = self.bg_hofs[bg] & 0x3FF;
+        let vofs = self.bg_vofs[bg] & 0x3FF;
+        let yy = y.wrapping_add(vofs) & 0x3FF;
+        let words = bpp as u16 * 4;
+        let palette_base: u8 = if self.bgmode & 7 == 0 {
+            bg as u8 * 32
+        } else {
+            0
+        };
+        let colors = 1u16 << bpp;
+        for x in 0..WIDTH as u16 {
+            let xx = x.wrapping_add(hofs) & 0x3FF;
+            let (tx, ty) = (xx / tile_px, yy / tile_px);
+            let mut map = map_base + (ty & 31) * 32 + (tx & 31);
+            if wide && tx & 32 != 0 {
+                map += 0x400;
+            }
+            if tall && ty & 32 != 0 {
+                map += if wide { 0x800 } else { 0x400 };
+            }
+            let entry = self.vram[(map & 0x7FFF) as usize];
+            let (hflip, vflip) = (entry & 0x4000 != 0, entry & 0x8000 != 0);
+            let mut px = xx % tile_px;
+            let mut py = yy % tile_px;
+            if hflip {
+                px = tile_px - 1 - px;
+            }
+            if vflip {
+                py = tile_px - 1 - py;
+            }
+            let mut tile = entry & 0x3FF;
+            if big {
+                tile = tile.wrapping_add((px / 8) + (py / 8) * 16) & 0x3FF;
+            }
+            let addr = char_base.wrapping_add(tile * words).wrapping_add(py % 8);
+            let bit = 7 - (px % 8);
+            let mut index = 0u16;
+            for plane in 0..bpp as u16 {
+                let w = self.vram[(addr.wrapping_add((plane / 2) * 8) & 0x7FFF) as usize];
+                let byte = if plane % 2 == 0 {
+                    w as u8
+                } else {
+                    (w >> 8) as u8
+                };
+                index |= (((byte >> bit) & 1) as u16) << plane;
+            }
+            if index == 0 {
+                continue;
+            }
+            let palette = (entry >> 10) & 7;
+            let color = if bpp == 8 {
+                index as u8
+            } else {
+                palette_base.wrapping_add((palette * colors + index) as u8)
+            };
+            out[x as usize] = Px {
+                color,
+                priority: (entry >> 13) as u8 & 1,
+                opaque: true,
+                obj_math: true,
+            };
+        }
+    }
+
+    /// Mode 7's BG1 line.
+    fn mode7_line(&self, y: u16, out: &mut [Px; WIDTH]) {
+        let s13 = |v: u16| ((v << 3) as i16 >> 3) as i32;
+        let clip = |v: i32| {
+            if v & 0x2000 != 0 {
+                v | !0x3FF
+            } else {
+                v & 0x3FF
+            }
+        };
+        let a = self.m7[0] as i16 as i32;
+        let b = self.m7[1] as i16 as i32;
+        let c = self.m7[2] as i16 as i32;
+        let d = self.m7[3] as i16 as i32;
+        let x0 = s13(self.m7[4]);
+        let y0 = s13(self.m7[5]);
+        let hofs = s13(self.m7_hofs);
+        let vofs = s13(self.m7_vofs);
+        let yy = if self.m7sel & 2 != 0 {
+            255 - y as i32
+        } else {
+            y as i32
+        };
+        let px0 = ((a * clip(hofs - x0)) & !63)
+            + ((b * clip(vofs - y0)) & !63)
+            + ((b * yy) & !63)
+            + (x0 << 8);
+        let py0 = ((c * clip(hofs - x0)) & !63)
+            + ((d * clip(vofs - y0)) & !63)
+            + ((d * yy) & !63)
+            + (y0 << 8);
+        for x in 0..WIDTH as i32 {
+            let xx = if self.m7sel & 1 != 0 { 255 - x } else { x };
+            let mx = (px0 + a * xx) >> 8;
+            let my = (py0 + c * xx) >> 8;
+            let outside = !(0..1024).contains(&mx) || !(0..1024).contains(&my);
+            let tile = match self.m7sel >> 6 {
+                2 | 3 if outside => {
+                    if self.m7sel >> 6 == 2 {
+                        continue;
+                    }
+                    0
+                }
+                _ => {
+                    let (tx, ty) = ((mx & 1023) >> 3, (my & 1023) >> 3);
+                    self.vram[(ty * 128 + tx) as usize] as u8
+                }
+            };
+            let (fx, fy) = (mx & 7, my & 7);
+            let color = (self.vram[(tile as i32 * 64 + fy * 8 + fx) as usize & 0x7FFF] >> 8) as u8;
+            if color != 0 {
+                out[x as usize] = Px {
+                    color,
+                    priority: 0,
+                    opaque: true,
+                    obj_math: true,
+                };
+            }
+        }
+    }
+
+    /// Sprite sizes (width, height) for size bit 0 and 1.
+    fn obj_sizes(&self) -> [(u16, u16); 2] {
+        match self.obsel >> 5 {
+            0 => [(8, 8), (16, 16)],
+            1 => [(8, 8), (32, 32)],
+            2 => [(8, 8), (64, 64)],
+            3 => [(16, 16), (32, 32)],
+            4 => [(16, 16), (64, 64)],
+            5 => [(32, 32), (64, 64)],
+            6 => [(16, 32), (32, 64)],
+            _ => [(16, 32), (32, 32)],
+        }
+    }
+
+    fn obj_line(&self, y: u16, out: &mut [Px; WIDTH]) {
+        let sizes = self.obj_sizes();
+        let base = ((self.obsel as u16 & 7) << 13) & 0x7FFF;
+        let gap = (((self.obsel as u16 >> 3) & 3) + 1) << 12;
+        let first = if self.oam_priority {
+            (self.oam_reload & 0xFE) as usize >> 1
+        } else {
+            0
+        };
+        let mut count = 0;
+        // Lower OAM indexes win: draw from the last so earlier ones overwrite.
+        let mut list = Vec::with_capacity(32);
+        for i in 0..128 {
+            let n = (first + i) & 127;
+            let e = &self.oam[n * 4..n * 4 + 4];
+            let hi = self.oam[0x200 + n / 4] >> ((n % 4) * 2);
+            let (w, h) = sizes[(hi >> 1) as usize & 1];
+            let row = y.wrapping_sub(e[1] as u16) & 0xFF;
+            if row >= h {
+                continue;
+            }
+            let x = e[0] as u16 | ((hi as u16 & 1) << 8);
+            let sx = if x & 0x100 != 0 {
+                x as i32 - 512
+            } else {
+                x as i32
+            };
+            if sx + w as i32 <= 0 && sx != -256 {
+                continue;
+            }
+            list.push((n, sx, row, w, h));
+            count += 1;
+            if count == 32 {
+                break;
+            }
+        }
+        for &(n, sx, row, w, h) in list.iter().rev() {
+            let e = &self.oam[n * 4..n * 4 + 4];
+            let attr = e[3];
+            let (hflip, vflip) = (attr & 0x40 != 0, attr & 0x80 != 0);
+            let r = if vflip { h - 1 - row } else { row };
+            let tile0 = e[2] as u16;
+            let table = if attr & 1 != 0 { base + gap } else { base };
+            for c in 0..w {
+                let x = sx + c as i32;
+                if !(0..WIDTH as i32).contains(&x) {
+                    continue;
+                }
+                let col = if hflip { w - 1 - c } else { c };
+                let tile = ((tile0 & 0xF0) + ((r / 8) << 4)) & 0xF0 | ((tile0 + col / 8) & 0x0F);
+                let addr = table.wrapping_add(tile * 16).wrapping_add(r % 8) & 0x7FFF;
+                let bit = 7 - (col % 8);
+                let mut index = 0u8;
+                for plane in 0..4u16 {
+                    let wd = self.vram[(addr.wrapping_add((plane / 2) * 8) & 0x7FFF) as usize];
+                    let byte = if plane % 2 == 0 {
+                        wd as u8
+                    } else {
+                        (wd >> 8) as u8
+                    };
+                    index |= ((byte >> bit) & 1) << plane;
+                }
+                if index == 0 {
+                    continue;
+                }
+                let palette = (attr >> 1) & 7;
+                out[x as usize] = Px {
+                    color: 128 + palette * 16 + index,
+                    priority: (attr >> 4) & 3,
+                    opaque: true,
+                    obj_math: palette >= 4,
+                };
+            }
+        }
+    }
+
+    /// The layer order, front to back, as (layer, priority) for the current mode.
+    fn order(&self) -> &'static [(usize, u8)] {
+        match self.bgmode & 7 {
+            0 => &[
+                (OBJ, 3),
+                (0, 1),
+                (1, 1),
+                (OBJ, 2),
+                (0, 0),
+                (1, 0),
+                (OBJ, 1),
+                (2, 1),
+                (3, 1),
+                (OBJ, 0),
+                (2, 0),
+                (3, 0),
+            ],
+            1 if self.bgmode & 8 != 0 => &[
+                (2, 1),
+                (OBJ, 3),
+                (0, 1),
+                (1, 1),
+                (OBJ, 2),
+                (0, 0),
+                (1, 0),
+                (OBJ, 1),
+                (OBJ, 0),
+                (2, 0),
+            ],
+            1 => &[
+                (OBJ, 3),
+                (0, 1),
+                (1, 1),
+                (OBJ, 2),
+                (0, 0),
+                (1, 0),
+                (OBJ, 1),
+                (2, 1),
+                (OBJ, 0),
+                (2, 0),
+            ],
+            7 => &[(OBJ, 3), (OBJ, 2), (OBJ, 1), (0, 0), (OBJ, 0)],
+            _ => &[
+                (OBJ, 3),
+                (0, 1),
+                (OBJ, 2),
+                (1, 1),
+                (OBJ, 1),
+                (0, 0),
+                (OBJ, 0),
+                (1, 0),
+            ],
+        }
+    }
+
+    /// Composes one screen (main or sub) from the layer lines enabled in `mask`:
+    /// (colour index or None for backdrop, layer index 0–4 or 5 = backdrop, math allowed).
+    fn compose(&self, lines: &[[Px; WIDTH]; 5], mask: u8, x: usize) -> (Option<u8>, usize, bool) {
+        for &(layer, prio) in self.order() {
+            if mask & (1 << layer) == 0 {
+                continue;
+            }
+            let px = lines[layer][x];
+            if px.opaque
+                && (layer == OBJ || self.bgmode & 7 == 7 || px.priority == prio)
+                && (layer != OBJ || px.priority == prio)
+            {
+                return (Some(px.color), layer, px.obj_math);
+            }
+        }
+        (None, 5, true)
+    }
+
+    /// Draws screen line `y` (0–223) into [`SnesPpu::frame`].
+    pub fn draw_line(&mut self, y: usize) {
+        let row = &mut [0u16; WIDTH];
+        if self.inidisp & 0x80 == 0 {
+            let v = y as u16 + 1;
+            let mut lines = [[Px::default(); WIDTH]; 5];
+            let layers = self.tm | self.ts;
+            if self.bgmode & 7 == 7 {
+                if layers & 1 != 0 {
+                    self.mode7_line(v, &mut lines[0]);
+                }
+            } else {
+                for (bg, &bpp) in self.bg_bpp().iter().enumerate() {
+                    if bpp != 0 && layers & (1 << bg) != 0 {
+                        self.bg_line(bg, bpp, v, &mut lines[bg]);
+                    }
+                }
+            }
+            if layers & 0x10 != 0 {
+                self.obj_line(y as u16, &mut lines[OBJ]);
+            }
+            let brightness = (self.inidisp & 0x0F) as u32;
+            for (x, out) in row.iter_mut().enumerate() {
+                let (main, layer, obj_math) = self.compose(&lines, self.tm, x);
+                let mut color = main.map_or(self.cgram[0], |c| self.cgram[c as usize]);
+                let math_on = self.cgadsub & (1 << layer) != 0 && obj_math;
+                if math_on && self.cgwsel & 0x30 == 0 {
+                    let (sub, half) = if self.cgwsel & 2 != 0 {
+                        match self.compose(&lines, self.ts, x) {
+                            (Some(c), _, _) => (self.cgram[c as usize], true),
+                            (None, _, _) => (self.coldata, false),
+                        }
+                    } else {
+                        (self.coldata, true)
+                    };
+                    color = blend(
+                        color,
+                        sub,
+                        self.cgadsub & 0x80 != 0,
+                        half && self.cgadsub & 0x40 != 0,
+                    );
+                }
+                *out = if brightness == 15 {
+                    color
+                } else {
+                    let ch = |c: u16| ((c as u32 & 31) * (brightness + 1) / 16) as u16;
+                    ch(color) | ch(color >> 5) << 5 | ch(color >> 10) << 10
+                };
+            }
+        }
+        self.frame[y * WIDTH..(y + 1) * WIDTH].copy_from_slice(row);
+    }
+}
+
+/// Colour math on two BGR555 colours.
+fn blend(a: u16, b: u16, subtract: bool, half: bool) -> u16 {
+    let mut out = 0;
+    for shift in [0, 5, 10] {
+        let (x, y) = ((a >> shift) as i32 & 31, (b >> shift) as i32 & 31);
+        let mut v = if subtract { (x - y).max(0) } else { x + y };
+        if half {
+            v >>= 1;
+        }
+        out |= (v.min(31) as u16) << shift;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draws_a_mode1_tile_and_a_sprite_over_it() {
+        let mut ppu = SnesPpu::new();
+        ppu.write(0x00, 0x0F); // display on, full brightness
+        ppu.write(0x05, 0x01); // mode 1
+        ppu.write(0x07, 0x04); // BG1 map at word $0400
+        ppu.write(0x0B, 0x01); // BG1 characters at word $1000
+        ppu.write(0x2C, 0x11); // BG1 and OBJ on the main screen
+        // BG1 tile 1: row 1 all colour 1 (plane 0 set); picture line 0 is scanline 1,
+        // which shows BG row 1 when not scrolled.
+        ppu.vram[0x1000 + 16 + 1] = 0x00FF;
+        // Map entry (0, 0) = tile 1, palette 0.
+        ppu.vram[0x0400] = 1;
+        ppu.cgram[0] = 0x1111;
+        ppu.cgram[1] = 0x001F; // red
+        // Sprite 0 at (4, 0), 8×8, tile 0 at OBJ base $0000 (word $0000), palette 0.
+        ppu.vram[0] = 0x00FF; // row 0, colour 1
+        ppu.cgram[129] = 0x7C00; // blue
+        ppu.oam[0] = 4;
+        ppu.oam[1] = 0;
+        ppu.oam[2] = 0;
+        ppu.oam[3] = 0x30; // priority 3
+        for i in 1..128 {
+            ppu.oam[i * 4 + 1] = 0xF0; // off screen
+        }
+        ppu.draw_line(0);
+        assert_eq!(ppu.frame[0], 0x001F, "BG1 tile");
+        assert_eq!(ppu.frame[4], 0x7C00, "sprite in front");
+        assert_eq!(ppu.frame[3], 0x001F, "BG1 left of the sprite");
+        assert_eq!(ppu.frame[8], 0x7C00);
+        assert_eq!(ppu.frame[20], 0x1111, "backdrop");
+        ppu.write(0x00, 0x07); // half brightness
+        ppu.draw_line(0);
+        assert_eq!(ppu.frame[0], 15, "red at half brightness");
     }
 }

@@ -172,7 +172,10 @@ impl Sgb {
 
     /// The 256×224 picture in RGB555, row by row.
     pub fn frame(&self) -> &[u16] {
-        &self.frame
+        match &self.lle {
+            Some(lle) => &lle.snes.bus.ppu.frame,
+            None => &self.frame,
+        }
     }
 
     /// The low nibble of P1 when the SNES side runs as hardware: the current player's
