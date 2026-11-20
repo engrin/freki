@@ -475,6 +475,9 @@ impl Bus {
         {
             return (value & 0xF0) | id;
         }
+        if let Some(nibble) = sgb.lle_joypad(self.joypad.select()) {
+            return (value & 0xF0) | nibble;
+        }
         if sgb.player_one() {
             value
         } else {
@@ -770,6 +773,7 @@ impl Bus {
         self.breaks = std::mem::take(&mut old.breaks);
         if let (Some(new), Some(old)) = (self.sgb.as_mut(), old.sgb.as_mut()) {
             new.set_sound(old.take_sound());
+            new.lle = old.lle.take();
         }
     }
 
@@ -807,6 +811,12 @@ impl Bus {
         self.apu.tick(video_cycles);
         if let Some(sgb) = self.sgb.as_mut() {
             sgb.tick_sound(video_cycles);
+            if let Some(lle) = sgb.lle.as_mut() {
+                let (ly, _) = self.ppu.line_and_dot();
+                let screen: &[u8] = self.ppu.framebuffer();
+                let line = self.ppu.lcd_enabled().then_some((ly, screen));
+                lle.tick(video_cycles, line);
+            }
         }
         // Falling edges of counter bit 12 (bit 13 in double speed) step the APU's frame
         // sequencer at 512 Hz.

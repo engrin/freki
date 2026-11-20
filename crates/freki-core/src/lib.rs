@@ -14,6 +14,7 @@ pub mod cpu;
 pub mod debugger;
 pub mod disasm;
 pub mod huc3;
+pub mod icd2;
 pub mod joypad;
 pub mod link;
 pub mod mbc6;
@@ -23,8 +24,11 @@ pub mod ppu;
 pub mod printer;
 pub mod serial;
 pub mod sgb;
+pub mod sgb_lle;
 pub mod sgb_sound;
+pub mod snes;
 pub mod snes_dsp;
+pub mod snes_ppu;
 pub mod spc700;
 pub mod state;
 pub mod symbols;
@@ -253,6 +257,19 @@ impl GameBoy {
     /// Executes one CPU instruction. The rest of the hardware is advanced during the
     /// instruction, one M-cycle at a time. Returns the number of T-cycles it took.
     pub fn step(&mut self) -> Result<u32, CpuError> {
+        // A Super Game Boy whose SNES side runs as hardware holds the Game Boy in reset
+        // until its SNES program lets it go.
+        if let Some(lle) = self.bus.sgb.as_mut().and_then(|s| s.lle.as_mut()) {
+            if lle.take_gb_reset() {
+                self.restart_for_sgb();
+            }
+            if let Some(lle) = self.bus.sgb.as_mut().and_then(|s| s.lle.as_mut())
+                && lle.holds_gb()
+            {
+                lle.tick(4, None);
+                return Ok(4);
+            }
+        }
         let cycles = self.cpu.step(&mut self.bus)?;
         if let Some(printer) = self.printer.as_mut() {
             printer.tick(cycles >> u32::from(self.bus.double_speed));
@@ -446,6 +463,39 @@ impl GameBoy {
 
     pub fn set_button(&mut self, button: Button, pressed: bool) {
         self.bus.joypad.set(button, pressed);
+        if let Some(lle) = self.bus.sgb.as_mut().and_then(|s| s.lle.as_mut()) {
+            lle.set_button(button, pressed);
+        }
+    }
+
+    /// The SNES program reset the Game Boy: a fresh one starts (after the boot ROM), with
+    /// the cartridge's RAM and clock kept, as on the real SGB.
+    fn restart_for_sgb(&mut self) {
+        let rom = self.bus.cart.rom_data().to_vec();
+        let Ok(mut fresh) = GameBoy::with_model(rom, Model::Sgb) else {
+            return;
+        };
+        fresh.bus.cart.load_ram(&self.bus.cart.save_data(0), None);
+        fresh.bus.adopt_runtime_from(&mut self.bus);
+        self.cpu = fresh.cpu;
+        self.bus = fresh.bus;
+    }
+
+    /// The Super Game Boy's SNES side, when it runs as hardware.
+    pub fn sgb_snes(&self) -> Option<&snes::Snes> {
+        self.bus.sgb.as_ref()?.lle.as_ref().map(|l| &l.snes)
+    }
+
+    /// Runs the Super Game Boy's SNES side as hardware: `sfc` is the SGB cartridge's SNES
+    /// ROM, whose program then does all the SGB does (see [`sgb_lle`]). Not for other
+    /// models.
+    pub fn set_sgb_snes_rom(&mut self, sfc: &[u8]) -> Result<(), String> {
+        let header: Vec<u8> = (0..0x150).map(|a| self.bus.cart.read_rom(a)).collect();
+        let Some(sgb) = self.bus.sgb.as_mut() else {
+            return Err("not a Super Game Boy".into());
+        };
+        sgb.lle = Some(Box::new(sgb_lle::SgbLle::new(sfc.to_vec(), &header)));
+        Ok(())
     }
 
     /// Address of the next instruction to execute.

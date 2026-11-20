@@ -438,6 +438,11 @@ impl Cartridge {
 
     /// Moves the ROM over from `old` (save states do not contain it). Battery RAM restored
     /// from a state is marked dirty so the save file is brought in line with it.
+    /// The whole ROM.
+    pub(crate) fn rom_data(&self) -> &[u8] {
+        &self.rom
+    }
+
     pub(crate) fn adopt_rom_from(&mut self, old: &mut Cartridge) {
         self.rom = std::mem::take(&mut old.rom);
         if let (Mbc::Camera(new), Mbc::Camera(old)) = (&mut self.mbc, &mut old.mbc) {

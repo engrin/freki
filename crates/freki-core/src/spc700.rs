@@ -142,6 +142,13 @@ impl Smp {
         self.halted = false;
     }
 
+    /// Jumps to `entry` as the boot ROM does at the end of an upload (without the clearing
+    /// of [`Smp::start`], which the boot ROM only does at reset).
+    pub fn jump(&mut self, entry: u16) {
+        self.pc = entry;
+        self.halted = false;
+    }
+
     pub fn halted(&self) -> bool {
         self.halted
     }

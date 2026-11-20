@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::sgb_lle::SgbLle;
 use crate::sgb_sound::SgbSound;
 
 use crate::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -97,6 +98,10 @@ pub struct Sgb {
     /// SGB's SNES ROM (not part of save states; kept when one is loaded).
     #[serde(skip)]
     sound: Option<Box<SgbSound>>,
+    /// The SNES side emulated as hardware, running the SGB cartridge's SNES program
+    /// (see [`crate::sgb_lle`]); replaces the built-in model above when present.
+    #[serde(skip)]
+    pub lle: Option<Box<SgbLle>>,
 }
 
 fn blank_screen() -> Vec<u8> {
@@ -135,6 +140,7 @@ impl Sgb {
             shown: blank_screen(),
             frame: blank_frame(),
             sound: None,
+            lle: None,
         };
         sgb.compose();
         sgb
@@ -169,13 +175,26 @@ impl Sgb {
         &self.frame
     }
 
+    /// The low nibble of P1 when the SNES side runs as hardware: the current player's
+    /// buttons as the SNES program put them in the ICD2.
+    pub fn lle_joypad(&self, select: u8) -> Option<u8> {
+        self.lle
+            .as_ref()
+            .map(|lle| lle.joypad_nibble(self.player, select))
+    }
+
     /// A write to P1 ($FF00): `old` and `new` are the P14/P15 select bits (bits 4–5).
     pub fn write_joypad(&mut self, old: u8, new: u8) {
+        if let Some(lle) = &self.lle {
+            self.players = lle.players();
+            self.player %= self.players;
+        }
         // The next joypad is selected when P15 goes high.
         if old & 0x20 == 0 && new & 0x20 != 0 && self.players % 2 == 0 {
             self.player = (self.player + 1) & (self.players - 1);
         }
-        if !self.enabled {
+        // On the real SGB packets reach the SNES whatever the header says.
+        if !self.enabled && self.lle.is_none() {
             return;
         }
         let old = (old >> 4) & 3;
@@ -210,6 +229,13 @@ impl Sgb {
     /// A pulse ended: P15 low sent a 1, P14 low a 0.
     fn receive_bit(&mut self, one: bool) {
         if self.awaiting_stop {
+            // With the SNES side as hardware, each packet goes to the ICD2 by itself.
+            if let Some(lle) = self.lle.as_mut() {
+                lle.packet(&self.packet[..16]);
+                self.reset_packet();
+                self.receiving = false;
+                return;
+            }
             // The stop bit ends a packet; the command runs once all its packets are in.
             if self.bits == self.packets() * 128 {
                 self.command();
