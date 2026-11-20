@@ -307,6 +307,9 @@ pub struct Cartridge {
     /// MBC7: how far the Game Boy is tilted, in g (see [`Cartridge::set_tilt`]).
     #[serde(skip)]
     tilt: (f32, f32),
+    /// HuC1/HuC3: the cartridge's infrared LED is on.
+    #[serde(default)]
+    ir_led: bool,
 }
 
 /// Detects an MBC1M multicart (several games on one 8 Mbit MBC1 cartridge): a second
@@ -429,6 +432,7 @@ impl Cartridge {
             ram_dirty: false,
             motor_cycles: (0, 0),
             tilt: (0.0, 0.0),
+            ir_led: false,
         })
     }
 
@@ -1038,10 +1042,28 @@ impl Cartridge {
         }
     }
 
+    /// HuC1/HuC3: $A000–$BFFF is the infrared port (bit 0 written: the LED; read: whether
+    /// light is seen, which the bus answers).
+    pub fn ir_selected(&self) -> bool {
+        matches!(
+            self.mbc,
+            Mbc::HuC1 { ir_mode: true, .. } | Mbc::HuC3 { mode: 0x0E, .. }
+        )
+    }
+
+    /// HuC1/HuC3: the cartridge's infrared LED is on.
+    pub fn ir_led(&self) -> bool {
+        self.ir_led
+    }
+
     /// Write to external RAM at $A000–$BFFF.
     pub fn write_ram(&mut self, addr: u16, value: u8) {
         if let Some((rtc, reg)) = self.rtc_register() {
             rtc.write(reg, value);
+            return;
+        }
+        if self.ir_selected() {
+            self.ir_led = value & 1 != 0;
             return;
         }
         if let Mbc::HuC3 { mode, clock, .. } = &mut self.mbc
@@ -1220,6 +1242,7 @@ mod tests {
         cart.write_rom(0x0000, 0x0E);
         assert_eq!(cart.read_ram(0xA000), IR_DARK, "infrared port: no light");
         cart.write_ram(0xA000, 0x01); // LED on: not RAM
+        assert!(cart.ir_led());
         cart.write_rom(0x0000, 0x00);
         assert_eq!(cart.read_ram(0xA000), 0x42);
         cart.write_rom(0x4000, 0x00);
@@ -1246,6 +1269,10 @@ mod tests {
         assert_eq!(cart.read_ram(0xA000) & 1, 1);
         cart.write_rom(0x0000, 0x0E);
         assert_eq!(cart.read_ram(0xA000), IR_DARK);
+        cart.write_ram(0xA000, 0x01);
+        assert!(cart.ir_led());
+        cart.write_ram(0xA000, 0x00);
+        assert!(!cart.ir_led());
     }
 
     #[test]

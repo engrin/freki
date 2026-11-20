@@ -643,6 +643,12 @@ impl GameBoy {
         }
     }
 
+    /// Whether the infrared sensor sees light from outside (another Game Boy's LED). A
+    /// [`Link`] sets this all the time; clear it when unlinking.
+    pub fn set_ir_input(&mut self, light: bool) {
+        self.bus.ir_input = light;
+    }
+
     /// Whether audio is being produced (see [`GameBoy::set_audio_sample_rate`]).
     pub fn produces_audio(&self) -> bool {
         self.bus.apu.sample_rate().is_some()

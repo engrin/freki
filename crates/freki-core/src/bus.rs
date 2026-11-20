@@ -71,6 +71,12 @@ pub struct Bus {
     unusable: [u8; 0x60],
     /// KEY1 ($FF4D) bit 0: a speed switch is armed and happens on the next STOP (CGB).
     speed_switch_armed: bool,
+    /// RP ($FF56): the infrared port (CGB): bit 0 the LED, bits 6–7 = 3 enable reading.
+    #[serde(default)]
+    rp: u8,
+    /// Infrared light from outside (another Game Boy's LED; see [`crate::Link`]).
+    #[serde(skip)]
+    pub ir_input: bool,
     /// The frame sequencer sees DIV's falling edges one M-cycle late. Each switch to
     /// double speed with the APU on toggles this; powering the APU off clears it. It only
     /// applies in double speed (AGE's spsw-ch2-lc-delay).
@@ -175,6 +181,8 @@ impl Bus {
             undocumented: [0; 4],
             unusable: [0; 0x60],
             speed_switch_armed: false,
+            rp: 0,
+            ir_input: false,
             apu_div_late: false,
             apu_step_due: false,
             double_speed: false,
@@ -322,6 +330,8 @@ impl Bus {
                 }
             }
             0x8000..=0x9FFF => self.ppu.read_vram(addr),
+            // HuC1/HuC3 infrared: bit 0 set while light is seen.
+            0xA000..=0xBFFF if self.cart.ir_selected() => 0xC0 | u8::from(self.ir_light()),
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             0xC000..=0xFDFF => self.wram[self.wram_index(addr)],
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
@@ -342,6 +352,12 @@ impl Bus {
             0xFF4F | 0xFF68 | 0xFF6A if self.cgb_hardware => self.ppu.read_reg(addr),
             0xFF55 if self.cgb => {
                 u8::from(!(self.hdma.active || self.hdma.on)) << 7 | self.hdma.remaining
+            }
+            // Bit 1 clear: light seen (only with reading enabled). Bits 2–5 read 1 (bit 4 is
+            // 0 on the CGB-E, by SameBoy).
+            0xFF56 if self.cgb => {
+                let seen = self.rp & 0xC0 == 0xC0 && self.ir_light();
+                (self.rp & 0xC1) | 0x3E & !(u8::from(seen) << 1)
             }
             0xFF70 if self.cgb => 0xF8 | self.svbk,
             0xFF72 | 0xFF73 if self.cgb_hardware => self.undocumented[addr as usize - 0xFF72],
@@ -422,6 +438,7 @@ impl Bus {
             }
             0xFF41..=0xFF4B => self.ppu.write_reg(addr, value),
             0xFF4D if self.cgb => self.speed_switch_armed = value & 1 != 0,
+            0xFF56 if self.cgb_hardware => self.rp = value,
             0xFF4F | 0xFF68..=0xFF6C if self.cgb => self.ppu.write_reg(addr, value),
             0xFF51 if self.cgb => {
                 self.hdma.source = (self.hdma.source & 0xFF) | (value as u16) << 8
@@ -484,6 +501,16 @@ impl Bus {
     }
 
     /// The mode STAT shows (0 with the LCD off).
+    /// An infrared LED (the CGB's or a HuC cartridge's) is on.
+    pub fn ir_led(&self) -> bool {
+        (self.cgb_hardware && self.rp & 1 != 0) || self.cart.ir_led()
+    }
+
+    /// The infrared sensors see light: from outside, or the Game Boy's own LED (SameBoy).
+    fn ir_light(&self) -> bool {
+        self.ir_input || self.ir_led()
+    }
+
     fn stat_mode(&self) -> u8 {
         self.ppu.read_reg(0xFF41) & 3
     }

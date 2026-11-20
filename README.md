@@ -30,8 +30,10 @@ Named after Freki, one of Odin's two wolves.
   multiplayer request games use to detect an SGB; with the SGB cartridge's SNES ROM also
   the **SGB's own sound** (sound effects and music games play on the SNES sound chip, such
   as Donkey Kong's)
-- **Link cable:** a second game runs next to the first, connected by cable, for trading
-  and two-player games (Tetris, Pokémon, …)
+- **Link cable and infrared:** a second game runs next to the first, connected by cable
+  and facing it with the infrared port, for trading, two-player games (Tetris, Pokémon, …)
+  and infrared features (the GBC's port and Hudson's HuC1/HuC3 cartridges; tested:
+  Pokémon Crystal's Mystery Gift)
 - **Game Boy Printer:** games print onto paper shown in a window, and every page is saved
   as a PNG (tested: Super Mario Bros. Deluxe calendars, Link's Awakening DX photos, Pokémon
   Crystal box lists)
@@ -219,6 +221,9 @@ the first, connected by a link cable (or from the command line: `freki red.gb --
 blue.gb`). Both run in step, so trades and two-player games work as on two real Game Boys.
 The keyboard and the first gamepad play the left Game Boy and the second gamepad the right
 one; F4 moves the keyboard to the other side. You hear the Game Boy the keyboard plays.
+The two also face each other with their infrared ports: the GBC's (Pokémon Gold, Silver
+and Crystal's Mystery Gift, …) and those of Hudson's HuC1 and HuC3 cartridges; as on the
+real console, each one also sees its own LED.
 Each game keeps its battery save; a game linked with itself saves the second copy in
 `game.2.sav`. Save states and rewind are off while linked. Headless mode can link too
 (`--link`, `--link-sav`, `--press2`).

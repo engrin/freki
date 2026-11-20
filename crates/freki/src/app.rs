@@ -522,6 +522,10 @@ impl FrekiApp {
             self.set_status(format!("save failed: {e}"));
         }
         self.keyboard_second = false;
+        // Nothing faces the infrared port any more.
+        if let Some(session) = self.session.as_mut() {
+            session.gb.set_ir_input(false);
+        }
     }
 
     /// Plugs the Game Boy Printer in or out (it shares the port with the link cable).
@@ -1741,8 +1745,9 @@ impl FrekiApp {
         if ui
             .button(connect)
             .on_hover_text(
-                "Runs a second Game Boy next to this one, connected by a link cable: for \
-                 trading and two-player games",
+                "Runs a second Game Boy next to this one, connected by a link cable and \
+                 facing it with the infrared port: for trading, two-player games and \
+                 Mystery Gift",
             )
             .clicked()
         {

@@ -7,6 +7,9 @@
 //! shifts in the other's byte, and the waiting side finishes (with its serial interrupt)
 //! when the clocking side does. If the other side is not waiting, the clocking side
 //! receives $FF, as with no cable attached.
+//!
+//! The two also face each other: each one's infrared sensor (the CGB's RP port, HuC1/HuC3
+//! cartridges) sees the other's LED.
 
 use std::fmt;
 
@@ -84,8 +87,10 @@ fn half_cycles(gb: &GameBoy, cycles: u32) -> i64 {
     i64::from(cycles) << u32::from(!gb.bus.double_speed)
 }
 
-/// Passes on what `from` just did on the cable to `to`.
+/// Passes on what `from` just did on the cable to `to`, and shows `to` its infrared LED
+/// (the two face each other).
 fn exchange(from: &mut GameBoy, to: &mut GameBoy) {
+    to.bus.ir_input = from.bus.ir_led();
     if let Some(byte) = from.bus.serial.take_started() {
         let back = if to.bus.serial.external_ready() {
             to.bus.serial.start_external(byte)
@@ -152,6 +157,27 @@ mod tests {
         let mut link = Link::new();
         link.run_frame(&mut one, &mut two).unwrap();
         assert_eq!(two.peek(0xFF01), 0xFF);
+    }
+
+    #[test]
+    fn infrared_ports_see_each_other() {
+        let cgb = |code: &[u8]| {
+            let mut rom = rom(code);
+            rom[0x143] = 0x80;
+            rom
+        };
+        // RP = $C1: reading enabled, LED on; RP = $C0: reading enabled, LED off.
+        let sending = cgb(&[0x3E, 0xC1, 0xE0, 0x56, 0x18, 0xFE]);
+        let receiving = cgb(&[0x3E, 0xC0, 0xE0, 0x56, 0x18, 0xFE]);
+        let mut one = GameBoy::with_model(receiving.clone(), Model::Cgb).unwrap();
+        let mut two = GameBoy::with_model(receiving, Model::Cgb).unwrap();
+        let mut link = Link::new();
+        link.run_frame(&mut one, &mut two).unwrap();
+        assert_eq!(one.peek(0xFF56) & 0xC3, 0xC2, "dark");
+        let mut two = GameBoy::with_model(sending, Model::Cgb).unwrap();
+        link.run_frame(&mut one, &mut two).unwrap();
+        assert_eq!(one.peek(0xFF56) & 0xC3, 0xC0, "light seen");
+        assert_eq!(two.peek(0xFF56) & 0xC3, 0xC1, "its own LED");
     }
 
     #[test]
