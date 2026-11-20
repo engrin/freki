@@ -108,7 +108,7 @@ Named after Freki, one of Odin's two wolves.
 | Mooneye tests for all models or the CGB, with or without the boot ROM | 58 / 58 |
 | mealybug-tearoom mid-scanline tests (DMG) | 22 / 24 (the other two are 3–4 pixels off) |
 | mealybug-tearoom mid-scanline tests (CGB) | 20 / 27 |
-| Gambatte hardware tests | DMG 1522 / 1651, GBC 2530 / 3023 |
+| Gambatte hardware tests | DMG 1522 / 1651, GBC 2540 / 3023 |
 | SameSuite (GBC and SGB; mostly sound, sample-exact) | 31 / 78 |
 | AGE test ROMs (DMG, GBC and GBC in DMG mode) | 15 / 59 |
 
@@ -362,7 +362,8 @@ Tests whose ROMs have not been fetched are skipped. ROM files are never committe
 - Hardware behaviour not covered by the documentation was taken from
   [SameBoy](https://github.com/LIJI32/SameBoy) (MIT) and
   [Gambatte](https://github.com/pokemon-speedrunning/gambatte-core) (GPL-2.0) as
-  references, and the unlicensed cartridges' from [mGBA](https://github.com/mgba-emu/mgba)
+  references, some timing rules from the findings
+  [Cartouche](https://github.com/phmatray/cartouche) (MIT) published in its issues, and the unlicensed cartridges' from [mGBA](https://github.com/mgba-emu/mgba)
   (MPL-2.0). freki contains no code from Gambatte or mGBA; from SameBoy only one test
   compares freki's Game Genie decoding with a port of SameBoy's (with its MIT notice).
   Gambatte's test programs are only downloaded for local test runs and are not part of the

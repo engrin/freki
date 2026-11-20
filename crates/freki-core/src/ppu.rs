@@ -193,6 +193,23 @@ mod attr {
     pub const PRIORITY: u8 = 1 << 7;
 }
 
+/// Background fetcher state saved as a window starts (see `Ppu::window_undo`).
+#[derive(Clone)]
+struct WindowUndo {
+    bg_fifo: VecDeque<u8>,
+    fetch: Fetch,
+    tile_map_addr: usize,
+    tile: u8,
+    tile_attr: u8,
+    tile_data_addr: usize,
+    tile_data: [u8; 2],
+    window_y: u8,
+    window_tile_x: u8,
+    late_mode0: bool,
+    /// Dot of the line the window started at.
+    dot: u32,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Ppu {
     /// Game Boy Color mode (colour palettes, VRAM bank 1, tile attributes).
@@ -319,6 +336,14 @@ pub struct Ppu {
     /// Window line counter; starts at −1 each frame and counts window activations.
     window_y: u8,
     window_being_fetched: bool,
+    /// CGB: the background fetcher as the window started on this line, until the window's
+    /// first tile is pushed; LCDC.5 turned off before that cancels the window
+    /// (`lcdc_written`).
+    #[serde(skip)]
+    window_undo: Option<Box<WindowUndo>>,
+    /// Dots the pixel pipeline waits before going on (a cancelled window in double speed).
+    #[serde(default)]
+    pipeline_pause: u8,
     insert_bg_pixel: bool,
     disable_insertion_glitch: bool,
     /// Interrupts raised in the DMG's last dot before the LCD switched off, not yet
@@ -424,6 +449,8 @@ impl Ppu {
             bg_tile_x: 0,
             window_y: 0xFF,
             window_being_fetched: false,
+            window_undo: None,
+            pipeline_pause: 0,
             insert_bg_pixel: false,
             disable_insertion_glitch: false,
             obj_enable_delay: 0,
@@ -934,6 +961,33 @@ impl Ppu {
     /// Notes an LCDC write: disabling the window while it is being fetched turns off the
     /// DMG's window pixel-insertion glitch for the rest of the line.
     pub fn lcdc_written(&mut self, old: u8, value: u8) {
+        // CGB: the window turned off before its first tile is pushed is cancelled, and the
+        // background goes on where it stopped (Gambatte's hwtests, window/late_disable*; the
+        // rule is from Cartouche, phmatray/cartouche#314).
+        if old & lcdc::WINDOW_ENABLE != 0
+            && value & lcdc::WINDOW_ENABLE == 0
+            && self.pipeline_active
+            && self.obj_fetch == ObjFetch::Idle
+            && let Some(undo) = self.window_undo.take()
+        {
+            let undo = *undo;
+            self.bg_fifo = undo.bg_fifo;
+            self.fetch = undo.fetch;
+            self.tile_map_addr = undo.tile_map_addr;
+            self.tile = undo.tile;
+            self.tile_attr = undo.tile_attr;
+            self.tile_data_addr = undo.tile_data_addr;
+            self.tile_data = undo.tile_data;
+            self.window_y = undo.window_y;
+            self.window_tile_x = undo.window_tile_x;
+            self.late_mode0 = undo.late_mode0;
+            self.wx_triggered = false;
+            self.window_being_fetched = false;
+            // In double speed the line keeps one more dot (Cartouche's measurements), and
+            // the dots it waited round up to the CPU's 2-dot M-cycle.
+            self.pipeline_pause = u8::from(self.double_speed) + ((self.dot - undo.dot) & 1) as u8;
+            return;
+        }
         if old & lcdc::WINDOW_ENABLE != 0
             && value & lcdc::WINDOW_ENABLE == 0
             && self.window_being_fetched
@@ -1291,6 +1345,7 @@ impl Ppu {
 
     fn start_pipeline(&mut self) {
         self.pipeline_active = true;
+        self.window_undo = None;
         self.late_mode0 = false;
         self.bg_fifo.clear();
         self.obj_fifo.clear();
@@ -1308,6 +1363,10 @@ impl Ppu {
 
     /// One dot of the pixel pipeline.
     fn mode3_dot(&mut self) {
+        if self.pipeline_pause > 0 {
+            self.pipeline_pause -= 1;
+            return;
+        }
         if self.obj_fetch != ObjFetch::Idle {
             self.object_fetch_dot();
             return;
@@ -1457,6 +1516,21 @@ impl Ppu {
             false
         };
         if activate {
+            if !self.dmg_hardware() {
+                self.window_undo = Some(Box::new(WindowUndo {
+                    bg_fifo: self.bg_fifo.clone(),
+                    fetch: self.fetch,
+                    tile_map_addr: self.tile_map_addr,
+                    tile: self.tile,
+                    tile_attr: self.tile_attr,
+                    tile_data_addr: self.tile_data_addr,
+                    tile_data: self.tile_data,
+                    window_y: self.window_y,
+                    window_tile_x: self.window_tile_x,
+                    late_mode0: self.late_mode0,
+                    dot: self.dot,
+                }));
+            }
             self.window_y = self.window_y.wrapping_add(1);
             self.window_tile_x = 0;
             self.bg_fifo.clear();
@@ -1554,6 +1628,7 @@ impl Ppu {
             Fetch::High2 => {
                 self.tile_data[1] = self.vram[self.tile_data_addr];
                 if self.wx_triggered {
+                    self.window_undo = None;
                     self.window_tile_x = (self.window_tile_x + 1) & 0x1F;
                 } else {
                     self.bg_tile_x = self.bg_tile_x.wrapping_add(1);
@@ -1586,6 +1661,7 @@ impl Ppu {
                 return;
             }
         }
+        self.window_undo = None;
         let [lo, hi] = self.tile_data;
         let a = self.tile_attr;
         let extra = ((a & attr::PALETTE) << bg_pixel::PALETTE_SHIFT) | (a & attr::PRIORITY);

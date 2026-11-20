@@ -278,6 +278,7 @@ impl Cpu {
                 bus.write(addr, (value & !LATE) | (old & LATE));
                 self.advance(bus, 1);
                 bus.write(addr, value);
+                bus.ppu.lcdc_written(old, value);
                 self.pending = 3;
             }
             _ if bus.cgb_hardware => {
