@@ -362,9 +362,9 @@ Tests whose ROMs have not been fetched are skipped. ROM files are never committe
 - Hardware behaviour not covered by the documentation was taken from
   [SameBoy](https://github.com/LIJI32/SameBoy) (MIT) and
   [Gambatte](https://github.com/pokemon-speedrunning/gambatte-core) (GPL-2.0) as
-  references, some timing rules from the findings
-  [Cartouche](https://github.com/phmatray/cartouche) (MIT) published in its issues, and the unlicensed cartridges' from [mGBA](https://github.com/mgba-emu/mgba)
-  (MPL-2.0). freki contains no code from Gambatte or mGBA; from SameBoy only one test
+  references, some timing rules from the findings that
+  [Cartouche](https://github.com/phmatray/cartouche) (MIT) publishes in its issues, and the
+  unlicensed cartridges' from [mGBA](https://github.com/mgba-emu/mgba) (MPL-2.0). freki contains no code from Gambatte or mGBA; from SameBoy only one test
   compares freki's Game Genie decoding with a port of SameBoy's (with its MIT notice).
   Gambatte's test programs are only downloaded for local test runs and are not part of the
   repository.
