@@ -31,6 +31,7 @@ pub mod symbols;
 pub mod tama5;
 pub mod timer;
 pub mod unlicensed;
+pub mod w65816;
 pub mod xploder;
 
 pub use apu::{ChannelInfo, SCOPE_LEN};

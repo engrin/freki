@@ -8,6 +8,8 @@
 #     sources only; freki's test runner assembles them itself
 #   - SameSuite by Lior Halphon (X11 license) and the AGE test ROMs by Christoph Sprenger (MIT),
 #     prebuilt in c-sp/game-boy-test-roms
+#   - SingleStepTests' 65816 tests by Thomas Harte (MIT): one JSON file per opcode and mode for
+#     the Super Game Boy's SNES CPU; only the first 500 tests of each file are kept (python3)
 set -euo pipefail
 
 DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
@@ -21,6 +23,7 @@ MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS/$MTS.tar.xz"
 GAMBATTE_COMMIT="5a41a68c25402421fb1983ddadc9faf2418ddb0f"
 GAMBATTE_URL="https://codeload.github.com/pokemon-speedrunning/gambatte-core/tar.gz/$GAMBATTE_COMMIT"
 GBTR="https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
+W65816="https://raw.githubusercontent.com/SingleStepTests/65816/307c63f5673c8c6b861c52f71ddb89212a227480/v1"
 MEALYBUG="https://raw.githubusercontent.com/mattcurrie/mealybug-tearoom-tests/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4"
 
 mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound" "$DEST/mem_timing" "$DEST/mem_timing-2"
@@ -116,5 +119,23 @@ if [[ ! -d "$DEST/same-suite" || ! -d "$DEST/age-test-roms" ]]; then
   unzip -q -o "$DEST/game-boy-test-roms.zip" 'same-suite/*' 'age-test-roms/*' -d "$DEST"
   rm "$DEST/game-boy-test-roms.zip"
 fi
+
+# 65816: 512 files of ~6 MB; keep the first 500 tests of each (about 150 MB in all).
+mkdir -p "$DEST/65816"
+for op in $(seq 0 255); do
+  for mode in e n; do
+    name="$(printf '%02x' "$op").$mode.json"
+    out="$DEST/65816/$name"
+    [[ -f "$out" ]] && continue
+    echo "fetch $out"
+    curl -fsSL --retry 3 -o "$out.full" "$W65816/$name"
+    if command -v python3 >/dev/null; then
+      python3 -I -c 'import json,sys; json.dump(json.load(open(sys.argv[1]))[:500], open(sys.argv[2], "w"))' \
+        "$out.full" "$out" && rm "$out.full"
+    else
+      mv "$out.full" "$out"
+    fi
+  done
+done
 
 echo "Test ROMs are in $DEST"

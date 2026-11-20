@@ -423,7 +423,7 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ```sh
-./scripts/fetch-test-roms.sh      # Blargg, acid2, mealybug-tearoom, Mooneye, Gambatte, SameSuite, AGE
+./scripts/fetch-test-roms.sh      # Blargg, acid2, mealybug-tearoom, Mooneye, Gambatte, SameSuite, AGE, 65816
 cargo test --workspace            # unit tests and all test ROMs, without a window
 ```
 
@@ -446,7 +446,8 @@ Tests whose ROMs have not been fetched are skipped. ROM files are never committe
   [mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests),
   [Gambatte hwtests](https://github.com/pokemon-speedrunning/gambatte-core/tree/master/test/hwtests),
   [SameSuite](https://github.com/LIJI32/SameSuite),
-  [AGE test ROMs](https://github.com/c-sp/age-test-roms)
+  [AGE test ROMs](https://github.com/c-sp/age-test-roms),
+  [SingleStepTests 65816](https://github.com/SingleStepTests/65816) (the SNES CPU)
 - Hardware behaviour not covered by the documentation was taken from
   [SameBoy](https://github.com/LIJI32/SameBoy) (MIT) and
   [Gambatte](https://github.com/pokemon-speedrunning/gambatte-core) (GPL-2.0) as
