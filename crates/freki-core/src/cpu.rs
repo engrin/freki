@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::bus::{Bus, interrupt};
+use crate::bus::Bus;
 use crate::debugger::Access;
 
 pub mod flag {
@@ -124,6 +124,13 @@ pub struct Cpu {
     speed_switch_halt: u32,
     /// HALT with IME=0 and an interrupt already pending: the next opcode byte is read twice.
     halt_bug: bool,
+    /// The CPU halted in the step before (its first halted M-cycle looks at IF at its
+    /// start, also on the DMG).
+    #[serde(default)]
+    just_halted: bool,
+    /// Interrupts from `Ppu::take_early_irq` seen in the last halted M-cycle (CGB).
+    #[serde(default)]
+    early_seen: u8,
     /// T-cycles spent so far in the current `step`.
     cycles: u32,
     /// T-cycles of the current instruction not yet run on the rest of the hardware.
@@ -174,6 +181,8 @@ impl Cpu {
             halted: false,
             speed_switch_halt: 0,
             halt_bug: false,
+            just_halted: false,
+            early_seen: 0,
             cycles: 0,
             pending: 0,
         }
@@ -545,25 +554,8 @@ impl Cpu {
     /// then PC is pushed. Which interrupt wins is decided only after the high byte of PC is
     /// pushed, so a push that overwrites IE ($FFFF) can cancel it (PC then becomes $0000).
     fn handle_interrupts(&mut self, bus: &mut Bus) -> bool {
-        let requested = bus.interrupt_enable & bus.interrupt_flag & 0x1F;
-        if requested == 0 {
+        if !self.ime || bus.interrupt_enable & bus.interrupt_flag & 0x1F == 0 {
             return false;
-        }
-        let woke = std::mem::take(&mut self.halted);
-        if woke {
-            bus.cpu_woke();
-        }
-        self.speed_switch_halt = 0;
-        if !self.ime {
-            return false;
-        }
-        // Waking from HALT for the timer interrupt takes one more M-cycle: the timer raises
-        // its request at the end of an M-cycle, and the halted CPU only sees it in the next.
-        // (The PPU's interrupt timing already includes this; Gambatte's hwtests, tima/*.)
-        let timer_only = requested & (interrupt::VBLANK | interrupt::STAT) == 0
-            && requested & interrupt::TIMER != 0;
-        if woke && timer_only {
-            self.idle(bus);
         }
         self.ime = false;
         self.fetch_read(bus, self.regs.pc);
@@ -602,6 +594,56 @@ impl Cpu {
         true
     }
 
+    /// One M-cycle of HALT (SameBoy's model): the DMG looks at IF 2 T-cycles into it (the
+    /// CGB, and the first M-cycle after HALT, at its start), and a request it sees ends the
+    /// halt after that M-cycle, with the interrupt dispatched right away if IME is set.
+    ///
+    /// The PPU raises some interrupts 2 dots late (`Ppu::take_early_irq`); counting those
+    /// from the rest of the M-cycle too (on the CGB: from the M-cycle before, without the
+    /// extra M-cycle) is the same as raising them in time.
+    fn halted_cycle(&mut self, bus: &mut Bus) {
+        let cgb = bus.cgb_hardware;
+        let just_halted = std::mem::take(&mut self.just_halted);
+        let enabled = bus.interrupt_enable & 0x1F;
+        if cgb && !just_halted && enabled & std::mem::take(&mut self.early_seen) != 0 {
+            self.wake(bus, false);
+            return;
+        }
+        bus.take_early_irq();
+        let at_start = cgb || just_halted;
+        if !at_start {
+            self.pending += 2;
+            self.flush(bus);
+        }
+        let mut requested = bus.interrupt_enable & bus.interrupt_flag & 0x1F != 0;
+        self.pending += if at_start { 4 } else { 2 };
+        self.flush(bus);
+        let early = bus.take_early_irq() & bus.interrupt_enable & 0x1F;
+        if cgb {
+            self.early_seen = early;
+        } else {
+            requested |= early != 0;
+        }
+        if self.speed_switch_halt > 0 {
+            self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4);
+            self.halted = self.speed_switch_halt > 0;
+        }
+        if requested {
+            self.wake(bus, cgb);
+        }
+    }
+
+    /// Ends HALT and dispatches the interrupt if IME is set.
+    fn wake(&mut self, bus: &mut Bus, late: bool) {
+        self.halted = false;
+        self.early_seen = 0;
+        self.speed_switch_halt = 0;
+        bus.cpu_woke(late);
+        if self.handle_interrupts(bus) {
+            self.flush(bus);
+        }
+    }
+
     /// Executes one instruction (or services an interrupt) and returns T-cycles taken.
     pub fn step(&mut self, bus: &mut Bus) -> Result<u32, CpuError> {
         self.cycles = 0;
@@ -613,18 +655,13 @@ impl Cpu {
             self.flush(bus);
             return Ok(self.cycles);
         }
+        if self.halted {
+            self.halted_cycle(bus);
+            return Ok(self.cycles);
+        }
         if self.handle_interrupts(bus) {
             self.flush(bus);
             debug_assert!(matches!(self.cycles, 20 | 24), "interrupt dispatch timing");
-            return Ok(self.cycles);
-        }
-        if self.halted {
-            self.idle(bus);
-            if self.speed_switch_halt > 0 {
-                self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4);
-                self.halted = self.speed_switch_halt > 0;
-            }
-            self.flush(bus);
             return Ok(self.cycles);
         }
         let after_ei = std::mem::take(&mut self.ime_pending);
@@ -635,18 +672,6 @@ impl Cpu {
         let pc = self.regs.pc;
         let op = self.fetch(bus);
         let expected = self.execute(bus, op);
-        // HALT right after EI with an interrupt already pending does not halt: the
-        // interrupt is taken with HALT's own address as the return address, so HALT runs
-        // again after the handler (Gambatte's hwtests, halt/ifandie_ei_halt_sra).
-        if after_ei
-            && op == 0x76
-            && self.halted
-            && bus.interrupt_enable & bus.interrupt_flag & 0x1F != 0
-        {
-            self.halted = false;
-            bus.cpu_woke();
-            self.regs.pc = pc;
-        }
         self.flush(bus);
         let expected = expected.ok_or(CpuError::IllegalOpcode { opcode: op, pc })?;
         debug_assert_eq!(self.cycles, expected, "timing of opcode ${op:02X}");
@@ -681,6 +706,7 @@ impl Cpu {
                     self.fetch(bus);
                     if bus.stop() {
                         self.halted = true;
+                        self.just_halted = true;
                         self.speed_switch_halt = SPEED_SWITCH_CYCLES;
                     }
                     8
@@ -797,12 +823,20 @@ impl Cpu {
             // ---- x = 1: LD r, r' and HALT ----
             (1, _) => {
                 if y == 6 && z == 6 {
+                    // HALT looks for a pending interrupt once its M-cycle is over. With one
+                    // and IME set it does not halt: the interrupt is taken with HALT's own
+                    // address to return to, so HALT runs again after the handler (Gambatte's
+                    // hwtests, halt/ifandie_ei_halt_sra; SameBoy).
+                    self.flush(bus);
                     let pending = bus.interrupt_enable & bus.interrupt_flag & 0x1F != 0;
-                    if !self.ime && pending {
-                        self.halt_bug = true;
-                    } else {
+                    if !pending {
                         self.halted = true;
+                        self.just_halted = true;
                         bus.cpu_halt();
+                    } else if self.ime {
+                        self.regs.pc = self.regs.pc.wrapping_sub(1);
+                    } else {
+                        self.halt_bug = true;
                     }
                     4
                 } else {

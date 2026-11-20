@@ -507,22 +507,33 @@ impl Bus {
             .is_some_and(|left| left >= min >> u32::from(self.double_speed))
     }
 
+    /// See [`Ppu::take_early_irq`].
+    pub fn take_early_irq(&mut self) -> u8 {
+        self.ppu.take_early_irq()
+    }
+
     /// The CPU executed HALT.
     pub fn cpu_halt(&mut self) {
+        // HALT gets here at the end of its M-cycle; the HDMA logic counts from its start.
+        let m_cycle = 4 >> u32::from(self.double_speed);
+        let (line, dot) = self.ppu.line_and_dot();
         self.cpu_halted = true;
-        self.halted_at = self.ppu.line_and_dot();
+        self.halted_at = (line, dot.saturating_sub(m_cycle));
         self.hdma_requested_in_halt = false;
-        self.halted_in_hdma_period = self.hdma.active && self.in_hdma_period(4);
+        self.halted_in_hdma_period = self.hdma.active && self.in_hdma_period(0);
     }
 
     /// The CPU woke from HALT (or did not halt after all): an HBlank transfer copies the
     /// block it skipped while halted if an HBlank is under way, unless it halted in one.
-    pub fn cpu_woke(&mut self) {
+    ///
+    /// `late`: the wake comes an M-cycle after the CPU saw the request (CGB).
+    pub fn cpu_woke(&mut self, late: bool) {
         let requested = std::mem::take(&mut self.hdma_requested_in_halt);
         if !std::mem::take(&mut self.cpu_halted) {
             return;
         }
-        let hblank_now = !self.halted_in_hdma_period && self.in_hdma_period(8);
+        let hblank_now =
+            !self.halted_in_hdma_period && self.in_hdma_period(if late { 4 } else { 8 });
         if self.hdma.active && (requested || hblank_now) {
             self.hdma_hblank_block();
         }

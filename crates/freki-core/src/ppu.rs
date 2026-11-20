@@ -237,6 +237,10 @@ pub struct Ppu {
     mode: Mode,
     /// Mode as seen by the STAT interrupt logic (HBlank's interrupt lags by one dot).
     irq_mode: Mode,
+    /// Interrupts raised since `take_early_irq` that hardware raises 2 dots earlier than
+    /// freki does (see `take_early_irq`).
+    #[serde(skip)]
+    early_irq: u8,
     /// Previous level of the combined STAT interrupt line (interrupts fire on rising edges).
     stat_line: bool,
     /// Dots until a STAT interrupt raised by a register write is requested (0: none).
@@ -380,6 +384,7 @@ impl Ppu {
             dot: 0,
             mode: Mode::OamScan,
             irq_mode: Mode::OamScan,
+            early_irq: 0,
             stat_line: false,
             write_irq_in: 0,
             palette_unlock_in: 0,
@@ -942,6 +947,15 @@ impl Ppu {
         self.wx_just_changed = changed;
     }
 
+    /// Interrupt bits raised since the last call by sources that hardware raises 2 dots (on
+    /// the CGB, an M-cycle) before freki does: VBlank and the STAT sources in `raised_late`.
+    /// Their timing here is right for a running CPU, which only sees requests at M-cycle
+    /// boundaries (Mealybug's tests sync to them); a halted CPU sees them earlier
+    /// (`Cpu::halted_cycle`), as SameBoy's model of HALT has it.
+    pub fn take_early_irq(&mut self) -> u8 {
+        std::mem::take(&mut self.early_irq)
+    }
+
     /// Advances the PPU by `cycles` T-cycles. Returns interrupt bits to raise.
     pub fn tick(&mut self, cycles: u32) -> u8 {
         let mut irq = 0;
@@ -1085,6 +1099,7 @@ impl Ppu {
             && !self.stat_line
         {
             irq |= interrupt::STAT;
+            self.early_irq |= interrupt::STAT;
         }
         self.dot += 1;
         if self.dot == DOTS_PER_LINE {
@@ -1100,9 +1115,11 @@ impl Ppu {
                 self.frame_ready = true;
                 self.frame_done = true;
                 irq |= interrupt::VBLANK;
+                self.early_irq |= interrupt::VBLANK;
                 // DMG quirk: entering VBlank also triggers the OAM (mode 2) STAT interrupt.
                 if self.dmg_hardware() && self.irq_stat & stat::OAM_INT != 0 && !self.stat_line {
                     irq |= interrupt::STAT;
+                    self.early_irq |= interrupt::STAT;
                 }
             } else if self.ly == LINES_PER_FRAME {
                 self.ly = 0;
@@ -1142,9 +1159,24 @@ impl Ppu {
         let line = self.stat_sources();
         if line && !self.stat_line {
             irq |= interrupt::STAT;
+            if self.raised_late() {
+                self.early_irq |= interrupt::STAT;
+            }
         }
         self.stat_line = line;
         irq
+    }
+
+    /// Whether a STAT interrupt raised now comes from a source that hardware raises earlier
+    /// (see `take_early_irq`): a new line's mode 2, mode 1, an LY=LYC match, and on the DMG
+    /// mode 0 (Mooneye's hblank_ly_scx_timing; on the CGB mode 0 is in time, Gambatte's
+    /// hwtests, halt/*m0*).
+    fn raised_late(&self) -> bool {
+        let visible = (self.ly as usize) < SCREEN_HEIGHT;
+        (self.dot == 0 && self.ly != 0 && visible)
+            || (self.ly as usize == SCREEN_HEIGHT && self.irq_mode == Mode::VBlank)
+            || (self.dmg_hardware() && self.irq_mode == Mode::HBlank && visible)
+            || (self.irq_stat & stat::LYC_INT != 0 && self.ly_matches(self.irq_lyc))
     }
 
     /// The OR of all enabled STAT interrupt sources.
