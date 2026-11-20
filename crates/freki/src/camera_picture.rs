@@ -16,7 +16,7 @@ pub fn load(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 }
 
 /// The middle of `picture` in the sensor's aspect ratio, scaled to the sensor's size.
-fn fit(picture: &image::GrayImage) -> Vec<u8> {
+pub fn fit(picture: &image::GrayImage) -> Vec<u8> {
     let (w, h) = (picture.width(), picture.height());
     let (sw, sh) = (SENSOR_WIDTH as u32, SENSOR_HEIGHT as u32);
     // Crop the longer side so the picture has the sensor's shape.

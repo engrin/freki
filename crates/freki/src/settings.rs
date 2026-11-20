@@ -56,6 +56,8 @@ pub struct Settings {
     pub pause_in_background: bool,
     /// The picture the Game Boy Camera sees (`None`: its test pattern).
     pub camera_picture: Option<PathBuf>,
+    /// The webcam the Game Boy Camera sees, by name; before `camera_picture`.
+    pub camera_webcam: Option<String>,
 }
 
 /// The settings a game can have for itself (Emulation → Settings for this game).
@@ -123,6 +125,7 @@ impl Default for Settings {
             muted: false,
             pause_in_background: true,
             camera_picture: None,
+            camera_webcam: None,
         }
     }
 }

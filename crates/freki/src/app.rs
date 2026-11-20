@@ -1,6 +1,7 @@
 //! The egui application: menu bar, screen, status bar and tool windows.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -28,6 +29,7 @@ use crate::session::{self, Session, file_name};
 use crate::settings::{self, ConsoleModel, FAST_FORWARD_SPEEDS, GameSettings, Palette, Settings};
 use crate::sound_view::SoundView;
 use crate::state_previews::{Pick, StatePreviews};
+use crate::webcam::{self, Webcam};
 use crate::window::{self, take_forwarded_hotkeys, tool_window};
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
@@ -228,6 +230,14 @@ pub struct FrekiApp {
     camera_view: Option<Vec<u8>>,
     /// Whether the remembered camera picture was loaded (or tried) since the start.
     camera_loaded: bool,
+    /// The webcam the camera sees (`settings.camera_webcam`), while a camera cartridge is in.
+    webcam: Option<Webcam>,
+    /// The webcam stopped with an error; not started again until chosen again.
+    webcam_failed: bool,
+    /// The webcams found (Camera: webcam menu), or why none could be looked for.
+    webcams: Option<Result<Vec<String>, String>>,
+    /// The search for webcams, running in the background.
+    webcam_search: Option<Receiver<Result<Vec<String>, String>>>,
     state_previews: StatePreviews,
 }
 
@@ -293,6 +303,10 @@ impl FrekiApp {
             sound_view: SoundView::default(),
             camera_view: None,
             camera_loaded: false,
+            webcam: None,
+            webcam_failed: false,
+            webcams: None,
+            webcam_search: None,
             state_previews: StatePreviews::default(),
         };
         println!("freki: type `help` here for cheat and memory commands");
@@ -728,9 +742,60 @@ impl FrekiApp {
             Ok(view) => {
                 self.set_status(format!("the camera sees {}", file_name(&path)));
                 self.settings.camera_picture = Some(path);
+                self.settings.camera_webcam = None;
                 self.set_camera_view(Some(view));
             }
             Err(e) => self.set_status(e.to_string()),
+        }
+    }
+
+    /// The Camera: webcam menu: the webcams found, to choose the one the camera sees.
+    fn webcam_menu(&mut self, ui: &mut egui::Ui) {
+        if let Some(search) = &self.webcam_search
+            && let Ok(found) = search.try_recv()
+        {
+            self.webcams = Some(found);
+            self.webcam_search = None;
+        }
+        if self.webcams.is_none() && self.webcam_search.is_none() {
+            // In the background: the system may ask the player for camera access first.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(webcam::list());
+                ctx.request_repaint();
+            });
+            self.webcam_search = Some(rx);
+        }
+        let mut chosen = None;
+        match &self.webcams {
+            None => {
+                ui.label("Looking for webcams…");
+            }
+            Some(Err(e)) => {
+                ui.label(e);
+            }
+            Some(Ok(names)) if names.is_empty() => {
+                ui.label("No webcam found");
+            }
+            Some(Ok(names)) => {
+                for name in names {
+                    let on = self.settings.camera_webcam.as_ref() == Some(name);
+                    if ui.radio(on, name).clicked() {
+                        chosen = Some(name.clone());
+                    }
+                }
+            }
+        }
+        if let Some(name) = chosen {
+            ui.close();
+            self.settings.camera_webcam = Some(name);
+            // Started by the next frame.
+            self.webcam = None;
+            self.webcam_failed = false;
+        }
+        if self.webcam_search.is_none() && ui.button("Look again").clicked() {
+            self.webcams = None;
         }
     }
 
@@ -988,6 +1053,30 @@ impl FrekiApp {
                 match camera_picture::load(path) {
                     Ok(view) => self.camera_view = Some(view),
                     Err(e) => self.status = Some((e.to_string(), Instant::now())),
+                }
+            }
+        }
+        // The chosen webcam runs while a camera cartridge is in.
+        if session.gb.has_camera() && self.settings.camera_webcam.is_some() {
+            if self.webcam.is_none() && !self.webcam_failed {
+                self.webcam = Some(Webcam::start(self.settings.camera_webcam.clone()));
+            }
+        } else {
+            self.webcam = None;
+        }
+        while let Some(event) = self.webcam.as_ref().and_then(Webcam::poll) {
+            match event {
+                webcam::Event::Opened(name) => {
+                    self.status = Some((format!("the camera sees {name}"), Instant::now()));
+                }
+                webcam::Event::View(view) => {
+                    session.gb.set_camera_image(Some(&view));
+                    self.camera_view = Some(view);
+                }
+                webcam::Event::Failed(e) => {
+                    self.status = Some((e, Instant::now()));
+                    self.webcam = None;
+                    self.webcam_failed = true;
                 }
             }
         }
@@ -1436,11 +1525,12 @@ impl FrekiApp {
                 }
                 let camera = self.session.as_ref().is_some_and(|s| s.gb.has_camera());
                 if camera {
-                    let current = self
-                        .settings
-                        .camera_picture
-                        .as_deref()
-                        .map_or("its test pattern".to_string(), file_name);
+                    let current =
+                        match (&self.settings.camera_webcam, &self.settings.camera_picture) {
+                            (Some(name), _) => name.clone(),
+                            (None, Some(path)) => file_name(path),
+                            (None, None) => "its test pattern".to_string(),
+                        };
                     if ui
                         .button("Camera picture…")
                         .on_hover_text(format!(
@@ -1451,11 +1541,16 @@ impl FrekiApp {
                         ui.close();
                         self.pick_camera_picture();
                     }
-                    if self.settings.camera_picture.is_some()
+                    ui.menu_button("Camera: webcam", |ui| self.webcam_menu(ui))
+                        .response
+                        .on_hover_text("The Game Boy Camera sees a webcam");
+                    if (self.settings.camera_picture.is_some()
+                        || self.settings.camera_webcam.is_some())
                         && ui.button("Camera: test pattern").clicked()
                     {
                         ui.close();
                         self.settings.camera_picture = None;
+                        self.settings.camera_webcam = None;
                         self.set_camera_view(None);
                         self.set_status("the camera sees its test pattern");
                     }

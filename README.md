@@ -119,8 +119,9 @@ can pass on one emulated console.
 ## Getting started
 
 freki needs nightly Rust. On Linux, install the X11/Wayland, ALSA and udev development
-headers first (`libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev` on
-Debian/Ubuntu).
+headers and libclang first (`libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev
+libclang-dev` on Debian/Ubuntu); libclang is only for webcams, and
+`cargo build --no-default-features` leaves them out.
 
 ```sh
 cargo run --release -- path/to/game.gb    # or start without a ROM: File → Open ROM…
@@ -238,9 +239,13 @@ which freki turns grey, crops to the sensor's shape and scales to its 128 × 120
 Without one it sees a test pattern (a gradient with a dark disc). The game processes the
 picture like the real cartridge: exposure, the sensor's edge enhancement and the dithering
 the brightness and contrast settings choose, and taking a picture takes as long as on the
-real sensor. Photos are kept in the battery save like on the cartridge. The picture is
-remembered between runs; **Camera: test pattern** goes back to the pattern. Headless mode
-takes one with `--camera picture.png`.
+real sensor. Photos are kept in the battery save like on the cartridge.
+
+**Emulation → Camera: webcam** lists the webcams found; choose one and the camera sees it live
+(the same grey crop of each frame). macOS asks for camera access the first time. The webcam
+only runs while a camera cartridge is in. The picture or webcam is remembered between runs;
+**Camera: test pattern** goes back to the pattern. Headless mode takes a picture with
+`--camera picture.png`.
 
 ## Cheats
 
@@ -331,7 +336,7 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | Path | What |
 |---|---|
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
-| `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
+| `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [nokhwa](https://crates.io/crates/nokhwa) webcams, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 
 ```sh

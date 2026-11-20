@@ -29,6 +29,7 @@ mod settings;
 mod sound_view;
 mod state_previews;
 mod states;
+mod webcam;
 mod window;
 
 use std::path::PathBuf;
