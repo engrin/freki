@@ -1060,27 +1060,27 @@ mod tests {
     fn general_purpose_hdma_copies_everything_and_pauses_the_cpu() {
         let mut gb = cgb_with_source_data();
         gb.poke(0xFF55, 0x01); // 2 blocks, general purpose
+        assert_eq!(gb.peek(0xFF55), 0x01, "running");
+        assert_eq!(gb.peek(0x8800), 0, "copied at the next opcode fetch");
+        // NOP: its fetch, then 2 + 2 per byte + 2 + 4 T-cycles of transfer.
+        assert_eq!(gb.step().unwrap(), 4 + 2 + 64 + 2 + 4);
         assert_eq!(gb.peek(0x8800), 1);
         assert_eq!(gb.peek(0x881F), 0x20);
         assert_eq!(gb.peek(0x8820), 0, "only 2 blocks");
         assert_eq!(gb.peek(0xFF55), 0xFF, "finished");
-        assert_eq!(
-            gb.step().unwrap(),
-            72,
-            "CPU paused 32 T-cycles per block plus 8"
-        );
     }
 
     #[test]
     fn hblank_hdma_copies_one_block_per_line() {
         let mut gb = cgb_with_source_data();
-        // Started in HBlank, the first block is copied at once (Net de Get relies on it).
+        // Started in HBlank, the first block is copied right away (Net de Get relies on it).
         for mode in [3, 0] {
             while gb.peek(0xFF41) & 3 != mode {
                 gb.step().unwrap();
             }
         }
         gb.poke(0xFF55, 0x82); // 3 blocks, HBlank
+        gb.step().unwrap();
         assert_eq!(gb.peek(0x8800), 1);
         assert_eq!(gb.peek(0x8810), 0);
         assert_eq!(gb.peek(0xFF55), 0x01, "active, 2 blocks left");
@@ -1090,6 +1090,7 @@ mod tests {
                 gb.step().unwrap();
             }
         }
+        gb.step().unwrap();
         assert_eq!(gb.peek(0x8810), 17);
         assert_eq!(gb.peek(0x8820), 0, "one block per HBlank");
         assert_eq!(gb.peek(0xFF55), 0x00);

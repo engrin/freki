@@ -133,6 +133,9 @@ pub struct Cpu {
     early_seen: u8,
     /// T-cycles spent so far in the current `step`.
     cycles: u32,
+    /// T-cycles of `cycles` the CPU waited for a VRAM DMA.
+    #[serde(skip)]
+    stalled: u32,
     /// T-cycles of the current instruction not yet run on the rest of the hardware.
     pending: u32,
 }
@@ -184,6 +187,7 @@ impl Cpu {
             just_halted: false,
             early_seen: 0,
             cycles: 0,
+            stalled: 0,
             pending: 0,
         }
     }
@@ -607,7 +611,7 @@ impl Cpu {
         let just_halted = std::mem::take(&mut self.just_halted);
         let enabled = bus.interrupt_enable & 0x1F;
         if cgb && !just_halted && enabled & std::mem::take(&mut self.early_seen) != 0 {
-            self.wake(bus, false);
+            self.wake(bus);
             return;
         }
         bus.take_early_irq();
@@ -631,34 +635,53 @@ impl Cpu {
         if self.speed_switch_halt > 0 {
             self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4);
             self.halted = self.speed_switch_halt > 0;
+            if !self.halted {
+                bus.cpu_woke();
+            }
         }
         if requested {
-            self.wake(bus, cgb);
+            self.wake(bus);
         }
     }
 
     /// Ends HALT and dispatches the interrupt if IME is set.
-    fn wake(&mut self, bus: &mut Bus, late: bool) {
+    fn wake(&mut self, bus: &mut Bus) {
         self.halted = false;
         self.early_seen = 0;
         self.speed_switch_halt = 0;
-        bus.cpu_woke(late);
+        bus.cpu_woke();
         if self.handle_interrupts(bus) {
             self.flush(bus);
         }
     }
 
+    /// A CGB VRAM DMA transfer, right after an opcode fetch: the CPU waits while it copies
+    /// 2 bytes per M-cycle (1 in double speed), with 2 T-cycles before and, at normal speed,
+    /// after (SameBoy's model, `GB_hdma_run`; Cartouche measured the same, cartouche#295).
+    fn run_hdma(&mut self, bus: &mut Bus) {
+        let per_byte = if bus.double_speed { 4 } else { 2 };
+        let general = bus.hdma_general();
+        let start = self.cycles;
+        self.advance(bus, per_byte);
+        loop {
+            let more = bus.hdma_byte();
+            self.advance(bus, per_byte);
+            if !more {
+                break;
+            }
+        }
+        // A general-purpose transfer keeps the CPU 4 T-cycles longer (the CGB boot ROM's
+        // DIV at hand-over, Mooneye's boot_div-cgbABCDE).
+        let tail = if general { 4 } else { 0 };
+        self.advance(bus, if bus.double_speed { tail } else { 2 + tail });
+        self.stalled += self.cycles - start;
+    }
+
     /// Executes one instruction (or services an interrupt) and returns T-cycles taken.
     pub fn step(&mut self, bus: &mut Bus) -> Result<u32, CpuError> {
         self.cycles = 0;
+        self.stalled = 0;
         debug_assert_eq!(self.pending, 0);
-        // A CGB VRAM DMA pauses the CPU while it copies.
-        let stall = bus.take_dma_stall();
-        if stall > 0 {
-            self.pending = stall;
-            self.flush(bus);
-            return Ok(self.cycles);
-        }
         if self.halted {
             self.halted_cycle(bus);
             return Ok(self.cycles);
@@ -675,10 +698,17 @@ impl Cpu {
 
         let pc = self.regs.pc;
         let op = self.fetch(bus);
+        if bus.hdma_on() {
+            self.run_hdma(bus);
+        }
         let expected = self.execute(bus, op);
         self.flush(bus);
         let expected = expected.ok_or(CpuError::IllegalOpcode { opcode: op, pc })?;
-        debug_assert_eq!(self.cycles, expected, "timing of opcode ${op:02X}");
+        debug_assert_eq!(
+            self.cycles - self.stalled,
+            expected,
+            "timing of opcode ${op:02X}"
+        );
         Ok(self.cycles)
     }
 
@@ -711,6 +741,7 @@ impl Cpu {
                     if bus.stop() {
                         self.halted = true;
                         self.just_halted = true;
+                        bus.cpu_halt();
                         self.speed_switch_halt = SPEED_SWITCH_CYCLES;
                     }
                     8

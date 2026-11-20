@@ -558,6 +558,11 @@ impl Ppu {
         self.hblank_start_dot
     }
 
+    /// The first dot of a line, where STAT still shows mode 0 before mode 2.
+    pub fn line_starting(&self) -> bool {
+        self.lcd_on() && self.dot == 0 && self.mode == Mode::HBlank
+    }
+
     pub fn take_hblank_started(&mut self) -> bool {
         std::mem::take(&mut self.hblank_started)
     }
@@ -1222,15 +1227,21 @@ impl Ppu {
     }
 
     /// Whether a STAT interrupt raised now comes from a source that hardware raises earlier
-    /// (see `take_early_irq`): a new line's mode 2, mode 1, an LY=LYC match, and on the DMG
-    /// mode 0 (Mooneye's hblank_ly_scx_timing; on the CGB mode 0 is in time, Gambatte's
-    /// hwtests, halt/*m0*).
+    /// (see `take_early_irq`): a new line's mode 2 and mode 1, and on the DMG mode 0
+    /// (Mooneye's hblank_ly_scx_timing) and LY=LYC. On the CGB those two are in time
+    /// (Gambatte's hwtests, halt/*m0* and dma/hdma_start*).
     fn raised_late(&self) -> bool {
         let visible = (self.ly as usize) < SCREEN_HEIGHT;
-        (self.dot == 0 && self.ly != 0 && visible)
+        (self.dot == 0
+            && self.ly != 0
+            && visible
+            && self.irq_stat & stat::OAM_INT != 0
+            && self.irq_mode == Mode::OamScan)
             || (self.ly as usize == SCREEN_HEIGHT && self.irq_mode == Mode::VBlank)
             || (self.dmg_hardware() && self.irq_mode == Mode::HBlank && visible)
-            || (self.irq_stat & stat::LYC_INT != 0 && self.ly_matches(self.irq_lyc))
+            || (self.dmg_hardware()
+                && self.irq_stat & stat::LYC_INT != 0
+                && self.ly_matches(self.irq_lyc))
     }
 
     /// The OR of all enabled STAT interrupt sources.
