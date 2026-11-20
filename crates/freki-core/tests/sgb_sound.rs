@@ -87,10 +87,11 @@ fn donkey_kong_uses_the_sgb_sound() {
             gb.run_frame().unwrap();
             gb.drain_audio(audio);
         }
+        // With its own sound, the SGB lowers the Game Boy's to make room.
         extra = a
             .iter()
             .zip(&b)
-            .map(|(x, y)| (x - y).abs())
+            .map(|(x, y)| (x * freki_core::sgb_sound::GB_LEVEL - y).abs())
             .fold(extra, f32::max);
         frame += 1;
     }

@@ -185,7 +185,9 @@ Super Game Boy sound ROM…** (a dump such as `Super Game Boy (World) (Rev 2).sf
 Nintendo's code, not included). freki runs the sound engine and samples from it on an
 emulated SNES sound chip (SPC700 and S-DSP) and mixes it into the Game Boy's sound; the
 SNES CPU itself is not emulated, freki passes the commands on the way the SGB's SNES
-program does. Headless mode takes the ROM with `--sgb-rom`.
+program does. The two are mixed at bsnes's balance (the SNES sound twice as loud as
+SameBoy's Game Boy scale); the Game Boy's sound gets a little quieter to make room. Headless
+mode takes the ROM with `--sgb-rom`.
 
 **Emulation → Settings for this game** keeps the console, palette, colour correction and
 frame blending chosen while it is ticked for the loaded game only, for example Dragon

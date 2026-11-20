@@ -24,8 +24,13 @@ const GB_HZ: u64 = 4_194_304;
 const PORT_HOLD: u32 = 70_224;
 /// Game Boy cycles collected before the sound chip catches up.
 const BATCH: u32 = 1024;
-/// Level of the SNES sound against the Game Boy's (both reach about ±1).
-const LEVEL: f32 = 0.7;
+/// Levels of the two sounds while the SGB has its own. bsnes (whose SGB runs the real
+/// SNES side with SameBoy for the Game Boy) adds both at the same 16-bit scale, where a
+/// Game Boy channel at full volume reaches ±4080 of 32768 (SameBoy's `MAX_CH_AMP`) —
+/// half of freki's ±0.25. So the SNES sound is twice freki's Game Boy scale; both are
+/// lowered together so their sum stays within ±1. (No measurement of a real SGB found.)
+pub const GB_LEVEL: f32 = 0.7;
+const LEVEL: f32 = 2.0 * GB_LEVEL;
 
 pub struct SgbSound {
     smp: Smp,
@@ -192,9 +197,13 @@ impl SgbSound {
         }
     }
 
-    /// Adds the sound produced so far to `out` (interleaved stereo, the Game Boy's samples
-    /// at the same rate); what doesn't fit waits for the next call.
+    /// Mixes the sound produced so far into `out` (interleaved stereo, the Game Boy's
+    /// samples at the same rate, which are lowered to [`GB_LEVEL`]); what doesn't fit
+    /// waits for the next call.
     pub fn mix_into(&mut self, out: &mut [f32]) {
+        for o in out.iter_mut() {
+            *o *= GB_LEVEL;
+        }
         let n = out.len().min(self.ready.len());
         for (o, s) in out.iter_mut().zip(self.ready.drain(..n)) {
             *o += s;
