@@ -564,6 +564,11 @@ impl Cpu {
         }
         self.ime = false;
         self.fetch_read(bus, self.regs.pc);
+        // The dispatch's discarded opcode fetch starts a pending VRAM DMA like any other
+        // (Gambatte's hwtests, irq_precedence/late_hdma_vs_*).
+        if bus.hdma_on() {
+            self.run_hdma(bus);
+        }
         self.bus_cycle(bus);
         self.idle(bus);
         let [hi, lo] = self.regs.pc.to_be_bytes();
@@ -688,7 +693,10 @@ impl Cpu {
         }
         if self.handle_interrupts(bus) {
             self.flush(bus);
-            debug_assert!(matches!(self.cycles, 20 | 24), "interrupt dispatch timing");
+            debug_assert!(
+                matches!(self.cycles - self.stalled, 20 | 24),
+                "interrupt dispatch timing"
+            );
             return Ok(self.cycles);
         }
         let after_ei = std::mem::take(&mut self.ime_pending);
