@@ -337,6 +337,13 @@ impl Dist {
     fn macos(&self) -> Result {
         const TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
         // Both in one cargo call, so they build in parallel.
+        let missing = missing_targets(&TARGETS)?;
+        if !missing.is_empty() {
+            return Err(format!(
+                "the universal app needs the Rust standard library for both Macs; install it with\n  rustup target add {}",
+                missing.join(" ")
+            ));
+        }
         self.cargo_build(&TARGETS)?;
         let image = self.work.join("dmg");
         fresh_dir(&image)?;
@@ -398,6 +405,32 @@ impl Dist {
             .arg(&image)
             .arg(self.out.join(format!("{name}.dmg"))))
     }
+}
+
+/// The targets whose standard library the toolchain (cargo's own rustc) lacks.
+fn missing_targets<'a>(targets: &[&'a str]) -> Result<Vec<&'a str>> {
+    // cargo's rustc, so the check is about the toolchain that builds (`cargo +nightly-…`).
+    let rustc = env::var_os("CARGO")
+        .map(PathBuf::from)
+        .map(|cargo| cargo.with_file_name("rustc"))
+        .filter(|rustc| rustc.exists())
+        .unwrap_or_else(|| "rustc".into());
+    let output = Command::new(&rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .map_err(|e| format!("{}: {e}", rustc.display()))?;
+    let sysroot = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    Ok(targets
+        .iter()
+        .copied()
+        .filter(|target| {
+            !sysroot
+                .join("lib/rustlib")
+                .join(target)
+                .join("lib")
+                .is_dir()
+        })
+        .collect())
 }
 
 /// The newest `GLIBC_x.y` symbol version the binary asks for.
@@ -544,5 +577,19 @@ mod tests {
         let binary = b"\0GLIBC_2.2.5\0GLIBC_2.34\0GLIBC_PRIVATE\0GLIBC_2.17\0";
         assert_eq!(glibc_needed(binary).as_deref(), Some("2.34"));
         assert_eq!(glibc_needed(b"no versions"), None);
+    }
+
+    #[test]
+    fn finds_missing_targets() {
+        let host = if cfg!(target_os = "linux") {
+            "x86_64-unknown-linux-gnu"
+        } else {
+            "none"
+        };
+        let missing = missing_targets(&[host, "no-such-target"]).unwrap();
+        assert!(missing.contains(&"no-such-target"));
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            assert_eq!(missing, ["no-such-target"]);
+        }
     }
 }

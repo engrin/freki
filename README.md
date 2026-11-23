@@ -449,7 +449,7 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
 | `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [nokhwa](https://crates.io/crates/nokhwa) webcams, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
-| `xtask` | `cargo xtask dist`: builds the release packages for the OS it runs on into `dist/` (Linux: `.tar.gz`, `.deb`, `.rpm`, AppImage; Windows: `.zip`; macOS: `.dmg`) |
+| `xtask` | `cargo xtask dist`: builds the release packages for the OS it runs on into `dist/` (Linux: `.tar.gz`, `.deb`, `.rpm`, AppImage; Windows: `.zip`; macOS: `.dmg`, which needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`) |
 | `assets` | The icon and the Linux `.desktop` file |
 | `.github/workflows/release.yml` | Runs `cargo xtask dist` on Linux, Windows and macOS; pushing a tag `v*` makes a draft release with the packages |
 
