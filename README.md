@@ -451,7 +451,7 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
 | `xtask` | `cargo xtask dist`, which builds the release packages (see [below](#release-packages)) |
 | `assets` | The icon (SVG and its PNG, ICO and macOS renderings), the disk image background, the Linux `.desktop` file |
-| `.github/workflows/release.yml` | Runs `cargo xtask dist` on Linux, Windows and macOS; pushing a tag `v*` makes a draft release with the packages |
+| `.github/workflows/release.yml` | Runs `cargo xtask dist` on Linux, Windows and macOS; pushing a tag `v*` publishes a release with the packages |
 
 ```sh
 ./scripts/fetch-test-roms.sh      # Blargg, acid2, mealybug-tearoom, Mooneye, Gambatte, SameSuite, AGE, 65816
