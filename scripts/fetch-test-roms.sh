@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Downloads freely distributable Game Boy test ROMs into roms/test/ (git-ignored).
+#   - Blargg's cpu_instrs, dmg_sound, cgb_sound, instr_timing and mem_timing (via retrio/gb-test-roms, pinned commit)
+#   - dmg-acid2 and cgb-acid2 by Matt Currie (MIT), plus their reference screenshots
+#   - mealybug-tearoom-tests by Matt Currie (MIT): mid-scanline PPU tests + DMG and CGB C references
+#   - Mooneye Test Suite by Joonas Javanainen (MIT): acceptance, emulator-only (MBC) and misc (CGB) tests
+#   - Gambatte's hwtests by Sindre Aamås (GPL-2.0, via pokemon-speedrunning/gambatte-core): assembly
+#     sources only; freki's test runner assembles them itself
+#   - SameSuite by Lior Halphon (X11 license) and the AGE test ROMs by Christoph Sprenger (MIT),
+#     prebuilt in c-sp/game-boy-test-roms
+#   - SingleStepTests' 65816 tests by Thomas Harte (MIT): one JSON file per opcode and mode for
+#     the Super Game Boy's SNES CPU; only the first 500 tests of each file are kept (python3)
+set -euo pipefail
+
+DEST="$(cd "$(dirname "$0")/.." && pwd)/roms/test"
+BLARGG="https://raw.githubusercontent.com/retrio/gb-test-roms/c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15"
+ACID2="https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
+ACID2_REF="https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
+CGB_ACID2="https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc"
+CGB_ACID2_REF="https://raw.githubusercontent.com/mattcurrie/cgb-acid2/master/img/reference.png"
+MTS="mts-20240926-1737-443f6e1"
+MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS/$MTS.tar.xz"
+GAMBATTE_COMMIT="5a41a68c25402421fb1983ddadc9faf2418ddb0f"
+GAMBATTE_URL="https://codeload.github.com/pokemon-speedrunning/gambatte-core/tar.gz/$GAMBATTE_COMMIT"
+GBTR="https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
+W65816="https://raw.githubusercontent.com/SingleStepTests/65816/307c63f5673c8c6b861c52f71ddb89212a227480/v1"
+MEALYBUG="https://raw.githubusercontent.com/mattcurrie/mealybug-tearoom-tests/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4"
+
+mkdir -p "$DEST/cpu_instrs" "$DEST/dmg_sound" "$DEST/mem_timing" "$DEST/mem_timing-2"
+
+fetch() { # url dest
+  if [[ -f "$2" ]]; then echo "have  $2"; return; fi
+  echo "fetch $2"
+  curl -fsSL --retry 3 -o "$2" "$1"
+}
+
+fetch "$ACID2" "$DEST/dmg-acid2.gb"
+fetch "$ACID2_REF" "$DEST/dmg-acid2-reference.png"
+fetch "$CGB_ACID2" "$DEST/cgb-acid2.gbc"
+fetch "$CGB_ACID2_REF" "$DEST/cgb-acid2-reference.png"
+fetch "$BLARGG/cpu_instrs/cpu_instrs.gb" "$DEST/cpu_instrs.gb"
+
+for rom in "01-special" "02-interrupts" "03-op sp,hl" "04-op r,imm" "05-op rp" "06-ld r,r" \
+           "07-jr,jp,call,ret,rst" "08-misc instrs" "09-op r,r" "10-bit ops" "11-op a,(hl)"; do
+  url="$BLARGG/cpu_instrs/individual/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
+  fetch "$url" "$DEST/cpu_instrs/$rom.gb"
+done
+
+fetch "$BLARGG/dmg_sound/dmg_sound.gb" "$DEST/dmg_sound.gb"
+for rom in "01-registers" "02-len ctr" "03-trigger" "04-sweep" "05-sweep details" \
+           "06-overflow on trigger" "07-len sweep period sync" "08-len ctr during power" \
+           "09-wave read while on" "10-wave trigger while on" "11-regs after power" \
+           "12-wave write while on"; do
+  url="$BLARGG/dmg_sound/rom_singles/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
+  fetch "$url" "$DEST/dmg_sound/$rom.gb"
+done
+
+mkdir -p "$DEST/cgb_sound"
+fetch "$BLARGG/cgb_sound/cgb_sound.gb" "$DEST/cgb_sound.gb"
+for rom in "01-registers" "02-len ctr" "03-trigger" "04-sweep" "05-sweep details" \
+           "06-overflow on trigger" "07-len sweep period sync" "08-len ctr during power" \
+           "09-wave read while on" "10-wave trigger while on" "11-regs after power" \
+           "12-wave"; do
+  url="$BLARGG/cgb_sound/rom_singles/$(printf '%s' "$rom" | sed 's/ /%20/g').gb"
+  fetch "$url" "$DEST/cgb_sound/$rom.gb"
+done
+
+fetch "$BLARGG/instr_timing/instr_timing.gb" "$DEST/instr_timing.gb"
+for rom in "01-read_timing" "02-write_timing" "03-modify_timing"; do
+  fetch "$BLARGG/mem_timing/individual/$rom.gb" "$DEST/mem_timing/$rom.gb"
+  fetch "$BLARGG/mem_timing-2/rom_singles/$rom.gb" "$DEST/mem_timing-2/$rom.gb"
+done
+
+# Mealybug: built ROMs ship as a zip in the repo; references are DMG and CPU CGB C screenshots.
+mkdir -p "$DEST/mealybug/cgb"
+if [[ ! -f "$DEST/mealybug/m3_scx_low_3_bits.gb" ]]; then
+  fetch "$MEALYBUG/mealybug-tearoom-tests.zip" "$DEST/mealybug.zip"
+  unzip -q -o -j "$DEST/mealybug.zip" '*.gb' -d "$DEST/mealybug"
+  rm "$DEST/mealybug.zip"
+fi
+for rom in "$DEST"/mealybug/*.gb; do
+  name="$(basename "$rom" .gb)"
+  ref="$DEST/mealybug/$name.png"
+  [[ -f "$ref" ]] && continue
+  curl -fsS --retry 3 -o "$ref" "$MEALYBUG/expected/DMG-blob/$name.png" 2>/dev/null \
+    && echo "fetch $ref" || echo "no DMG reference for $name"
+done
+for rom in "$DEST"/mealybug/*.gb; do
+  name="$(basename "$rom" .gb)"
+  ref="$DEST/mealybug/cgb/$name.png"
+  [[ -f "$ref" ]] && continue
+  curl -fsS --retry 3 -o "$ref" "$MEALYBUG/expected/CPU%20CGB%20C/$name.png" 2>/dev/null \
+    && echo "fetch $ref" || echo "no CGB reference for $name"
+done
+
+# Mooneye: prebuilt release tarball; keep the acceptance, emulator-only and misc ROMs.
+if [[ ! -d "$DEST/mooneye/misc" ]]; then
+  fetch "$MTS_URL" "$DEST/mooneye.tar.xz"
+  mkdir -p "$DEST/mooneye"
+  tar -xJf "$DEST/mooneye.tar.xz" -C "$DEST/mooneye" --strip-components=1 \
+    "$MTS/acceptance" "$MTS/emulator-only" "$MTS/misc" "$MTS/LICENSE"
+  rm "$DEST/mooneye.tar.xz"
+fi
+
+# Gambatte: hardware test sources (no ROMs are built here; the runner assembles them).
+if [[ ! -d "$DEST/gambatte/hwtests" ]]; then
+  fetch "$GAMBATTE_URL" "$DEST/gambatte.tar.gz"
+  mkdir -p "$DEST/gambatte"
+  tar -xzf "$DEST/gambatte.tar.gz" -C "$DEST/gambatte" --strip-components=2 \
+    "gambatte-core-$GAMBATTE_COMMIT/test/hwtests"
+  tar -xzf "$DEST/gambatte.tar.gz" -C "$DEST/gambatte" --strip-components=1 \
+    "gambatte-core-$GAMBATTE_COMMIT/COPYING"
+  rm "$DEST/gambatte.tar.gz"
+fi
+
+# SameSuite and AGE: from the game-boy-test-roms release, which has them assembled.
+if [[ ! -d "$DEST/same-suite" || ! -d "$DEST/age-test-roms" ]]; then
+  fetch "$GBTR" "$DEST/game-boy-test-roms.zip"
+  unzip -q -o "$DEST/game-boy-test-roms.zip" 'same-suite/*' 'age-test-roms/*' -d "$DEST"
+  rm "$DEST/game-boy-test-roms.zip"
+fi
+
+# 65816: 512 files of ~6 MB; keep the first 500 tests of each (about 150 MB in all).
+mkdir -p "$DEST/65816"
+for op in $(seq 0 255); do
+  for mode in e n; do
+    name="$(printf '%02x' "$op").$mode.json"
+    out="$DEST/65816/$name"
+    [[ -f "$out" ]] && continue
+    echo "fetch $out"
+    curl -fsSL --retry 3 -o "$out.full" "$W65816/$name"
+    if command -v python3 >/dev/null; then
+      python3 -I -c 'import json,sys; json.dump(json.load(open(sys.argv[1]))[:500], open(sys.argv[2], "w"))' \
+        "$out.full" "$out" && rm "$out.full"
+    else
+      mv "$out.full" "$out"
+    fi
+  done
+done
+
+echo "Test ROMs are in $DEST"

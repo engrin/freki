@@ -1,0 +1,34 @@
+[package]
+name = "freki"
+description = "freki: a Game Boy emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cpal = "0.18.2"
+crc32fast = "1.5.5"
+eframe = { version = "0.37.0", features = ["persistence"] }
+freki-core = { version = "0.1.0", path = "../freki-core" }
+gilrs = "0.11.2"
+# Already in the build through eframe; PNG and JPEG for Game Boy Camera pictures.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+# Webcams for the Game Boy Camera (V4L2, Media Foundation, AVFoundation); frames are
+# decoded here, so no C JPEG library. Linux builds need libclang (bindgen).
+nokhwa = { version = "=0.10.11", default-features = false, features = ["input-native"], optional = true }
+png = "0.18.1"
+# Video recording (WebM): pure Rust, no nasm or C (rav1e without its assembly).
+rav1e = { version = "=0.8.1", default-features = false, features = ["threading"] }
+rfd = "0.18.0"
+rusty-opus = "=1.0.2"
+serde = { version = "1.0.229", features = ["derive"] }
+zip = { version = "9.7.0", default-features = false, features = ["deflate"] }
+
+[features]
+default = ["webcam"]
+webcam = ["dep:nokhwa"]
+
+[dev-dependencies]
+ron = "0.12.3"

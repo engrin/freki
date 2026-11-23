@@ -1,0 +1,1054 @@
+//! The Audio Processing Unit: two square channels (one with sweep), a wave channel and
+//! a noise channel, mixed to stereo ($FF10–$FF3F).
+//!
+//! The APU is clocked per T-cycle. When a sample rate is set with [`Apu::set_sample_rate`],
+//! it point-samples the mixed output into an interleaved stereo `f32` buffer that the
+//! frontend drains with [`Apu::drain_samples`].
+
+use crate::CLOCK_HZ;
+use serde::{Deserialize, Serialize};
+
+const DUTY_TABLE: [[u8; 8]; 4] = [
+    [0, 0, 0, 0, 0, 0, 0, 1], // 12.5 %
+    [1, 0, 0, 0, 0, 0, 0, 1], // 25 %
+    [1, 0, 0, 0, 0, 1, 1, 1], // 50 %
+    [0, 1, 1, 1, 1, 1, 1, 0], // 75 %
+];
+
+/// Bits that always read as 1 for $FF10–$FF2F (unused bits and write-only registers).
+const READ_MASKS: [u8; 0x20] = [
+    0x80, 0x3F, 0x00, 0xFF, 0xBF, // NR10–NR14
+    0xFF, 0x3F, 0x00, 0xFF, 0xBF, // (unused), NR21–NR24
+    0x7F, 0xFF, 0x9F, 0xFF, 0xBF, // NR30–NR34
+    0xFF, 0xFF, 0x00, 0x00, 0xBF, // (unused), NR41–NR44
+    0x00, 0x00, 0x70, // NR50, NR51, NR52
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // $FF27–$FF2F
+];
+
+/// Length counter: silences a channel after a programmable time.
+#[derive(Serialize, Deserialize, Default)]
+struct Length {
+    counter: u16,
+    enabled: bool,
+}
+
+impl Length {
+    /// Clocked at 256 Hz. Returns `false` when the channel should be switched off.
+    fn clock(&mut self) -> bool {
+        if self.enabled && self.counter > 0 {
+            self.counter -= 1;
+            return self.counter > 0;
+        }
+        true
+    }
+
+    /// Handles a write to the length-enable and trigger bits of NRx4.
+    ///
+    /// `first_half` is true when the next frame-sequencer step does not clock length.
+    /// In that case enabling length (or triggering with it enabled) clocks it once extra.
+    /// Returns `false` if the extra clock expired the counter and the channel must stop.
+    fn write_control(&mut self, enable: bool, trigger: bool, max: u16, first_half: bool) -> bool {
+        let was_enabled = self.enabled;
+        self.enabled = enable;
+        let mut keep = true;
+        if !was_enabled && enable && first_half && self.counter > 0 {
+            self.counter -= 1;
+            keep = self.counter > 0 || trigger;
+        }
+        if trigger && self.counter == 0 {
+            self.counter = max;
+            if enable && first_half {
+                self.counter -= 1;
+            }
+        }
+        keep
+    }
+}
+
+/// Volume envelope (NRx2).
+#[derive(Serialize, Deserialize, Default)]
+struct Envelope {
+    initial: u8,
+    increase: bool,
+    pace: u8,
+    volume: u8,
+    timer: u8,
+}
+
+impl Envelope {
+    fn write(&mut self, value: u8) {
+        self.initial = value >> 4;
+        self.increase = value & 0x08 != 0;
+        self.pace = value & 0x07;
+    }
+
+    /// The DAC is on when the upper 5 bits of NRx2 are not all zero.
+    fn dac_on(&self) -> bool {
+        self.initial != 0 || self.increase
+    }
+
+    fn trigger(&mut self) {
+        self.volume = self.initial;
+        self.timer = self.pace;
+    }
+
+    /// Clocked at 64 Hz.
+    fn clock(&mut self) {
+        if self.pace == 0 {
+            return;
+        }
+        self.timer = self.timer.saturating_sub(1);
+        if self.timer == 0 {
+            self.timer = self.pace;
+            if self.increase && self.volume < 15 {
+                self.volume += 1;
+            } else if !self.increase && self.volume > 0 {
+                self.volume -= 1;
+            }
+        }
+    }
+}
+
+/// Channels 1 and 2. Only channel 1 uses the frequency sweep.
+#[derive(Serialize, Deserialize, Default)]
+struct Square {
+    on: bool,
+    duty: u8,
+    duty_step: u8,
+    period: u16,
+    timer: u32,
+    length: Length,
+    envelope: Envelope,
+
+    sweep_pace: u8,
+    sweep_decrease: bool,
+    sweep_step: u8,
+    sweep_timer: u8,
+    sweep_enabled: bool,
+    shadow_period: u16,
+    /// A sweep calculation in decrease mode happened since the last trigger.
+    sweep_negated: bool,
+    /// T-cycles until a sweep step the frame sequencer started takes effect: it lands
+    /// 4 T-cycles after the step (Gambatte's hwtests, sound/ch1_*sweep_counter_timing*).
+    #[serde(default)]
+    sweep_delay: u8,
+}
+
+impl Square {
+    fn tick(&mut self) {
+        if self.timer > 0 {
+            self.timer -= 1;
+        }
+        if self.timer == 0 {
+            self.timer = (2048 - self.period as u32) * 4;
+            self.duty_step = (self.duty_step + 1) & 7;
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if self.on {
+            DUTY_TABLE[self.duty as usize][self.duty_step as usize] * self.envelope.volume
+        } else {
+            0
+        }
+    }
+
+    fn trigger(&mut self) {
+        self.on = self.envelope.dac_on();
+        self.timer = (2048 - self.period as u32) * 4;
+        self.envelope.trigger();
+
+        self.shadow_period = self.period;
+        self.sweep_negated = false;
+        // A sweep step still pending when the channel is triggered is lost.
+        self.sweep_delay = 0;
+        self.sweep_timer = if self.sweep_pace == 0 {
+            8
+        } else {
+            self.sweep_pace
+        };
+        self.sweep_enabled = self.sweep_pace != 0 || self.sweep_step != 0;
+        if self.sweep_step != 0 {
+            self.sweep_calculate();
+        }
+    }
+
+    /// Computes the next sweep period; switches the channel off if it overflows.
+    fn sweep_calculate(&mut self) -> u16 {
+        let delta = self.shadow_period >> self.sweep_step;
+        let next = if self.sweep_decrease {
+            self.sweep_negated = true;
+            self.shadow_period.wrapping_sub(delta)
+        } else {
+            self.shadow_period + delta
+        };
+        if next > 2047 {
+            self.on = false;
+        }
+        next
+    }
+
+    /// Clocked at 128 Hz.
+    fn clock_sweep(&mut self) {
+        self.sweep_timer = self.sweep_timer.saturating_sub(1);
+        if self.sweep_timer != 0 {
+            return;
+        }
+        self.sweep_timer = if self.sweep_pace == 0 {
+            8
+        } else {
+            self.sweep_pace
+        };
+        if self.sweep_enabled && self.sweep_pace != 0 {
+            let next = self.sweep_calculate();
+            if next <= 2047 && self.sweep_step != 0 {
+                self.period = next;
+                self.shadow_period = next;
+                self.sweep_calculate();
+            }
+        }
+    }
+}
+
+/// Channel 3: plays 32 4-bit samples from wave RAM.
+#[derive(Serialize, Deserialize, Default)]
+struct Wave {
+    on: bool,
+    dac_on: bool,
+    /// NR32 output level: 0 = mute, 1 = 100 %, 2 = 50 %, 3 = 25 %.
+    level: u8,
+    period: u16,
+    timer: u32,
+    position: u8,
+    ram: [u8; 16],
+    length: Length,
+    /// T-cycles since the channel last fetched a byte from wave RAM.
+    since_fetch: u32,
+    /// The sample being played: the nibble last fetched. A trigger keeps it until the
+    /// first fetch; powering the APU off clears it (SameSuite, channel_3_first_sample and
+    /// channel_3_restart_delay).
+    sample: u8,
+}
+
+/// On the DMG, CPU access to wave RAM while channel 3 plays only reaches the RAM if it
+/// happens within this many T-cycles after the channel fetched a byte.
+const WAVE_ACCESS_WINDOW: u32 = 2;
+/// Retriggering channel 3 when its next fetch is at most this many T-cycles away
+/// corrupts the start of wave RAM (DMG only).
+const WAVE_CORRUPT_WINDOW: u32 = 2;
+/// Extra delay before the first fetch after a trigger.
+const WAVE_TRIGGER_DELAY: u32 = 6;
+
+impl Wave {
+    fn tick(&mut self) {
+        if !self.on {
+            return;
+        }
+        self.since_fetch = self.since_fetch.saturating_add(1);
+        if self.timer > 0 {
+            self.timer -= 1;
+        }
+        if self.timer == 0 {
+            self.timer = (2048 - self.period as u32) * 2;
+            self.position = (self.position + 1) & 31;
+            self.since_fetch = 0;
+            let byte = self.ram[self.position as usize / 2];
+            self.sample = if self.position % 2 == 0 {
+                byte >> 4
+            } else {
+                byte & 0x0F
+            };
+        }
+    }
+
+    /// Index of the wave RAM byte a CPU access at `index` really reaches, or `None` if
+    /// the access is lost. While playing, every access hits the byte being played; on the
+    /// DMG only right after the channel fetched it, on the CGB always.
+    fn cpu_access(&self, index: usize, cgb: bool) -> Option<usize> {
+        if !self.on {
+            Some(index)
+        } else if cgb || self.since_fetch < WAVE_ACCESS_WINDOW {
+            Some(self.position as usize / 2)
+        } else {
+            None
+        }
+    }
+
+    /// DMG bug: retriggering just before a fetch overwrites the start of wave RAM with
+    /// the byte (or aligned 4-byte block) about to be read.
+    fn corrupt_on_retrigger(&mut self) {
+        if !self.on || self.timer > WAVE_CORRUPT_WINDOW {
+            return;
+        }
+        let next = ((self.position as usize + 1) & 31) / 2;
+        if next < 4 {
+            self.ram[0] = self.ram[next];
+        } else {
+            let block = next & !3;
+            self.ram.copy_within(block..block + 4, 0);
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if !self.on || self.level == 0 {
+            return 0;
+        }
+        self.sample >> (self.level - 1)
+    }
+
+    fn trigger(&mut self, cgb: bool) {
+        if !cgb {
+            self.corrupt_on_retrigger();
+        }
+        self.on = self.dac_on;
+        self.timer = (2048 - self.period as u32) * 2 + WAVE_TRIGGER_DELAY;
+        self.position = 0;
+        self.since_fetch = u32::MAX;
+    }
+}
+
+/// Channel 4: pseudo-random noise from a linear-feedback shift register.
+#[derive(Serialize, Deserialize, Default)]
+struct Noise {
+    on: bool,
+    shift: u8,
+    short_mode: bool,
+    divisor_code: u8,
+    timer: u32,
+    lfsr: u16,
+    length: Length,
+    envelope: Envelope,
+}
+
+impl Noise {
+    fn timer_period(&self) -> u32 {
+        let divisor = if self.divisor_code == 0 {
+            8
+        } else {
+            self.divisor_code as u32 * 16
+        };
+        divisor << self.shift
+    }
+
+    fn tick(&mut self) {
+        if self.timer > 0 {
+            self.timer -= 1;
+        }
+        if self.timer == 0 {
+            self.timer = self.timer_period();
+            let bit = (self.lfsr ^ (self.lfsr >> 1)) & 1;
+            self.lfsr = (self.lfsr >> 1) | (bit << 14);
+            if self.short_mode {
+                self.lfsr = (self.lfsr & !(1 << 6)) | (bit << 6);
+            }
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if self.on && self.lfsr & 1 == 0 {
+            self.envelope.volume
+        } else {
+            0
+        }
+    }
+
+    fn trigger(&mut self) {
+        self.on = self.envelope.dac_on();
+        self.timer = self.timer_period();
+        self.envelope.trigger();
+        self.lfsr = 0x7FFF;
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Apu {
+    /// Game Boy Color sound hardware (differs from the DMG in a few corner cases).
+    cgb: bool,
+    powered: bool,
+    /// Raw register values for $FF10–$FF2F, used for reads.
+    regs: [u8; 0x20],
+    ch1: Square,
+    ch2: Square,
+    ch3: Wave,
+    ch4: Noise,
+    frame_step: u8,
+    /// The next step 7 leaves the envelopes alone (see [`Apu::power_on_late`]).
+    skip_envelope: bool,
+
+    /// Output sample rate in Hz; `None` means no samples are produced.
+    sample_rate: Option<u32>,
+    /// Fixed-point sample clock: adds `sample_rate` per T-cycle, emits at `CLOCK_HZ`.
+    sample_clock: u32,
+    /// Not part of save states: output not yet handed to the frontend.
+    #[serde(skip)]
+    samples: Vec<f32>,
+    /// High-pass filter state (removes the DC offset, like the real hardware's capacitor).
+    capacitor: [f32; 2],
+    charge_factor: f32,
+    /// Channels the player muted in the sound viewer (not part of save states).
+    #[serde(skip)]
+    muted: [bool; 4],
+    /// The last [`SCOPE_LEN`] outputs (0–15) of each channel, one per sample, oldest
+    /// first from `scope_pos`; for the sound viewer's oscilloscopes.
+    #[serde(skip, default = "empty_scope")]
+    scope: Box<[[u8; SCOPE_LEN]; 4]>,
+    #[serde(skip)]
+    scope_pos: usize,
+}
+
+/// Outputs kept per channel for the sound viewer.
+pub const SCOPE_LEN: usize = 512;
+
+fn empty_scope() -> Box<[[u8; SCOPE_LEN]; 4]> {
+    Box::new([[0; SCOPE_LEN]; 4])
+}
+
+/// What a channel is doing, for the sound viewer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelInfo {
+    /// Playing (NR52 reports it on).
+    pub on: bool,
+    pub dac_on: bool,
+    /// Routed to the left / right output (NR51).
+    pub left: bool,
+    pub right: bool,
+    /// Pitch in Hz (for noise: how often the shift register steps).
+    pub frequency: f64,
+    /// Current volume 0–15 (channel 3: 15, 7, 3 or 0 for its output level).
+    pub volume: u8,
+    /// Envelope: initial volume, rising, pace (0 = off). Channels 1, 2 and 4.
+    pub envelope: Option<(u8, bool, u8)>,
+    /// Square duty: 0–3 for 12.5 %, 25 %, 50 %, 75 %. Channels 1 and 2.
+    pub duty: Option<u8>,
+    /// Sweep: pace, decreasing, step. Channel 1.
+    pub sweep: Option<(u8, bool, u8)>,
+    /// Length timer: enabled, remaining.
+    pub length: (bool, u16),
+    /// Channel 3: the 32 samples in wave RAM.
+    pub wave: Option<[u8; 32]>,
+    /// Channel 4: 7-bit (short) mode.
+    pub short_noise: Option<bool>,
+}
+
+impl Default for Apu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Apu {
+    pub fn new() -> Self {
+        let mut apu = Self {
+            cgb: false,
+            powered: true,
+            regs: [0; 0x20],
+            ch1: Square::default(),
+            ch2: Square::default(),
+            ch3: Wave::default(),
+            ch4: Noise::default(),
+            frame_step: 0,
+            skip_envelope: false,
+            sample_rate: None,
+            sample_clock: 0,
+            samples: Vec::new(),
+            capacitor: [0.0; 2],
+            charge_factor: 1.0,
+            muted: [false; 4],
+            scope: empty_scope(),
+            scope_pos: 0,
+        };
+        // Register state after the DMG boot ROM.
+        for (addr, value) in [
+            (0xFF10, 0x80),
+            (0xFF11, 0xBF),
+            (0xFF12, 0xF3),
+            (0xFF14, 0xBF),
+            (0xFF16, 0x3F),
+            (0xFF19, 0xBF),
+            (0xFF1A, 0x7F),
+            (0xFF1B, 0xFF),
+            (0xFF1C, 0x9F),
+            (0xFF1E, 0xBF),
+            (0xFF20, 0xFF),
+            (0xFF23, 0xBF),
+            (0xFF24, 0x77),
+            (0xFF25, 0xF3),
+        ] {
+            apu.write(addr, value);
+        }
+        // The boot "ding" has faded by now: channel 1 still reports as on, but silent.
+        apu.ch1.envelope.volume = 0;
+        apu
+    }
+
+    /// Power-on state: everything off and zero (the boot ROM switches sound on).
+    pub fn power_on() -> Self {
+        let mut apu = Self::new();
+        apu.write(0xFF26, 0x00);
+        apu
+    }
+
+    pub fn sample_rate(&self) -> Option<u32> {
+        self.sample_rate
+    }
+
+    /// Starts producing interleaved stereo samples at `rate` Hz.
+    pub fn set_sample_rate(&mut self, rate: u32) {
+        self.sample_rate = Some(rate);
+        self.sample_clock = 0;
+        // The DMG's output capacitor discharges by 0.999958 per T-cycle.
+        self.charge_factor = 0.999_958_f32.powf(CLOCK_HZ as f32 / rate as f32);
+    }
+
+    /// Changes the output rate slightly without resetting the sampling clock, for keeping
+    /// audio in sync with the display (dynamic rate control). No effect until
+    /// [`Apu::set_sample_rate`] has been called.
+    pub fn adjust_sample_rate(&mut self, rate: u32) {
+        if self.sample_rate.is_some() {
+            self.sample_rate = Some(rate);
+        }
+    }
+
+    /// Keeps the frontend's output settings when a save state replaces this APU.
+    pub(crate) fn adopt_output_from(&mut self, old: &Apu) {
+        self.sample_rate = old.sample_rate;
+        self.sample_clock = old.sample_clock;
+        self.charge_factor = old.charge_factor;
+        self.samples.clear();
+        self.muted = old.muted;
+    }
+
+    /// Mutes channel `n` (0–3) in the output, or lets it play again.
+    pub fn set_muted(&mut self, channel: usize, muted: bool) {
+        self.muted[channel] = muted;
+    }
+
+    pub fn muted(&self) -> [bool; 4] {
+        self.muted
+    }
+
+    /// The last [`SCOPE_LEN`] outputs (0–15) of `channel`, oldest first.
+    pub fn scope(&self, channel: usize) -> impl Iterator<Item = u8> + '_ {
+        let ring = &self.scope[channel];
+        ring[self.scope_pos..]
+            .iter()
+            .chain(&ring[..self.scope_pos])
+            .copied()
+    }
+
+    /// What each channel is doing now.
+    pub fn channels(&self) -> [ChannelInfo; 4] {
+        let nr51 = self.regs[0x15];
+        let routed = |n: usize| (nr51 & (0x10 << n) != 0, nr51 & (0x01 << n) != 0);
+        let square = |ch: &Square, n: usize| {
+            let (left, right) = routed(n);
+            ChannelInfo {
+                on: ch.on,
+                dac_on: ch.envelope.dac_on(),
+                left,
+                right,
+                frequency: 131_072.0 / f64::from(2048 - u32::from(ch.period)),
+                volume: if ch.on { ch.envelope.volume } else { 0 },
+                envelope: Some((ch.envelope.initial, ch.envelope.increase, ch.envelope.pace)),
+                duty: Some(ch.duty),
+                sweep: (n == 0).then_some((ch.sweep_pace, ch.sweep_decrease, ch.sweep_step)),
+                length: (ch.length.enabled, ch.length.counter),
+                wave: None,
+                short_noise: None,
+            }
+        };
+        let wave = {
+            let ch = &self.ch3;
+            let (left, right) = routed(2);
+            let mut samples = [0; 32];
+            for (i, s) in samples.iter_mut().enumerate() {
+                let byte = ch.ram[i / 2];
+                *s = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F };
+            }
+            ChannelInfo {
+                on: ch.on,
+                dac_on: ch.dac_on,
+                left,
+                right,
+                frequency: 65_536.0 / f64::from(2048 - u32::from(ch.period)),
+                volume: match (ch.on, ch.level) {
+                    (false, _) | (_, 0) => 0,
+                    (_, level) => 15 >> (level - 1),
+                },
+                envelope: None,
+                duty: None,
+                sweep: None,
+                length: (ch.length.enabled, ch.length.counter),
+                wave: Some(samples),
+                short_noise: None,
+            }
+        };
+        let noise = {
+            let ch = &self.ch4;
+            let (left, right) = routed(3);
+            ChannelInfo {
+                on: ch.on,
+                dac_on: ch.envelope.dac_on(),
+                left,
+                right,
+                frequency: f64::from(CLOCK_HZ) / f64::from(ch.timer_period()),
+                volume: if ch.on { ch.envelope.volume } else { 0 },
+                envelope: Some((ch.envelope.initial, ch.envelope.increase, ch.envelope.pace)),
+                duty: None,
+                sweep: None,
+                length: (ch.length.enabled, ch.length.counter),
+                wave: None,
+                short_noise: Some(ch.short_mode),
+            }
+        };
+        [square(&self.ch1, 0), square(&self.ch2, 1), wave, noise]
+    }
+
+    /// Switches to the Game Boy Color's sound hardware. Its wave RAM powers on as
+    /// alternating $00 and $FF bytes.
+    pub fn set_cgb(&mut self) {
+        self.cgb = true;
+        for (i, byte) in self.ch3.ram.iter_mut().enumerate() {
+            *byte = if i % 2 == 0 { 0x00 } else { 0xFF };
+        }
+    }
+
+    /// PCM12 ($FF76, `pair` 0) and PCM34 ($FF77, `pair` 1) on the CGB: the current digital
+    /// outputs (0–15) of channels 1 and 2 or 3 and 4, the second in the high nibble.
+    pub fn pcm(&self, pair: u8) -> u8 {
+        if pair == 0 {
+            self.ch2.output() << 4 | self.ch1.output()
+        } else {
+            self.ch4.output() << 4 | self.ch3.output()
+        }
+    }
+
+    /// Moves all samples produced so far into `out` (interleaved left, right).
+    pub fn drain_samples(&mut self, out: &mut Vec<f32>) {
+        out.append(&mut self.samples);
+    }
+
+    pub fn read(&self, addr: u16) -> u8 {
+        match addr {
+            0xFF26 => {
+                let status = u8::from(self.ch1.on)
+                    | u8::from(self.ch2.on) << 1
+                    | u8::from(self.ch3.on) << 2
+                    | u8::from(self.ch4.on) << 3;
+                0x70 | u8::from(self.powered) << 7 | status
+            }
+            0xFF10..=0xFF2F => {
+                let i = (addr - 0xFF10) as usize;
+                self.regs[i] | READ_MASKS[i]
+            }
+            0xFF30..=0xFF3F => match self.ch3.cpu_access((addr - 0xFF30) as usize, self.cgb) {
+                Some(i) => self.ch3.ram[i],
+                None => 0xFF,
+            },
+            _ => 0xFF,
+        }
+    }
+
+    pub fn write(&mut self, addr: u16, value: u8) {
+        if let 0xFF30..=0xFF3F = addr {
+            if let Some(i) = self.ch3.cpu_access((addr - 0xFF30) as usize, self.cgb) {
+                self.ch3.ram[i] = value;
+            }
+            return;
+        }
+        if addr == 0xFF26 {
+            let power = value & 0x80 != 0;
+            if self.powered && !power {
+                // Powering off clears every register. Wave RAM and, on the DMG, the
+                // length counters survive.
+                let ram = self.ch3.ram;
+                let lengths = if self.cgb {
+                    [0; 4]
+                } else {
+                    [
+                        self.ch1.length.counter,
+                        self.ch2.length.counter,
+                        self.ch3.length.counter,
+                        self.ch4.length.counter,
+                    ]
+                };
+                *self = Self {
+                    cgb: self.cgb,
+                    sample_rate: self.sample_rate,
+                    sample_clock: self.sample_clock,
+                    samples: std::mem::take(&mut self.samples),
+                    capacitor: self.capacitor,
+                    charge_factor: self.charge_factor,
+                    muted: self.muted,
+                    scope_pos: self.scope_pos,
+                    scope: std::mem::replace(&mut self.scope, empty_scope()),
+                    ..Self::powered_off()
+                };
+                self.ch3.ram = ram;
+                self.ch1.length.counter = lengths[0];
+                self.ch2.length.counter = lengths[1];
+                self.ch3.length.counter = lengths[2];
+                self.ch4.length.counter = lengths[3];
+            } else if !self.powered && power {
+                self.frame_step = 0;
+            }
+            self.powered = power;
+            return;
+        }
+        if !(0xFF10..=0xFF25).contains(&addr) {
+            return;
+        }
+        if !self.powered {
+            // On the DMG, length counters can still be loaded while the APU is off.
+            if self.cgb {
+                return;
+            }
+            match addr {
+                0xFF11 => self.ch1.length.counter = 64 - (value & 0x3F) as u16,
+                0xFF16 => self.ch2.length.counter = 64 - (value & 0x3F) as u16,
+                0xFF1B => self.ch3.length.counter = 256 - value as u16,
+                0xFF20 => self.ch4.length.counter = 64 - (value & 0x3F) as u16,
+                _ => {}
+            }
+            return;
+        }
+        // Next frame-sequencer step doesn't clock length (see `Length::write_control`).
+        let first_half = self.frame_step % 2 == 1;
+        let enable = value & 0x40 != 0;
+        let trigger = value & 0x80 != 0;
+        self.regs[(addr - 0xFF10) as usize] = value;
+
+        match addr {
+            // Channel 1
+            0xFF10 => {
+                self.ch1.sweep_pace = (value >> 4) & 0x07;
+                self.ch1.sweep_decrease = value & 0x08 != 0;
+                self.ch1.sweep_step = value & 0x07;
+                if self.ch1.sweep_negated && !self.ch1.sweep_decrease {
+                    self.ch1.on = false;
+                }
+            }
+            0xFF11 => {
+                self.ch1.duty = value >> 6;
+                self.ch1.length.counter = 64 - (value & 0x3F) as u16;
+            }
+            0xFF12 => {
+                self.ch1.envelope.write(value);
+                self.ch1.on &= self.ch1.envelope.dac_on();
+            }
+            0xFF13 => self.ch1.period = (self.ch1.period & 0x700) | value as u16,
+            0xFF14 => {
+                self.ch1.period = (self.ch1.period & 0xFF) | ((value as u16 & 0x07) << 8);
+                let keep = self
+                    .ch1
+                    .length
+                    .write_control(enable, trigger, 64, first_half);
+                if trigger {
+                    self.ch1.trigger();
+                }
+                self.ch1.on &= keep;
+            }
+            // Channel 2
+            0xFF16 => {
+                self.ch2.duty = value >> 6;
+                self.ch2.length.counter = 64 - (value & 0x3F) as u16;
+            }
+            0xFF17 => {
+                self.ch2.envelope.write(value);
+                self.ch2.on &= self.ch2.envelope.dac_on();
+            }
+            0xFF18 => self.ch2.period = (self.ch2.period & 0x700) | value as u16,
+            0xFF19 => {
+                self.ch2.period = (self.ch2.period & 0xFF) | ((value as u16 & 0x07) << 8);
+                let keep = self
+                    .ch2
+                    .length
+                    .write_control(enable, trigger, 64, first_half);
+                if trigger {
+                    self.ch2.trigger();
+                }
+                self.ch2.on &= keep;
+            }
+            // Channel 3
+            0xFF1A => {
+                self.ch3.dac_on = value & 0x80 != 0;
+                self.ch3.on &= self.ch3.dac_on;
+            }
+            0xFF1B => self.ch3.length.counter = 256 - value as u16,
+            0xFF1C => self.ch3.level = (value >> 5) & 0x03,
+            0xFF1D => self.ch3.period = (self.ch3.period & 0x700) | value as u16,
+            0xFF1E => {
+                self.ch3.period = (self.ch3.period & 0xFF) | ((value as u16 & 0x07) << 8);
+                let keep = self
+                    .ch3
+                    .length
+                    .write_control(enable, trigger, 256, first_half);
+                if trigger {
+                    self.ch3.trigger(self.cgb);
+                }
+                self.ch3.on &= keep;
+            }
+            // Channel 4
+            0xFF20 => self.ch4.length.counter = 64 - (value & 0x3F) as u16,
+            0xFF21 => {
+                self.ch4.envelope.write(value);
+                self.ch4.on &= self.ch4.envelope.dac_on();
+            }
+            0xFF22 => {
+                self.ch4.shift = value >> 4;
+                self.ch4.short_mode = value & 0x08 != 0;
+                self.ch4.divisor_code = value & 0x07;
+            }
+            0xFF23 => {
+                let keep = self
+                    .ch4
+                    .length
+                    .write_control(enable, trigger, 64, first_half);
+                if trigger {
+                    self.ch4.trigger();
+                }
+                self.ch4.on &= keep;
+            }
+            _ => {} // NR50, NR51: read back from `regs` when mixing
+        }
+    }
+
+    fn powered_off() -> Self {
+        Self {
+            cgb: false,
+            powered: false,
+            regs: [0; 0x20],
+            ch1: Square::default(),
+            ch2: Square::default(),
+            ch3: Wave::default(),
+            ch4: Noise::default(),
+            frame_step: 0,
+            skip_envelope: false,
+            sample_rate: None,
+            sample_clock: 0,
+            samples: Vec::new(),
+            capacitor: [0.0; 2],
+            charge_factor: 1.0,
+            muted: [false; 4],
+            scope: empty_scope(),
+            scope_pos: 0,
+        }
+    }
+
+    /// Advances the APU by `cycles` T-cycles.
+    pub fn tick(&mut self, cycles: u32) {
+        for _ in 0..cycles {
+            if self.powered {
+                self.tick_cycle();
+            }
+            if let Some(rate) = self.sample_rate {
+                self.sample_clock += rate;
+                if self.sample_clock >= CLOCK_HZ {
+                    self.sample_clock -= CLOCK_HZ;
+                    self.push_sample();
+                }
+            }
+        }
+    }
+
+    fn tick_cycle(&mut self) {
+        if self.ch1.sweep_delay > 0 {
+            self.ch1.sweep_delay -= 1;
+            if self.ch1.sweep_delay == 0 {
+                self.ch1.clock_sweep();
+            }
+        }
+        self.ch1.tick();
+        self.ch2.tick();
+        self.ch3.tick();
+        self.ch4.tick();
+    }
+
+    /// Steps the frame sequencer (512 Hz: length at steps 0/2/4/6, sweep at 2/6, envelope
+    /// at 7). The bus calls this on each falling edge of a DIV counter bit, so writing DIV
+    /// can step it early.
+    pub fn clock_frame_sequencer(&mut self) {
+        if !self.powered {
+            return;
+        }
+        let step = self.frame_step;
+        if step % 2 == 0 {
+            self.ch1.on &= self.ch1.length.clock();
+            self.ch2.on &= self.ch2.length.clock();
+            self.ch3.on &= self.ch3.length.clock();
+            self.ch4.on &= self.ch4.length.clock();
+        }
+        if step == 2 || step == 6 {
+            self.ch1.sweep_delay = 4;
+        }
+        if step == 7 && !std::mem::take(&mut self.skip_envelope) {
+            self.ch1.envelope.clock();
+            self.ch2.envelope.clock();
+            self.ch4.envelope.clock();
+        }
+        self.frame_step = (step + 1) & 7;
+    }
+
+    /// Whether the APU is powered on (NR52 bit 7).
+    pub fn powered(&self) -> bool {
+        self.powered
+    }
+
+    /// Just powered on with the frame sequencer's DIV bit set: the sequencer starts in the
+    /// second half of a step pair, so its next step is 7 instead of 0 (Gambatte's hwtests,
+    /// sound/*_nr52_*). That first step does not clock the envelopes (SameSuite,
+    /// div_write_trigger_volume_10; SameBoy skips the whole step).
+    pub fn power_on_late(&mut self) {
+        self.frame_step = 7;
+        self.skip_envelope = true;
+    }
+
+    /// Converts a channel's 0–15 output to −1.0…1.0, or 0 if its DAC is off.
+    fn dac(on: bool, digital: u8) -> f32 {
+        if on { digital as f32 / 7.5 - 1.0 } else { 0.0 }
+    }
+
+    fn push_sample(&mut self) {
+        let outputs = [
+            self.ch1.output(),
+            self.ch2.output(),
+            self.ch3.output(),
+            self.ch4.output(),
+        ];
+        for (ring, &out) in self.scope.iter_mut().zip(&outputs) {
+            ring[self.scope_pos] = out;
+        }
+        self.scope_pos = (self.scope_pos + 1) % SCOPE_LEN;
+        let dacs = [
+            self.ch1.envelope.dac_on(),
+            self.ch2.envelope.dac_on(),
+            self.ch3.dac_on,
+            self.ch4.envelope.dac_on(),
+        ];
+        // A muted channel sounds like one whose DAC is off.
+        let channels: [f32; 4] =
+            std::array::from_fn(|i| Self::dac(dacs[i] && !self.muted[i], outputs[i]));
+        let nr50 = self.regs[0x14];
+        let nr51 = self.regs[0x15];
+        for side in 0..2 {
+            // NR51: bits 0–3 route channels to the right, bits 4–7 to the left.
+            let shift = if side == 0 { 4 } else { 0 };
+            let mut mix: f32 = channels
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| nr51 & (1 << (i + shift)) != 0)
+                .map(|(_, &v)| v)
+                .sum();
+            // NR50: master volume 0–7 per side (left in bits 4–6, right in bits 0–2).
+            let volume = ((nr50 >> shift) & 0x07) as f32 + 1.0;
+            mix *= volume / 8.0 / 4.0;
+
+            let out = mix - self.capacitor[side];
+            self.capacitor[side] = mix - out * self.charge_factor;
+            self.samples.push(if self.powered { out } else { 0.0 });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_info_and_muting() {
+        let mut apu = Apu::new();
+        apu.set_sample_rate(48_000);
+        apu.write(0xFF25, 0x22); // channel 2 to both sides
+        apu.write(0xFF16, 0x80); // 50 % duty
+        apu.write(0xFF17, 0xF3); // volume 15, falling, pace 3
+        // Period 1750: 131072 / 298 = 439.8 Hz (A4).
+        apu.write(0xFF18, (1750 & 0xFF) as u8);
+        apu.write(0xFF19, 0x80 | (1750 >> 8) as u8);
+        let ch2 = &apu.channels()[1];
+        assert!(ch2.on && ch2.dac_on && ch2.left && ch2.right);
+        assert!((ch2.frequency - 439.8).abs() < 0.1, "{}", ch2.frequency);
+        assert_eq!(
+            (ch2.volume, ch2.duty, ch2.envelope),
+            (15, Some(2), Some((15, false, 3)))
+        );
+        assert!(apu.channels()[0].sweep.is_some());
+        assert_eq!(apu.channels()[1].sweep, None);
+
+        let mut loud = Vec::new();
+        apu.tick(20_000);
+        apu.drain_samples(&mut loud);
+        assert!(loud.iter().any(|s| s.abs() > 0.05));
+        assert!(
+            apu.scope(1).any(|v| v == 15),
+            "the scope saw the square wave"
+        );
+
+        apu.set_muted(1, true);
+        let mut quiet = Vec::new();
+        apu.tick(200_000); // let the high-pass filter settle
+        apu.drain_samples(&mut Vec::new());
+        apu.tick(20_000);
+        apu.drain_samples(&mut quiet);
+        assert!(quiet.iter().all(|s| s.abs() < 0.01), "muted");
+        assert!(
+            apu.scope(1).any(|v| v == 15),
+            "the scope still shows a muted channel"
+        );
+    }
+
+    #[test]
+    fn nr52_reports_triggered_channel_and_length_expiry() {
+        let mut apu = Apu::new();
+        apu.write(0xFF17, 0xF0); // ch2 volume 15, DAC on
+        apu.write(0xFF16, 0x3F); // length 1
+        apu.write(0xFF19, 0xC0); // trigger, length enabled
+        assert_eq!(apu.read(0xFF26) & 0x02, 0x02);
+        apu.clock_frame_sequencer();
+        apu.clock_frame_sequencer();
+        assert_eq!(apu.read(0xFF26) & 0x02, 0, "length expired");
+    }
+
+    #[test]
+    fn power_off_clears_registers_but_keeps_wave_ram() {
+        let mut apu = Apu::new();
+        apu.write(0xFF30, 0xAB);
+        apu.write(0xFF26, 0x00);
+        assert_eq!(apu.read(0xFF24), 0x00);
+        assert_eq!(apu.read(0xFF30), 0xAB);
+        apu.write(0xFF24, 0x77); // ignored while off
+        assert_eq!(apu.read(0xFF24), 0x00);
+    }
+
+    #[test]
+    fn register_reads_use_masks() {
+        let apu = Apu::new();
+        assert_eq!(apu.read(0xFF13), 0xFF, "period low is write-only");
+        assert_eq!(apu.read(0xFF26), 0xF1, "on, ch1 playing after boot");
+    }
+
+    #[test]
+    fn produces_samples_at_requested_rate() {
+        let mut apu = Apu::new();
+        apu.set_sample_rate(48_000);
+        apu.tick(CLOCK_HZ / 4); // exactly 0.25 s
+        let mut out = Vec::new();
+        apu.drain_samples(&mut out);
+        assert_eq!(out.len(), 2 * 12_000);
+        assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+    }
+
+    #[test]
+    fn square_wave_is_audible() {
+        let mut apu = Apu::new();
+        apu.set_sample_rate(48_000);
+        apu.write(0xFF11, 0x80); // 50 % duty
+        apu.write(0xFF12, 0xF0); // volume 15
+        apu.write(0xFF13, 0x00);
+        apu.write(0xFF14, 0x87); // trigger, period $700 (~440 Hz-ish)
+        apu.tick(CLOCK_HZ / 20);
+        let mut out = Vec::new();
+        apu.drain_samples(&mut out);
+        let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.05, "peak {peak}");
+    }
+}
