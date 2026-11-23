@@ -1,5 +1,6 @@
 # Builds freki for macOS (universal .app in a .dmg), Windows (.zip) and Linux (.tar.gz).
-# A pushed version tag (v0.1.0, …) publishes them as a GitHub release; run by hand
+# A pushed version tag (v0.1.0, …) tests, builds and creates a draft GitHub release with
+# them and their checksums (publish it on the releases page after checking); run by hand
 # (Actions → Release → Run workflow), it only builds and keeps them as artifacts.
 #
 # Crates and build output are cached per OS, toolchain and Cargo.lock. A tag's run can use
@@ -15,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# A newer run for the same tag or branch cancels the older one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # A dated nightly at least two weeks old (freki needs nightly Rust).
   TOOLCHAIN: nightly-2026-11-08
@@ -24,9 +30,10 @@ jobs:
   linux:
     # The oldest supported Ubuntu, so the binary runs with older glibc versions too.
     runs-on: ubuntu-22.04
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index/
@@ -41,6 +48,11 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev libclang-dev
       - name: Install Rust
         run: rustup toolchain install "$TOOLCHAIN" --profile minimal
+      # Unit tests and the built-in checks (the test-ROM suites skip without their ROMs);
+      # a failure stops the release. Built with the release profile, so the build below
+      # reuses the dependencies.
+      - name: Test
+        run: cargo +"$TOOLCHAIN" test --release --locked --workspace
       - name: Build
         run: cargo +"$TOOLCHAIN" build --release --locked -p freki
       - name: Package
@@ -49,16 +61,17 @@ jobs:
           mkdir "$name"
           cp target/release/freki README.md LICENSE "$name/"
           tar czf "$name.tar.gz" "$name"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux
           path: freki-*-linux-x86_64.tar.gz
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index/
@@ -77,18 +90,19 @@ jobs:
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item target/release/freki.exe, README.md, LICENSE $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
           path: freki-*-windows-x86_64.zip
 
   macos:
     runs-on: macos-latest
+    timeout-minutes: 40
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index/
@@ -101,10 +115,10 @@ jobs:
         run: |
           rustup toolchain install "$TOOLCHAIN" --profile minimal \
             --target aarch64-apple-darwin --target x86_64-apple-darwin
-      - name: Build (Apple Silicon and Intel)
+      - name: Build (Apple Silicon and Intel, in parallel)
         run: |
-          cargo +"$TOOLCHAIN" build --release --locked -p freki --target aarch64-apple-darwin
-          cargo +"$TOOLCHAIN" build --release --locked -p freki --target x86_64-apple-darwin
+          cargo +"$TOOLCHAIN" build --release --locked -p freki \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
       - name: Make freki.app
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -142,7 +156,7 @@ jobs:
           cp -R freki.app README.md LICENSE dmg/
           ln -s /Applications dmg/Applications
           hdiutil create -volname freki -srcfolder dmg -format UDZO -ov "$name.dmg"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos
           path: freki-*-macos-universal.dmg
@@ -151,14 +165,17 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [linux, windows, macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
-      - name: Publish the release
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Create the release (as a draft, to check before publishing)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -172,7 +189,9 @@ jobs:
             unknown publisher: **More info → Run anyway**.
           - **Linux** (x86-64): unpack and run `./freki`. Needs ALSA and X11 or Wayland.
 
+          `SHA256SUMS` lists the files' checksums (`sha256sum -c SHA256SUMS`).
+
           freki comes without games or boot ROMs.
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$GITHUB_REF_NAME" dist/* --draft \
             --repo "$GITHUB_REPOSITORY" --title "freki $GITHUB_REF_NAME" --notes-file notes.md

@@ -12,6 +12,8 @@ authors = ["engrin"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# No symbols in the binaries (about a sixth smaller).
+strip = true
 
 # The emulator is unplayably slow without optimisations; keep debug builds fast-ish.
 [profile.dev]
