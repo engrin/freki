@@ -10,6 +10,10 @@
 //! platform's app data directory. The terminal freki was started from accepts cheat and
 //! memory commands while the game runs (`help` lists them).
 
+// Windows release builds are GUI programs (no console window of their own); see
+// `attach_parent_console`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod audio;
 mod camera_picture;
@@ -42,6 +46,8 @@ const USAGE: &str = "usage: freki [ROM] [--link ROM2]   (--link: a second game o
        freki --headless ROM [options]   (--headless --help for more)";
 
 fn main() {
+    #[cfg(all(windows, not(debug_assertions)))]
+    attach_parent_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "--headless") {
         process::exit(headless::main(&args[1..]));
@@ -90,5 +96,19 @@ fn main() {
     if let Err(err) = result {
         eprintln!("freki: {err}");
         process::exit(1);
+    }
+}
+
+/// Windows release builds: started from a terminal, freki writes to it (headless mode,
+/// `--help`, messages) and reads its commands from it; double-clicked, it has none.
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_parent_console() {
+    unsafe extern "system" {
+        fn AttachConsole(process_id: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    // SAFETY: a plain Win32 call without pointers; failing (no parent console) is fine.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }

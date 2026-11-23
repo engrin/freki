@@ -1,0 +1,148 @@
+# Builds freki for macOS (universal .app in a .dmg), Windows (.zip) and Linux (.tar.gz).
+# A pushed version tag (v0.1.0, …) publishes them as a GitHub release; run by hand
+# (Actions → Release → Run workflow), it only builds and keeps them as artifacts.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # A dated nightly at least two weeks old (freki needs nightly Rust).
+  TOOLCHAIN: nightly-2026-11-08
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    # The oldest supported Ubuntu, so the binary runs with older glibc versions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev libclang-dev
+      - name: Install Rust
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal
+      - name: Build
+        run: cargo +"$TOOLCHAIN" build --release --locked -p freki
+      - name: Package
+        run: |
+          name="freki-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir "$name"
+          cp target/release/freki README.md LICENSE "$name/"
+          tar czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: freki-*-linux-x86_64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install "$env:TOOLCHAIN" --profile minimal
+      - name: Build
+        run: cargo "+$env:TOOLCHAIN" build --release --locked -p freki
+      - name: Package
+        run: |
+          $name = "freki-$env:GITHUB_REF_NAME-windows-x86_64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item target/release/freki.exe, README.md, LICENSE $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: freki-*-windows-x86_64.zip
+
+  macos:
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - name: Build (Apple Silicon and Intel)
+        run: |
+          cargo +"$TOOLCHAIN" build --release --locked -p freki --target aarch64-apple-darwin
+          cargo +"$TOOLCHAIN" build --release --locked -p freki --target x86_64-apple-darwin
+      - name: Make freki.app
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in [0-9]*) ;; *) version="0.0.0" ;; esac
+          app="freki.app/Contents"
+          mkdir -p "$app/MacOS" "$app/Resources"
+          lipo -create -output "$app/MacOS/freki" \
+            target/aarch64-apple-darwin/release/freki target/x86_64-apple-darwin/release/freki
+          cat > "$app/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>freki</string>
+            <key>CFBundleDisplayName</key><string>freki</string>
+            <key>CFBundleIdentifier</key><string>io.github.engrin.freki</string>
+            <key>CFBundleExecutable</key><string>freki</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$version</string>
+            <key>CFBundleVersion</key><string>$version</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSCameraUsageDescription</key><string>freki can use a camera as the Game Boy Camera's sensor.</string>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$app/Info.plist"
+          # Not notarized (no Apple Developer account): signed ad hoc only.
+          codesign --force --deep --sign - freki.app
+      - name: Make the disk image
+        run: |
+          name="freki-${GITHUB_REF_NAME}-macos-universal"
+          mkdir dmg
+          cp -R freki.app README.md LICENSE dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname freki -srcfolder dmg -format UDZO -ov "$name.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: freki-*-macos-universal.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          Downloads:
+          - **macOS** (Apple Silicon and Intel, macOS 11 or later): open the `.dmg` and drag
+            freki to Applications. It is not notarized: on first start macOS refuses to open
+            it; then choose **System Settings → Privacy & Security → Open Anyway** (or run
+            `xattr -dr com.apple.quarantine /Applications/freki.app`).
+          - **Windows** (64-bit): unzip and run `freki.exe`. SmartScreen may warn about an
+            unknown publisher: **More info → Run anyway**.
+          - **Linux** (x86-64): unpack and run `./freki`. Needs ALSA and X11 or Wayland.
+
+          freki comes without games or boot ROMs.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "freki $GITHUB_REF_NAME" --notes-file notes.md

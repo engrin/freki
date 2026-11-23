@@ -15,6 +15,7 @@ for Windows, Linux and macOS. Named after Freki, one of Odin's two wolves.
 
 <p align="center">
 <a href="#features">Features</a> ·
+<a href="#download">Download</a> ·
 <a href="#getting-started">Getting started</a> ·
 <a href="#controls">Controls</a> ·
 <a href="#accuracy">Accuracy</a> ·
@@ -145,6 +146,19 @@ for Windows, Linux and macOS. Named after Freki, one of Odin's two wolves.
   Doctor's format, screenshots and save states
 
 </details>
+
+## Download
+
+Ready-made builds are on the [releases page](https://github.com/engrin/freki/releases):
+
+- **macOS** (Apple Silicon and Intel, macOS 11 or later): a `.dmg` with `freki.app`. It
+  is not notarized, so macOS refuses to open it the first time; then choose **System
+  Settings → Privacy & Security → Open Anyway**.
+- **Windows** (64-bit): a `.zip` with `freki.exe`. SmartScreen may warn about an unknown
+  publisher: **More info → Run anyway**.
+- **Linux** (x86-64): a `.tar.gz` with the `freki` binary (needs ALSA and X11 or Wayland).
+
+freki comes without games or boot ROMs. To build it yourself, see below.
 
 ## Getting started
 
@@ -433,6 +447,7 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
 | `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [nokhwa](https://crates.io/crates/nokhwa) webcams, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
+| `.github/workflows/release.yml` | Builds the macOS, Windows and Linux downloads; pushing a tag `v*` publishes them as a release |
 
 ```sh
 ./scripts/fetch-test-roms.sh      # Blargg, acid2, mealybug-tearoom, Mooneye, Gambatte, SameSuite, AGE, 65816
