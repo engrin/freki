@@ -1,4 +1,5 @@
-# Builds freki for macOS (universal .app in a .dmg), Windows (.zip) and Linux (.tar.gz).
+# Builds freki for Linux (.tar.gz, .deb, .rpm, AppImage), Windows (.zip) and macOS
+# (universal .app in a .dmg) with `cargo xtask dist` (xtask/src/main.rs) on each OS.
 # A pushed version tag (v0.1.0, …) tests, builds and creates a draft GitHub release with
 # them and their checksums (publish it on the releases page after checking); run by hand
 # (Actions → Release → Run workflow), it only builds and keeps them as artifacts.
@@ -42,29 +43,37 @@ jobs:
             target/
           key: ${{ runner.os }}-${{ env.TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ env.TOOLCHAIN }}-
-      - name: Install build dependencies
+      - name: Install build and packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev libclang-dev
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev libclang-dev rpm
+      # Pinned releases, checked against their SHA-256 (not the "continuous" builds).
+      - name: Download appimagetool and the AppImage runtime
+        run: |
+          mkdir ~/appimage && cd ~/appimage
+          curl -fsSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSLo runtime https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          sha256sum -c <<EOF
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime
+          EOF
+          chmod +x appimagetool
+          echo "APPIMAGETOOL=$HOME/appimage/appimagetool" >> "$GITHUB_ENV"
+          echo "APPIMAGE_RUNTIME=$HOME/appimage/runtime" >> "$GITHUB_ENV"
       - name: Install Rust
         run: rustup toolchain install "$TOOLCHAIN" --profile minimal
       # Unit tests and the built-in checks (the test-ROM suites skip without their ROMs);
-      # a failure stops the release. Built with the release profile, so the build below
-      # reuses the dependencies.
+      # a failure stops the release. Built with the release profile, so the packaging
+      # build reuses the dependencies.
       - name: Test
         run: cargo +"$TOOLCHAIN" test --release --locked --workspace
-      - name: Build
-        run: cargo +"$TOOLCHAIN" build --release --locked -p freki
-      - name: Package
-        run: |
-          name="freki-${GITHUB_REF_NAME}-linux-x86_64"
-          mkdir "$name"
-          cp target/release/freki README.md LICENSE "$name/"
-          tar czf "$name.tar.gz" "$name"
+      - name: Build and package
+        run: cargo +"$TOOLCHAIN" xtask dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux
-          path: freki-*-linux-x86_64.tar.gz
+          path: dist/*
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -82,24 +91,17 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ env.TOOLCHAIN }}-
       - name: Install Rust
         run: rustup toolchain install "$env:TOOLCHAIN" --profile minimal
-      - name: Build
-        run: cargo "+$env:TOOLCHAIN" build --release --locked -p freki
-      - name: Package
-        run: |
-          $name = "freki-$env:GITHUB_REF_NAME-windows-x86_64"
-          New-Item -ItemType Directory $name | Out-Null
-          Copy-Item target/release/freki.exe, README.md, LICENSE $name
-          Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - name: Build and package
+        run: cargo "+$env:TOOLCHAIN" xtask dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows
-          path: freki-*-windows-x86_64.zip
+          path: dist/*
+          if-no-files-found: error
 
   macos:
     runs-on: macos-latest
     timeout-minutes: 40
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -115,51 +117,13 @@ jobs:
         run: |
           rustup toolchain install "$TOOLCHAIN" --profile minimal \
             --target aarch64-apple-darwin --target x86_64-apple-darwin
-      - name: Build (Apple Silicon and Intel, in parallel)
-        run: |
-          cargo +"$TOOLCHAIN" build --release --locked -p freki \
-            --target aarch64-apple-darwin --target x86_64-apple-darwin
-      - name: Make freki.app
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          case "$version" in [0-9]*) ;; *) version="0.0.0" ;; esac
-          app="freki.app/Contents"
-          mkdir -p "$app/MacOS" "$app/Resources"
-          lipo -create -output "$app/MacOS/freki" \
-            target/aarch64-apple-darwin/release/freki target/x86_64-apple-darwin/release/freki
-          cat > "$app/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>freki</string>
-            <key>CFBundleDisplayName</key><string>freki</string>
-            <key>CFBundleIdentifier</key><string>io.github.engrin.freki</string>
-            <key>CFBundleExecutable</key><string>freki</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>$version</string>
-            <key>CFBundleVersion</key><string>$version</string>
-            <key>LSMinimumSystemVersion</key><string>11.0</string>
-            <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
-            <key>NSHighResolutionCapable</key><true/>
-            <key>NSCameraUsageDescription</key><string>freki can use a camera as the Game Boy Camera's sensor.</string>
-          </dict>
-          </plist>
-          EOF
-          plutil -lint "$app/Info.plist"
-          # Not notarized (no Apple Developer account): signed ad hoc only.
-          codesign --force --deep --sign - freki.app
-      - name: Make the disk image
-        run: |
-          name="freki-${GITHUB_REF_NAME}-macos-universal"
-          mkdir dmg
-          cp -R freki.app README.md LICENSE dmg/
-          ln -s /Applications dmg/Applications
-          hdiutil create -volname freki -srcfolder dmg -format UDZO -ov "$name.dmg"
+      - name: Build and package
+        run: cargo +"$TOOLCHAIN" xtask dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
-          path: freki-*-macos-universal.dmg
+          path: dist/*
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -187,7 +151,11 @@ jobs:
             `xattr -dr com.apple.quarantine /Applications/freki.app`).
           - **Windows** (64-bit): unzip and run `freki.exe`. SmartScreen may warn about an
             unknown publisher: **More info → Run anyway**.
-          - **Linux** (x86-64): unpack and run `./freki`. Needs ALSA and X11 or Wayland.
+          - **Linux** (x86-64; needs ALSA and X11 or Wayland):
+            - Debian, Ubuntu, Mint: `sudo apt install ./freki-…-linux-x86_64.deb`
+            - Fedora, openSUSE: `sudo dnf install ./freki-…-linux-x86_64.rpm` (or `zypper install`)
+            - any distribution: the `.AppImage` (`chmod +x` it and run it), or the `.tar.gz`
+              with the bare `freki` binary.
 
           `SHA256SUMS` lists the files' checksums (`sha256sum -c SHA256SUMS`).
 

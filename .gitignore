@@ -11,3 +11,6 @@
 /bios/
 *.ss[0-9]
 *.cht
+
+# Release packages (cargo xtask dist)
+/dist/

@@ -156,7 +156,9 @@ Ready-made builds are on the [releases page](https://github.com/engrin/freki/rel
   Settings → Privacy & Security → Open Anyway**.
 - **Windows** (64-bit): a `.zip` with `freki.exe`. SmartScreen may warn about an unknown
   publisher: **More info → Run anyway**.
-- **Linux** (x86-64): a `.tar.gz` with the `freki` binary (needs ALSA and X11 or Wayland).
+- **Linux** (x86-64; needs ALSA and X11 or Wayland): a `.deb` (Debian, Ubuntu, Mint), an
+  `.rpm` (Fedora, openSUSE), an AppImage for any distribution (`chmod +x` it and run it),
+  or a `.tar.gz` with the bare `freki` binary.
 
 freki comes without games or boot ROMs. To build it yourself, see below.
 
@@ -447,7 +449,9 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
 | `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [nokhwa](https://crates.io/crates/nokhwa) webcams, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
-| `.github/workflows/release.yml` | Builds the macOS, Windows and Linux downloads; pushing a tag `v*` publishes them as a release |
+| `xtask` | `cargo xtask dist`: builds the release packages for the OS it runs on into `dist/` (Linux: `.tar.gz`, `.deb`, `.rpm`, AppImage; Windows: `.zip`; macOS: `.dmg`) |
+| `assets` | The icon and the Linux `.desktop` file |
+| `.github/workflows/release.yml` | Runs `cargo xtask dist` on Linux, Windows and macOS; pushing a tag `v*` makes a draft release with the packages |
 
 ```sh
 ./scripts/fetch-test-roms.sh      # Blargg, acid2, mealybug-tearoom, Mooneye, Gambatte, SameSuite, AGE, 65816

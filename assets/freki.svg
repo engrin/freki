@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256">
+  <!-- freki's icon: a pixel wolf on a Game Boy screen. -->
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="#306230"/>
+  <rect x="8" y="8" width="48" height="48" rx="5" fill="#9bbc0f"/>
+  <path transform="translate(8 9) scale(3)" fill="#0f380f" d="M2 1h2v1h-2zM12 1h2v1h-2zM2 2h3v1h-3zM11 2h3v1h-3zM2 3h4v1h-4zM10 3h4v1h-4zM2 4h12v1h-12zM1 5h14v1h-14zM1 6h3v1h-3zM6 6h4v1h-4zM12 6h3v1h-3zM1 7h14v1h-14zM1 8h14v1h-14zM2 9h12v1h-12zM3 10h10v1h-10zM4 11h8v1h-8zM5 12h6v1h-6zM6 13h4v1h-4z"/>
+</svg>

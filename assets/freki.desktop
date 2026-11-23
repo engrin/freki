@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=freki
+GenericName=Game Boy Emulator
+Comment=Play Game Boy, Game Boy Color and Super Game Boy games
+Exec=freki %f
+Icon=freki
+Terminal=false
+Categories=Game;Emulator;
+Keywords=gameboy;gbc;sgb;emulator;
+MimeType=application/x-gameboy-rom;application/x-gameboy-color-rom;
+StartupWMClass=freki
