@@ -449,8 +449,8 @@ freki --headless game.gbc --sav game.sav --press 300:a --printer page.png  # pri
 | `crates/freki-core` | Platform-independent emulation core (no OS, window or audio dependencies) |
 | `crates/freki` | Desktop app: [egui](https://crates.io/crates/egui) GUI, [gilrs](https://crates.io/crates/gilrs) gamepads, [cpal](https://crates.io/crates/cpal) sound, [nokhwa](https://crates.io/crates/nokhwa) webcams, [rav1e](https://crates.io/crates/rav1e) and [rusty-opus](https://crates.io/crates/rusty-opus) for video |
 | `scripts/fetch-test-roms.sh` | Downloads freely distributable test ROMs into `roms/test/` |
-| `xtask` | `cargo xtask dist`: builds the release packages for the OS it runs on into `dist/` (Linux: `.tar.gz`, `.deb`, `.rpm`, AppImage; Windows: `.zip`; macOS: `.dmg`, which needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`) |
-| `assets` | The icon and the Linux `.desktop` file |
+| `xtask` | `cargo xtask dist`, which builds the release packages (see [below](#release-packages)) |
+| `assets` | The icon (SVG and its PNG, ICO and macOS renderings), the disk image background, the Linux `.desktop` file |
 | `.github/workflows/release.yml` | Runs `cargo xtask dist` on Linux, Windows and macOS; pushing a tag `v*` makes a draft release with the packages |
 
 ```sh
@@ -465,6 +465,20 @@ The test ROMs run headless:
   is saved to `target/<test>-actual.png`.
 
 Tests whose ROMs have not been fetched are skipped. ROM files are never committed.
+
+### Release packages
+
+`cargo xtask dist` builds freki for the OS it runs on and packages it into `dist/`:
+
+| OS | Packages | Needs |
+|---|---|---|
+| Linux | `.tar.gz`, `.deb`, `.rpm`, AppImage | `dpkg-deb`, `rpmbuild`, [appimagetool](https://github.com/AppImage/appimagetool) |
+| Windows | `.zip` | |
+| macOS | `.dmg` with a universal `freki.app` (`cargo xtask dist app`: just the app) | `rustup target add aarch64-apple-darwin x86_64-apple-darwin`; [uv](https://docs.astral.sh/uv/) for the disk image's styled window |
+
+Formats can be named, e.g. `cargo xtask dist deb rpm`. On macOS, uv runs
+`xtask/dmg.py` with [dmgbuild](https://github.com/dmgbuild/dmgbuild), whose versions are
+pinned in the script's header; without uv the disk image is a plain one.
 
 ## References
 

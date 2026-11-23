@@ -16,21 +16,31 @@ usage: cargo xtask dist [FORMAT...]
 Builds freki in release mode for this OS and packages it into dist/:
   Linux    tar (.tar.gz), deb, rpm, appimage
   Windows  zip
-  macOS    dmg (a universal freki.app; needs the aarch64- and x86_64-apple-darwin targets)
-Without FORMATs, all of this OS's formats are made.
+  macOS    dmg, app (a universal freki.app, alone; needs the aarch64- and
+           x86_64-apple-darwin targets)
+Without FORMATs, all of this OS's formats are made (on macOS just the dmg).
 
 File names carry $GITHUB_REF_NAME when it is set (on GitHub Actions), else v<version>.
 deb needs dpkg-deb, rpm needs rpmbuild, appimage needs appimagetool (on PATH or in
-$APPIMAGETOOL; $APPIMAGE_RUNTIME names the type-2 runtime file to embed).";
+$APPIMAGETOOL; $APPIMAGE_RUNTIME names the type-2 runtime file to embed). The dmg gets
+its styled window with uv (xtask/dmg.py), else it is a plain disk image.";
 
 const FORMATS: &[&str] = if cfg!(target_os = "linux") {
     &["tar", "deb", "rpm", "appimage"]
 } else if cfg!(windows) {
     &["zip"]
 } else if cfg!(target_os = "macos") {
-    &["dmg"]
+    &["dmg", "app"]
 } else {
     &[]
+};
+
+/// What `cargo xtask dist` makes without FORMATs. On macOS not the bare app: CI uploads
+/// everything in dist/.
+const DEFAULT_FORMATS: &[&str] = if cfg!(target_os = "macos") {
+    &["dmg"]
+} else {
+    FORMATS
 };
 
 const SUMMARY: &str = "Game Boy, Game Boy Color and Super Game Boy emulator";
@@ -68,7 +78,7 @@ fn dist(requested: &[String]) -> Result {
         return Err("no release formats for this OS".into());
     }
     let formats: BTreeSet<&str> = if requested.is_empty() {
-        FORMATS.iter().copied().collect()
+        DEFAULT_FORMATS.iter().copied().collect()
     } else {
         let mut set = BTreeSet::new();
         for format in requested {
@@ -90,7 +100,7 @@ fn dist(requested: &[String]) -> Result {
     } else if cfg!(windows) {
         dist.windows()?;
     } else {
-        dist.macos()?;
+        dist.macos(&formats)?;
     }
     eprintln!("\nPackages in {}:", dist.out.display());
     for entry in read_dir(&dist.out)? {
@@ -334,9 +344,8 @@ impl Dist {
             )))
     }
 
-    fn macos(&self) -> Result {
+    fn macos(&self, formats: &BTreeSet<&str>) -> Result {
         const TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
-        // Both in one cargo call, so they build in parallel.
         let missing = missing_targets(&TARGETS)?;
         if !missing.is_empty() {
             return Err(format!(
@@ -344,21 +353,65 @@ impl Dist {
                 missing.join(" ")
             ));
         }
+        // Both in one cargo call, so they build in parallel.
         self.cargo_build(&TARGETS)?;
-        let image = self.work.join("dmg");
-        fresh_dir(&image)?;
-        let app = image.join("freki.app");
+        let icns = self.icns()?;
+        if formats.contains("app") {
+            self.app_bundle(&TARGETS, &icns, &self.out)?;
+        }
+        if formats.contains("dmg") {
+            let source = self.work.join("dmg");
+            fresh_dir(&source)?;
+            let app = self.app_bundle(&TARGETS, &icns, &source)?;
+            self.dmg(&app, &icns, &source)?;
+        }
+        Ok(())
+    }
+
+    /// freki.icns from the 1024-pixel icon, with macOS's own sips and iconutil.
+    fn icns(&self) -> Result<PathBuf> {
+        let source = self.root.join("assets/freki-macos.png");
+        let iconset = self.work.join("freki.iconset");
+        fresh_dir(&iconset)?;
+        for size in [16, 32, 128, 256, 512] {
+            for scale in [1, 2] {
+                let suffix = if scale == 2 { "@2x" } else { "" };
+                let file = iconset.join(format!("icon_{size}x{size}{suffix}.png"));
+                let pixels = (size * scale).to_string();
+                run(Command::new("sips")
+                    .args(["-z", &pixels, &pixels])
+                    .arg(&source)
+                    .arg("--out")
+                    .arg(&file)
+                    .stdout(std::process::Stdio::null()))?;
+            }
+        }
+        let icns = self.work.join("freki.icns");
+        run(Command::new("iconutil")
+            .args(["-c", "icns", "-o"])
+            .arg(&icns)
+            .arg(&iconset))?;
+        Ok(icns)
+    }
+
+    /// A signed universal freki.app in `dir`, with README and LICENSE in its resources.
+    fn app_bundle(&self, targets: &[&str], icns: &Path, dir: &Path) -> Result<PathBuf> {
+        let app = dir.join("freki.app");
         let contents = app.join("Contents");
+        let resources = contents.join("Resources");
         mkdir(&contents.join("MacOS"))?;
-        mkdir(&contents.join("Resources"))?;
+        mkdir(&resources)?;
         let mut lipo = Command::new("lipo");
         lipo.arg("-create")
             .arg("-output")
             .arg(contents.join("MacOS/freki"));
-        for target in TARGETS {
+        for target in targets {
             lipo.arg(self.root.join("target").join(target).join("release/freki"));
         }
         run(&mut lipo)?;
+        copy(icns, &resources.join("freki.icns"))?;
+        copy(&self.root.join("README.md"), &resources.join("README.md"))?;
+        copy(&self.root.join("LICENSE"), &resources.join("LICENSE"))?;
         // Bundle versions are numbers only: 1.0.0~rc1 → 1.0.0.
         let version = self.version.split('~').next().unwrap_or_default();
         let plist = format!(
@@ -370,6 +423,7 @@ impl Dist {
   <key>CFBundleDisplayName</key><string>freki</string>
   <key>CFBundleIdentifier</key><string>{BUNDLE_ID}</string>
   <key>CFBundleExecutable</key><string>freki</string>
+  <key>CFBundleIconFile</key><string>freki</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>{version}</string>
   <key>CFBundleVersion</key><string>{version}</string>
@@ -388,10 +442,34 @@ impl Dist {
         run(Command::new("codesign")
             .args(["--force", "--deep", "--sign", "-"])
             .arg(&app))?;
-        copy(&self.root.join("README.md"), &image.join("README.md"))?;
-        copy(&self.root.join("LICENSE"), &image.join("LICENSE"))?;
-        symlink("/Applications", &image.join("Applications"))?;
-        let name = format!("freki-{}-macos-universal", self.label);
+        Ok(app)
+    }
+
+    /// The disk image: with uv, xtask/dmg.py (dmgbuild) lays out the Finder window over
+    /// the background picture; without uv it is a plain one made by hdiutil.
+    fn dmg(&self, app: &Path, icns: &Path, source: &Path) -> Result {
+        let output = self
+            .out
+            .join(format!("freki-{}-macos-universal.dmg", self.label));
+        let has_uv = Command::new("uv")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if has_uv {
+            // The script's header pins dmgbuild and its dependencies to exact versions.
+            return run(Command::new("uv")
+                .args(["run", "--script"])
+                .arg(self.root.join("xtask/dmg.py"))
+                .arg(app)
+                .arg(icns)
+                .arg(self.root.join("assets/dmg-background.png"))
+                .arg(&output));
+        }
+        eprintln!(
+            "xtask: uv not found; making a plain disk image (install uv for the styled window: https://docs.astral.sh/uv/)"
+        );
+        symlink("/Applications", &source.join("Applications"))?;
         run(Command::new("hdiutil")
             .args([
                 "create",
@@ -402,8 +480,8 @@ impl Dist {
                 "-ov",
                 "-srcfolder",
             ])
-            .arg(&image)
-            .arg(self.out.join(format!("{name}.dmg"))))
+            .arg(source)
+            .arg(&output))
     }
 }
 

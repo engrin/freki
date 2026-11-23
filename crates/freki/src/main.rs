@@ -85,7 +85,8 @@ fn main() {
             .with_title("freki")
             .with_inner_size([SCREEN_WIDTH as f32 * 4.0, SCREEN_HEIGHT as f32 * 4.0 + 56.0])
             .with_min_inner_size([SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32 + 56.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(window_icon()),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -110,5 +111,21 @@ fn attach_parent_console() {
     // SAFETY: a plain Win32 call without pointers; failing (no parent console) is fine.
     unsafe {
         AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+/// The wolf icon for the window, the taskbar and (when not started from freki.app) the Dock.
+fn window_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/freki-256.png"))
+        .expect("assets/freki-256.png is a valid PNG")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_decodes() {
+        let icon = super::window_icon();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
     }
 }
