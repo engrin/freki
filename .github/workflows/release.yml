@@ -1,6 +1,9 @@
 # Builds freki for macOS (universal .app in a .dmg), Windows (.zip) and Linux (.tar.gz).
 # A pushed version tag (v0.1.0, …) publishes them as a GitHub release; run by hand
 # (Actions → Release → Run workflow), it only builds and keeps them as artifacts.
+#
+# Crates and build output are cached per OS, toolchain and Cargo.lock. A tag's run can use
+# the cache of master (not of other tags), so a manual run on master warms it up.
 
 name: Release
 
@@ -23,6 +26,15 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ env.TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ env.TOOLCHAIN }}-
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -46,6 +58,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ env.TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ env.TOOLCHAIN }}-
       - name: Install Rust
         run: rustup toolchain install "$env:TOOLCHAIN" --profile minimal
       - name: Build
@@ -67,6 +88,15 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ env.TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ env.TOOLCHAIN }}-
       - name: Install Rust
         run: |
           rustup toolchain install "$TOOLCHAIN" --profile minimal \
