@@ -1,5 +1,8 @@
 //! Gamepad input through gilrs. Controllers can be plugged in or removed at any time.
 //!
+//! gilrs is only started while gamepads are on: on macOS, starting it (opening the HID
+//! manager) makes the system ask for Input Monitoring permission.
+//!
 //! Which controller button presses which Game Boy button is configurable (see `input`);
 //! the left stick always steers as well.
 
@@ -13,8 +16,11 @@ use gilrs::{Axis, Button as Pad, Gilrs};
 const STICK_THRESHOLD: f32 = 0.5;
 
 pub struct Gamepads {
-    /// `None` if the platform's gamepad backend could not be opened.
+    /// `None` while gamepads are off, or if the platform's gamepad backend could not be
+    /// opened.
     gilrs: Option<Gilrs>,
+    /// Gamepads are on (even if gilrs could not be opened).
+    on: bool,
     /// Most recent button press, for binding buttons in the controls window.
     last_pressed: Option<Pad>,
     /// Constant vibration on every controller that supports it, built when first needed
@@ -26,20 +32,37 @@ pub struct Gamepads {
 }
 
 impl Gamepads {
-    pub fn open() -> Self {
-        let gilrs = match Gilrs::new() {
-            Ok(gilrs) => Some(gilrs),
-            Err(err) => {
-                eprintln!("freki: no gamepad support ({err})");
-                None
-            }
-        };
-        Self {
-            gilrs,
+    /// Gamepads, started if `on`.
+    pub fn new(on: bool) -> Self {
+        let mut gamepads = Self {
+            gilrs: None,
+            on: false,
             last_pressed: None,
             rumble: None,
             rumbling: false,
+        };
+        gamepads.set_on(on);
+        gamepads
+    }
+
+    /// Starts or stops reading the controllers.
+    pub fn set_on(&mut self, on: bool) {
+        if on == self.on {
+            return;
         }
+        self.on = on;
+        (self.rumble, self.rumbling, self.last_pressed) = (None, false, None);
+        self.gilrs = if on {
+            match Gilrs::new() {
+                Ok(gilrs) => Some(gilrs),
+                Err(err) => {
+                    eprintln!("freki: no gamepad support ({err})");
+                    None
+                }
+            }
+        } else {
+            None
+        };
     }
 
     /// Processes pending controller events; call once per frame before reading buttons.
@@ -161,5 +184,21 @@ impl Gamepads {
             };
             stick || pad.is_pressed(bound)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn off_gamepads_leave_gilrs_unstarted() {
+        let mut pads = Gamepads::new(false);
+        assert!(pads.gilrs.is_none());
+        pads.update();
+        assert!(pads.connected().is_none());
+        assert!(!pads.is_pressed_on(None, None, Pad::South));
+        pads.set_on(false);
+        assert!(pads.gilrs.is_none() && !pads.on);
     }
 }

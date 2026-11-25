@@ -198,6 +198,11 @@ cargo run --release -- path/to/game.gb    # or start without a ROM: File → Ope
 These shortcuts also work while a tool window (debugger, viewers, cheats, printer, sound) has
 focus, except rewind and fast-forward; the Game Boy buttons only work in the game's window.
 
+On macOS, gamepads are off until you turn them on (**Emulation → Gamepads**, or in the
+Controls window): looking for controllers makes macOS ask for **Input Monitoring**
+permission, because it covers every input device. freki only reads the controllers' buttons
+and sticks.
+
 The Game Boy buttons, the turbo buttons and L / R can be rebound under **Emulation →
 Controls…**. Settings such as the palette, scale, controls, volume, recent ROMs, boot ROMs,
 the Game Boy Camera's picture and where the tool windows were are remembered between runs.

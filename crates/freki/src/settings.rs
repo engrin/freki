@@ -42,6 +42,9 @@ pub struct Settings {
     pub color_correction: bool,
     /// Keyboard and gamepad controls.
     pub bindings: Bindings,
+    /// Read gamepads. Off at first on macOS, which asks for Input Monitoring permission
+    /// as soon as freki looks for controllers; on elsewhere.
+    pub gamepads: bool,
     /// Rumble cartridges shake the gamepad.
     pub rumble: bool,
     /// Scale the screen by whole numbers only (sharp, even pixels; black borders).
@@ -120,6 +123,7 @@ impl Default for Settings {
             fast_forward_speed: 4,
             color_correction: true,
             bindings: Bindings::default(),
+            gamepads: !cfg!(target_os = "macos"),
             rumble: true,
             integer_scaling: true,
             frame_blend: false,
@@ -446,6 +450,15 @@ mod tests {
         let s: Settings = ron_like_roundtrip("(use_boot_rom:true)");
         assert!(s.use_boot_rom);
         assert_eq!((s.scale, s.fast_forward_speed), (4, 4));
+    }
+
+    #[test]
+    fn gamepads_start_off_only_on_macos() {
+        // Also for settings saved before the switch existed.
+        let s: Settings = ron_like_roundtrip("(rumble:true)");
+        assert_eq!(s.gamepads, !cfg!(target_os = "macos"));
+        assert_eq!(Settings::default().gamepads, s.gamepads);
+        assert!(!ron_like_roundtrip("(gamepads:false)").gamepads);
     }
 
     fn ron_like_roundtrip(text: &str) -> Settings {

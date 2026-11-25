@@ -50,6 +50,13 @@ const MAX_RATE_ADJUST: f64 = 0.005;
 const MAX_FRAMES_PER_UPDATE: u32 = 4;
 /// How long a status message stays in the status bar.
 const STATUS_DURATION: Duration = Duration::from_secs(3);
+/// Tooltip of the gamepad switches.
+const GAMEPADS_HINT: &str = if cfg!(target_os = "macos") {
+    "Read game controllers. macOS asks once for Input Monitoring permission (it covers \
+     every HID device); freki only reads the controllers' buttons and sticks"
+} else {
+    "Read game controllers"
+};
 
 /// What the controls window is waiting for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +267,8 @@ impl FrekiApp {
             keyboard_second: false,
             settings: Settings::load(cc.storage),
             audio,
-            gamepads: Gamepads::open(),
+            // Started below, once the settings say whether gamepads are on.
+            gamepads: Gamepads::new(false),
             console: Console::start(),
             texture: None,
             fitted_size: [SCREEN_WIDTH, SCREEN_HEIGHT],
@@ -309,6 +317,7 @@ impl FrekiApp {
             webcam_search: None,
             state_previews: StatePreviews::default(),
         };
+        app.gamepads.set_on(app.settings.gamepads);
         println!("freki: type `help` here for cheat and memory commands");
         if let Some(path) = rom {
             app.open_rom(&cc.egui_ctx, &path);
@@ -1586,8 +1595,18 @@ impl FrekiApp {
                     };
                     self.set_status(msg);
                 }
-                ui.checkbox(&mut self.settings.rumble, "Gamepad rumble")
-                    .on_hover_text("Rumble cartridges (MBC5 with motor) shake the controller");
+                if ui
+                    .checkbox(&mut self.settings.gamepads, "Gamepads")
+                    .on_hover_text(GAMEPADS_HINT)
+                    .changed()
+                {
+                    self.gamepads.set_on(self.settings.gamepads);
+                }
+                ui.add_enabled(
+                    self.settings.gamepads,
+                    egui::Checkbox::new(&mut self.settings.rumble, "Gamepad rumble"),
+                )
+                .on_hover_text("Rumble cartridges (MBC5 with motor) shake the controller");
                 ui.separator();
                 ui.add_enabled_ui(loaded, |ui| {
                     ui.menu_button("Link cable", |ui| self.link_menu(ui));
@@ -2460,6 +2479,18 @@ impl FrekiApp {
             }
         });
         if kind == Capture::Pad {
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut self.settings.gamepads, "Use gamepads")
+                    .on_hover_text(GAMEPADS_HINT)
+                    .changed()
+                {
+                    self.gamepads.set_on(self.settings.gamepads);
+                }
+                if cfg!(target_os = "macos") && !self.settings.gamepads {
+                    ui.weak("macOS will ask for Input Monitoring permission.");
+                }
+            });
             match &connected {
                 Some((name, _, rumble)) => {
                     let text = if *rumble {
@@ -2468,6 +2499,9 @@ impl FrekiApp {
                         name.clone()
                     };
                     ui.colored_label(Color32::from_rgb(0xB9, 0xD9, 0xB9), format!("● {text}"));
+                }
+                None if !self.settings.gamepads => {
+                    ui.weak("Gamepads are off: buttons are named by position.");
                 }
                 None => {
                     ui.weak("No controller connected: buttons are named by position.");
