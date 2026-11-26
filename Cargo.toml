@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/freki-core", "crates/freki", "xtask"]
+# Plain `cargo run`/`cargo build` mean the emulator; xtask runs as `cargo xtask …`.
+default-members = ["crates/freki-core", "crates/freki"]
 
 [workspace.package]
 version = "0.1.1"
